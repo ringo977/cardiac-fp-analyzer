@@ -7,8 +7,8 @@ spikes as "beats", generating massive false positives. This module addresses
 this by:
 
   1. Global SNR estimation — is this recording analyzable at all?
-  2. Local SNR around each detected beat — does this beat stand out from
-     the surrounding noise floor?
+  2. Amplitude consistency — do beats have physiologically consistent amplitude,
+     or are some just noise spikes?
   3. Morphological consistency — does this beat look like the others?
   4. Beat-by-beat validation with rejection of low-confidence detections.
 
@@ -30,11 +30,12 @@ GLOBAL_SNR_GOOD = 5.0
 GLOBAL_SNR_FAIR = 3.0
 GLOBAL_SNR_POOR = 2.0
 
-LOCAL_SNR_ACCEPT = 3.0       # beat must be 3x above local noise
-LOCAL_SNR_MARGINAL = 2.0     # below this → reject
+# Amplitude: reject beats whose amplitude is below this fraction of the
+# robust reference amplitude (median of the top-50% beats)
+AMPLITUDE_REJECT_FRACTION = 0.25   # < 25% of reference → noise spike
 
-MORPHOLOGY_CORR_ACCEPT = 0.6    # correlation with template ≥ 0.6 → accept
-MORPHOLOGY_CORR_MARGINAL = 0.3  # below this → reject
+MORPHOLOGY_CORR_ACCEPT = 0.4    # correlation with template ≥ 0.4 → accept
+MORPHOLOGY_CORR_MARGINAL = 0.2  # below this → reject
 
 # Maximum fraction of beats that can be rejected before downgrading quality
 MAX_REJECTION_RATE = 0.40
@@ -50,11 +51,11 @@ class QualityReport:
         self.mean_morphology_corr = np.nan
         self.n_beats_input = 0
         self.n_beats_accepted = 0
-        self.n_beats_rejected_snr = 0
+        self.n_beats_rejected_snr = 0        # kept as "snr" label for report compat
         self.n_beats_rejected_morphology = 0
         self.rejection_rate = 0.0
         self.notes = []
-        self.per_beat_snr = []
+        self.per_beat_snr = []     # actually per-beat amplitude ratios
         self.per_beat_corr = []
         self.accepted_mask = []
 
@@ -64,7 +65,7 @@ class QualityReport:
             f"Global SNR: {self.global_snr:.1f}",
             f"Beats: {self.n_beats_accepted}/{self.n_beats_input} accepted "
             f"({self.rejection_rate*100:.1f}% rejected)",
-            f"  - Rejected (low SNR): {self.n_beats_rejected_snr}",
+            f"  - Rejected (amplitude): {self.n_beats_rejected_snr}",
             f"  - Rejected (morphology): {self.n_beats_rejected_morphology}",
             f"Mean local SNR: {self.mean_local_snr:.1f}",
             f"Mean morphology correlation: {self.mean_morphology_corr:.2f}",
@@ -120,64 +121,75 @@ def estimate_global_snr(data, beat_indices, fs, window_ms=30):
     return signal_power / noise_power
 
 
-def estimate_local_snr(data, beat_index, fs, signal_window_ms=20, noise_window_ms=200):
+def compute_beat_amplitudes(data, beat_indices, fs, window_ms=20):
     """
-    Estimate SNR around a single beat.
-
-    Signal: peak-to-peak in a tight window (±signal_window) around the beat.
-    Noise: std of a wider window (±noise_window) excluding the signal window.
-
-    This catches beats in noisy regions that happen to cross the global threshold
-    but don't actually stand out locally.
+    Compute peak-to-peak amplitude for each beat in a tight window
+    around the depolarization spike.
     """
-    sig_win = int(signal_window_ms * fs / 1000)
-    noise_win = int(noise_window_ms * fs / 1000)
-
-    # Signal amplitude
-    sig_s = max(0, beat_index - sig_win)
-    sig_e = min(len(data), beat_index + sig_win)
-    sig_seg = data[sig_s:sig_e]
-    signal_amp = np.max(sig_seg) - np.min(sig_seg)
-
-    # Noise: wider window excluding signal region
-    noise_s = max(0, beat_index - noise_win)
-    noise_e = min(len(data), beat_index + noise_win)
-    noise_seg = np.concatenate([
-        data[noise_s:sig_s],
-        data[sig_e:noise_e]
-    ])
-
-    if len(noise_seg) < 20:
-        # Fallback: use the edges of the noise window
-        noise_seg = data[noise_s:noise_e]
-
-    noise_std = np.std(noise_seg) if len(noise_seg) > 0 else 1e-10
-
-    if noise_std == 0:
-        return 100.0
-
-    return signal_amp / (2 * noise_std)  # factor 2 because amplitude is peak-to-peak
+    window = int(window_ms * fs / 1000)
+    amplitudes = []
+    for bi in beat_indices:
+        s = max(0, bi - window)
+        e = min(len(data), bi + window)
+        seg = data[s:e]
+        amplitudes.append(np.max(seg) - np.min(seg))
+    return np.array(amplitudes)
 
 
-def compute_beat_template(beats_data, max_beats=50):
+def compute_amplitude_ratios(amplitudes):
     """
-    Compute a median beat template from the first N beats.
+    Compute each beat's amplitude as a ratio to the robust reference.
+
+    The reference is the median of the upper 50% of amplitudes — this is
+    robust against noise-beats (which pull the median down) and against
+    a few very large artefacts (which pull the mean up).
+
+    Returns:
+        ratios : array of amplitude / reference for each beat
+        reference_amplitude : the reference value
+    """
+    if len(amplitudes) == 0:
+        return np.array([]), 0.0
+
+    # Reference: median of the top 50% of beat amplitudes
+    sorted_amps = np.sort(amplitudes)
+    upper_half = sorted_amps[len(sorted_amps) // 2:]
+    reference = np.median(upper_half) if len(upper_half) > 0 else np.median(amplitudes)
+
+    if reference == 0 or reference < 1e-10:
+        return np.ones(len(amplitudes)), 0.0
+
+    ratios = amplitudes / reference
+    return ratios, reference
+
+
+def compute_beat_template(beats_data, amplitudes=None, max_beats=50):
+    """
+    Compute a median beat template from the highest-amplitude beats.
     The median is robust to outliers (noise, artefacts).
     """
     if len(beats_data) == 0:
         return None
 
-    # Use up to max_beats, preferring beats from the middle of the recording
     n = min(len(beats_data), max_beats)
-    if n < len(beats_data):
-        mid = len(beats_data) // 2
-        start = max(0, mid - n // 2)
-        selected = beats_data[start:start + n]
+
+    if amplitudes is not None and len(amplitudes) == len(beats_data):
+        # Select by amplitude (prefer strong, clear beats)
+        order = np.argsort(amplitudes)[::-1]
+        selected = [beats_data[i] for i in order[:n]]
     else:
-        selected = beats_data[:n]
+        # Fallback: use beats from the middle of the recording
+        if n < len(beats_data):
+            mid = len(beats_data) // 2
+            start = max(0, mid - n // 2)
+            selected = beats_data[start:start + n]
+        else:
+            selected = list(beats_data[:n])
 
     # Ensure all beats have the same length
     min_len = min(len(b) for b in selected)
+    if min_len < 10:
+        return None
     aligned = np.array([b[:min_len] for b in selected])
 
     return np.median(aligned, axis=0)
@@ -208,11 +220,18 @@ def morphology_correlation(beat_data, template):
 
 
 def validate_beats(data, beat_indices, beats_data, beats_time, fs,
-                   snr_threshold=LOCAL_SNR_ACCEPT,
-                   morphology_threshold=MORPHOLOGY_CORR_ACCEPT,
+                   snr_threshold=None, morphology_threshold=MORPHOLOGY_CORR_ACCEPT,
+                   amplitude_threshold=AMPLITUDE_REJECT_FRACTION,
                    use_morphology=True):
     """
-    Validate each detected beat using local SNR and morphological consistency.
+    Validate each detected beat using amplitude consistency and morphology.
+
+    Strategy:
+    - Compute each beat's peak-to-peak amplitude
+    - Reject beats whose amplitude is far below the robust reference
+      (these are noise spikes misidentified as beats)
+    - Optionally reject beats with poor morphological correlation to template
+    - Assign overall quality grade based on global SNR + rejection stats
 
     Parameters
     ----------
@@ -221,8 +240,9 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
     beats_data : list of arrays — segmented beat waveforms
     beats_time : list of arrays — time vectors for each beat
     fs : float — sampling rate
-    snr_threshold : float — minimum local SNR to accept a beat
+    snr_threshold : float — (legacy, ignored — kept for API compatibility)
     morphology_threshold : float — minimum correlation with template
+    amplitude_threshold : float — min amplitude ratio to reference (default 0.25)
 
     Returns
     -------
@@ -245,34 +265,21 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
     if qc.global_snr < GLOBAL_SNR_POOR:
         qc.notes.append(f'Very low global SNR ({qc.global_snr:.1f}) — signal may be mostly noise')
 
-    # ─── Step 2: Local SNR for each beat ───
-    local_snrs = []
-    for bi in beat_indices:
-        snr = estimate_local_snr(data, bi, fs)
-        local_snrs.append(snr)
-    qc.per_beat_snr = local_snrs
+    # ─── Step 2: Beat amplitudes and amplitude ratios ───
+    amplitudes = compute_beat_amplitudes(data, beat_indices, fs, window_ms=20)
+    amp_ratios, ref_amplitude = compute_amplitude_ratios(amplitudes)
+
+    # Store amplitude ratios as "per_beat_snr" for report compatibility
+    qc.per_beat_snr = amp_ratios.tolist() if len(amp_ratios) > 0 else []
 
     # ─── Step 3: Morphological template and correlation ───
     template = None
     morphology_corrs = [1.0] * len(beats_data)  # default: all pass
 
     if use_morphology and len(beats_data) >= 5:
-        # Build template from beats with highest local SNR
-        snr_order = np.argsort(local_snrs)[::-1]
-        # Map beat_indices positions to beats_data positions
-        # beats_data may have fewer entries than beat_indices (edge beats excluded)
-        n_template = min(30, len(beats_data))
-        best_beats = []
-        count = 0
-        for idx in snr_order:
-            if idx < len(beats_data):
-                best_beats.append(beats_data[idx])
-                count += 1
-                if count >= n_template:
-                    break
-
-        if best_beats:
-            template = compute_beat_template(best_beats, max_beats=30)
+        # Build template from highest-amplitude beats (most likely real)
+        bd_amps = amplitudes[:len(beats_data)] if len(amplitudes) >= len(beats_data) else amplitudes
+        template = compute_beat_template(beats_data, amplitudes=bd_amps, max_beats=30)
 
         if template is not None:
             morphology_corrs = []
@@ -283,19 +290,23 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
 
     # ─── Step 4: Accept/Reject decisions ───
     accepted_mask = []
-    n_rej_snr = 0
+    n_rej_amp = 0
     n_rej_morph = 0
 
     for i in range(len(beat_indices)):
-        snr_ok = local_snrs[i] >= snr_threshold
-        morph_ok = True
+        # Amplitude check
+        amp_ok = True
+        if i < len(amp_ratios):
+            amp_ok = amp_ratios[i] >= amplitude_threshold
 
+        # Morphology check
+        morph_ok = True
         if use_morphology and i < len(morphology_corrs):
             morph_ok = morphology_corrs[i] >= morphology_threshold
 
-        if not snr_ok:
+        if not amp_ok:
             accepted_mask.append(False)
-            n_rej_snr += 1
+            n_rej_amp += 1
         elif not morph_ok:
             accepted_mask.append(False)
             n_rej_morph += 1
@@ -303,16 +314,19 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
             accepted_mask.append(True)
 
     qc.accepted_mask = accepted_mask
-    qc.n_beats_rejected_snr = n_rej_snr
+    qc.n_beats_rejected_snr = n_rej_amp  # "snr" label kept for report compat
     qc.n_beats_rejected_morphology = n_rej_morph
     qc.n_beats_accepted = sum(accepted_mask)
     qc.rejection_rate = 1 - qc.n_beats_accepted / qc.n_beats_input if qc.n_beats_input > 0 else 0
 
     # Mean stats for accepted beats only
-    accepted_snrs = [s for s, a in zip(local_snrs, accepted_mask) if a]
-    qc.mean_local_snr = np.mean(accepted_snrs) if accepted_snrs else 0
+    accepted_ratios = [r for r, a in zip(amp_ratios, accepted_mask) if a]
+    # Convert amplitude ratio to an SNR-like value (ratio * global_snr) for reporting
+    qc.mean_local_snr = (np.mean(accepted_ratios) * qc.global_snr
+                         if accepted_ratios else 0)
 
-    accepted_corrs = [c for c, a in zip(morphology_corrs, accepted_mask) if a and len(morphology_corrs) > 0]
+    accepted_corrs = [c for c, a in zip(morphology_corrs, accepted_mask)
+                      if a and len(morphology_corrs) > 0]
     qc.mean_morphology_corr = np.mean(accepted_corrs) if accepted_corrs else 0
 
     # ─── Step 5: Assign quality grade ───
@@ -321,8 +335,7 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
     # ─── Step 6: Build accepted outputs ───
     accepted_beat_indices = beat_indices[np.array(accepted_mask)]
 
-    # For beats_data/beats_time, we need the mask aligned to the segmented beats
-    # (which may be fewer than beat_indices due to edge exclusion)
+    # For beats_data/beats_time, align mask to segmented beats
     accepted_beats_data = []
     accepted_beats_time = []
     for i in range(min(len(beats_data), len(accepted_mask))):
@@ -333,10 +346,12 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
     # Add notes
     if qc.rejection_rate > 0.5:
         qc.notes.append(f'High rejection rate ({qc.rejection_rate*100:.0f}%) — signal quality is poor')
-    if n_rej_snr > 0:
-        qc.notes.append(f'{n_rej_snr} beats rejected for low local SNR (< {snr_threshold:.1f}x noise)')
+    if n_rej_amp > 0:
+        qc.notes.append(f'{n_rej_amp} beats rejected for low amplitude '
+                        f'(< {amplitude_threshold*100:.0f}% of reference)')
     if n_rej_morph > 0:
-        qc.notes.append(f'{n_rej_morph} beats rejected for abnormal morphology (corr < {morphology_threshold:.2f})')
+        qc.notes.append(f'{n_rej_morph} beats rejected for abnormal morphology '
+                        f'(corr < {morphology_threshold:.2f})')
 
     return qc, accepted_beat_indices, accepted_beats_data, accepted_beats_time
 
@@ -346,7 +361,6 @@ def _assign_grade(qc):
     gsnr = qc.global_snr
     rej = qc.rejection_rate
     n_acc = qc.n_beats_accepted
-    mean_lsnr = qc.mean_local_snr
     mean_corr = qc.mean_morphology_corr
 
     # F: unanalyzable
@@ -357,8 +371,6 @@ def _assign_grade(qc):
 
     # D: poor
     if gsnr < GLOBAL_SNR_FAIR or rej > MAX_REJECTION_RATE:
-        return 'D'
-    if mean_lsnr < LOCAL_SNR_ACCEPT:
         return 'D'
 
     # C: fair

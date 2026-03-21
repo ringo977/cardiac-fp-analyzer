@@ -18,6 +18,10 @@ build/
 
 # Analysis outputs
 analysis_results/
+comparison_results/
+
+# Signal images (local reference data)
+SIGNAL IMAGES/
 
 # Large local datasets (keep repo code-only)
 µECG-Pharma Calibration - EXCEL DATA/

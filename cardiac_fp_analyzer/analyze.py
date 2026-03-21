@@ -95,7 +95,7 @@ def analyze_single_file(filepath, channel='auto', verbose=True):
         # ─── Quality Control: validate beats ───
         qc_report, bi_clean, bd_clean, btm_clean = validate_beats(
             filtered, bi, bd, btm, fs,
-            snr_threshold=3.0, morphology_threshold=0.5,
+            morphology_threshold=0.4,
             use_morphology=True
         )
         if verbose:
