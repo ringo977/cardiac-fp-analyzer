@@ -174,16 +174,21 @@ def _apply_fpd_method(seg_det, best_pk, best_sign, fs, search_start, spike_idx, 
     max_slope_idx = np.argmin(deriv)
     max_slope_ms = max_slope_idx / fs * 1000
 
+    # Minimum meaningful slope: relative to peak amplitude, not absolute.
+    # This makes the tangent method robust to amplifier gain scaling.
+    peak_amp = after_signed[0] if len(after_signed) > 0 else 1.0
+    min_slope = max(abs(peak_amp) * 0.01 / dt, 1e-12)  # 1% of peak per sample
+
     if method == 'max_slope':
-        if max_slope_ms < rc.tangent_max_slope_window_ms and np.abs(deriv[max_slope_idx]) > 0.001:
+        if max_slope_ms < rc.tangent_max_slope_window_ms and np.abs(deriv[max_slope_idx]) > min_slope:
             return search_start + best_pk + max_slope_idx - spike_idx
         return peak_samples
 
     # Default: 'tangent'
-    if max_slope_ms < rc.tangent_max_slope_window_ms and np.abs(deriv[max_slope_idx]) > 0.001:
+    if max_slope_ms < rc.tangent_max_slope_window_ms and np.abs(deriv[max_slope_idx]) > min_slope:
         y0 = after_signed[max_slope_idx]
         slope = deriv[max_slope_idx]
-        if abs(slope) > 1e-6:
+        if abs(slope) > min_slope:
             x_intersect = max_slope_idx - y0 / slope * fs
             x_intersect = max(0, x_intersect)
             max_extension = int(rc.tangent_max_extension_ms / 1000 * fs)

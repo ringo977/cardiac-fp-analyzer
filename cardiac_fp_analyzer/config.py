@@ -306,9 +306,21 @@ class ArrhythmiaConfig:
     fpd_prolongation_threshold: float = 1.3   # > 130% of baseline
     fpd_critical_length_ms: float = 500.0     # FPD above which prolongation is critical
 
-    # EAD detection
+    # EAD detection (statistical — FPD outlier)
     ead_mad_factor: float = 3.0             # 3× median absolute deviation
     ead_critical_count: int = 3             # ≥ 3 EADs → critical severity
+
+    # EAD detection (residual — paper approach, Visone et al. 2023)
+    # Five criteria — ALL must be met for a residual peak to be EAD:
+    #   1. Statistical:  peak > prominence × σ  of residual noise
+    #   2. Absolute:     peak > min_amp_frac × template peak-to-peak
+    #   3. Width:        half-max width ∈ [min_width, max_width] ms
+    #   4. Polarity:     must be positive (secondary depolarisation)
+    #   5. Location:     within 150-500 ms repol. window (plateau phase)
+    ead_residual_prominence: float = 6.0    # peak > N × σ in repol. residual
+    ead_residual_min_amp_frac: float = 0.08 # peak > 8% of template amplitude
+    ead_residual_min_width_ms: float = 8.0  # peak width ≥ 8 ms at half-max
+    ead_residual_max_width_ms: float = 150.0  # peak width ≤ 150 ms (wider = shape change, not EAD)
 
     # Amplitude instability
     amplitude_instability_cv: float = 30.0  # %
@@ -369,6 +381,12 @@ class AnalysisConfig:
     arrhythmia: ArrhythmiaConfig = field(default_factory=ArrhythmiaConfig)
     channel_selection: ChannelSelectionConfig = field(default_factory=ChannelSelectionConfig)
 
+    # ── Signal scaling ──
+    # Amplifier gain correction: raw_signal / amplifier_gain = real voltage.
+    # For µECG-Pharma Digilent system the amplifier gain is 10⁴ (×10 000).
+    # Set to 1.0 to skip correction (raw units preserved).
+    amplifier_gain: float = 1.0
+
     # Advanced analysis modules (enabled by default)
     enable_cessation: bool = True
     enable_spectral: bool = True
@@ -418,6 +436,8 @@ class AnalysisConfig:
                         setattr(section, k, v)
 
         # Top-level flags
+        if 'amplifier_gain' in d:
+            cfg.amplifier_gain = float(d['amplifier_gain'])
         if 'enable_cessation' in d:
             cfg.enable_cessation = d['enable_cessation']
         if 'enable_spectral' in d:

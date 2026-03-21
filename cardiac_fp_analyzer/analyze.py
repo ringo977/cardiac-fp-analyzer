@@ -35,10 +35,14 @@ def _select_best_channel(df, fs, cfg=None):
         fc = FilterConfig()
 
     best_ch, best_score = 'ch1', -999
+    gain = cfg.amplifier_gain if cfg is not None else 1.0
     details = {}
     for ch in ['ch1', 'ch2']:
         try:
-            filt = full_filter_pipeline(df[ch].values, fs, cfg=fc)
+            raw_ch = df[ch].values
+            if gain != 1.0:
+                raw_ch = raw_ch / gain
+            filt = full_filter_pipeline(raw_ch, fs, cfg=fc)
             bi, bt, info = detect_beats(filt, fs, method='auto', min_distance_ms=400)
             bp = compute_beat_periods(bi, fs)
             score = 0
@@ -102,6 +106,15 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
         file_info['analyzed_channel'] = actual_ch
 
         raw = df[actual_ch].values
+
+        # ── Amplifier gain correction ──
+        # Divide by gain to obtain real voltage.  Default gain=1 (no-op).
+        gain = config.amplifier_gain
+        if gain != 1.0:
+            raw = raw / gain
+            if verbose:
+                print(f"  Gain correction: ÷{gain:.0e} → amplitude in V")
+
         filtered = full_filter_pipeline(raw, fs, cfg=config.filtering)
         if verbose: print(f"  Filtered ({actual_ch})")
 
@@ -144,7 +157,8 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
         if verbose and len(bp) > 0:
             print(f"  BP: {np.mean(bp)*1000:.0f}ms ({60/np.mean(bp):.1f} BPM)")
 
-        ar = analyze_arrhythmia(bi_clean, bp, all_p, summary, fs, cfg=config.arrhythmia)
+        ar = analyze_arrhythmia(bi_clean, bp, all_p, summary, fs,
+                               cfg=config.arrhythmia, beats_data=bd_clean)
         if verbose:
             print(f"  {ar.classification} (Risk: {ar.risk_score}/100)")
 
@@ -363,7 +377,7 @@ def _apply_inclusion_criteria(results, verbose=True, cfg=None):
                 inc['fpd_reliable'] = True
 
     if verbose and n_drug_conf > 0:
-        print(f"  FPD reliability: {n_drug_conf} drug recordings with confidence < {min_fpd_confidence}")
+        print(f"  FPD reliability: {n_drug_conf} drug recordings with confidence < {cfg.min_fpd_confidence}")
 
     return results
 
@@ -424,6 +438,58 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
 
     # ─── Inclusion criteria ───
     results = _apply_inclusion_criteria(results, verbose=verbose, cfg=config.inclusion)
+
+    # ─── Baseline-relative residual analysis (pass 2) ───
+    # Collect baseline templates per group (chip+channel), then re-run
+    # arrhythmia analysis for drug recordings using the baseline template.
+    # This captures drug-induced morphology changes vs. normal baseline.
+    from .normalization import _get_group_key, _is_baseline
+    from .arrhythmia import _compute_template, analyze_arrhythmia as _analyze_arrhythmia
+
+    baseline_templates = {}
+    for r in results:
+        if not _is_baseline(r):
+            continue
+        # Only use baselines that passed inclusion criteria
+        inc = r.get('inclusion', {})
+        if not inc.get('passed', True):
+            continue
+        bd = r.get('beats_data')
+        if bd is None or len(bd) < 5:
+            continue
+        group = _get_group_key(r)
+        tmpl = _compute_template(bd)
+        if tmpl is not None:
+            baseline_templates[group] = tmpl
+
+    if baseline_templates:
+        n_reanalyzed = 0
+        for r in results:
+            if _is_baseline(r):
+                continue
+            group = _get_group_key(r)
+            bl_tmpl = baseline_templates.get(group)
+            if bl_tmpl is None:
+                continue
+            bd = r.get('beats_data')
+            if bd is None or len(bd) < 5:
+                continue
+            # Re-run arrhythmia analysis with baseline template
+            bi = r.get('beat_indices', np.array([]))
+            bp = r.get('beat_periods', np.array([]))
+            all_p = r.get('all_params', [])
+            summary = r.get('summary', {})
+            fs_val = r.get('metadata', {}).get('sample_rate', 1000.0)
+            ar = _analyze_arrhythmia(
+                bi, bp, all_p, summary, fs_val,
+                cfg=config.arrhythmia, beats_data=bd,
+                baseline_template=bl_tmpl
+            )
+            r['arrhythmia_report'] = ar
+            n_reanalyzed += 1
+        if verbose:
+            print(f"  Baseline-relative residual analysis: {n_reanalyzed} drug recordings "
+                  f"re-analyzed with {len(baseline_templates)} baseline template(s)")
 
     # ─── Baseline normalization ───
     from .normalization import normalize_all_results
