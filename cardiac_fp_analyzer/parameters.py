@@ -195,6 +195,88 @@ def _apply_fpd_method(seg_det, best_pk, best_sign, fs, search_start, spike_idx, 
     return peak_samples
 
 
+def _consensus_fpd(seg_det, best_pk, best_sign, fs, search_start, spike_idx, cfg=None):
+    """
+    Run multiple FPD methods and return consensus result.
+
+    Runs all available methods (tangent, peak, max_slope, 50pct, baseline_return),
+    computes agreement statistics, and selects the best result based on:
+      - Agreement with majority of methods (cluster analysis)
+      - Individual method confidence
+
+    Returns: (fpd_samples, method_details)
+      method_details: dict with per-method results and agreement info
+    """
+    rc = _get_repol_cfg(cfg)
+    methods = ['tangent', 'peak', 'max_slope', '50pct', 'baseline_return']
+    results = {}
+
+    for method in methods:
+        # Temporarily override fpd_method in a copy
+        from .config import RepolarizationConfig
+        from dataclasses import replace
+        temp_cfg = replace(rc, fpd_method=method)
+        try:
+            fpd = _apply_fpd_method(seg_det, best_pk, best_sign, fs,
+                                     search_start, spike_idx, cfg=temp_cfg)
+            if fpd is not None and fpd > 0:
+                results[method] = fpd
+        except Exception:
+            pass
+
+    if not results:
+        return None, {'methods_tried': methods, 'methods_ok': 0}
+
+    # Cluster analysis: find the largest group of methods that agree
+    fpd_values = np.array(list(results.values()))
+    fpd_methods = list(results.keys())
+    fpd_ms = fpd_values / fs * 1000  # convert to ms for comparison
+
+    # Agreement: methods within ±50ms of each other
+    agreement_radius_ms = 50.0
+    best_cluster = []
+    best_cluster_center = 0
+
+    for i, val in enumerate(fpd_ms):
+        cluster = [j for j, v in enumerate(fpd_ms) if abs(v - val) <= agreement_radius_ms]
+        if len(cluster) > len(best_cluster):
+            best_cluster = cluster
+            best_cluster_center = np.mean(fpd_ms[cluster])
+
+    # Preferred method priority (if in the best cluster)
+    priority = ['tangent', 'max_slope', '50pct', 'baseline_return', 'peak']
+    cluster_methods = [fpd_methods[i] for i in best_cluster]
+
+    selected_method = None
+    selected_fpd = None
+    for pref in priority:
+        if pref in cluster_methods:
+            selected_method = pref
+            selected_fpd = results[pref]
+            break
+
+    if selected_fpd is None:
+        # Fallback to tangent or first available
+        selected_method = fpd_methods[0]
+        selected_fpd = fpd_values[0]
+
+    agreement = len(best_cluster) / len(results) if results else 0
+
+    method_details = {
+        'methods_tried': methods,
+        'methods_ok': len(results),
+        'per_method': {m: v / fs * 1000 for m, v in results.items()},
+        'selected_method': selected_method,
+        'cluster_size': len(best_cluster),
+        'cluster_methods': cluster_methods,
+        'cluster_center_ms': best_cluster_center,
+        'agreement': agreement,
+        'spread_ms': float(np.ptp(fpd_ms)) if len(fpd_ms) > 1 else 0,
+    }
+
+    return selected_fpd, method_details
+
+
 def _find_repolarization_on_template(template, fs, pre_ms=50, cfg=None):
     """
     Find the repolarization wave on a clean averaged template.
@@ -266,9 +348,16 @@ def _find_repolarization_on_template(template, fs, pre_ms=50, cfg=None):
     peak_samples = search_start + best_pk - spike_idx
     repol_amp = seg_smooth[best_pk]
 
-    # ─── Step 2: Apply configured FPD method ───
-    fpd_samples = _apply_fpd_method(seg_det, best_pk, best_sign, fs,
-                                     search_start, spike_idx, cfg=cfg)
+    # ─── Step 2: Apply configured FPD method (with optional consensus) ───
+    consensus_details = None
+    if rc.fpd_method == 'consensus':
+        fpd_samples, consensus_details = _consensus_fpd(
+            seg_det, best_pk, best_sign, fs, search_start, spike_idx, cfg=cfg)
+        if fpd_samples is None:
+            fpd_samples = peak_samples
+    else:
+        fpd_samples = _apply_fpd_method(seg_det, best_pk, best_sign, fs,
+                                         search_start, spike_idx, cfg=cfg)
 
     # ─── Step 3: Confidence scoring ───
     noise_level = np.std(seg_det)
@@ -291,10 +380,15 @@ def _find_repolarization_on_template(template, fs, pre_ms=50, cfg=None):
     confidence = (rc.confidence_weight_prominence * conf_prominence +
                   rc.confidence_weight_agreement * conf_agreement)
 
-    if fpd_samples is not None and fpd_samples > 0:
-        return fpd_samples, best_sign, repol_amp, confidence, peak_samples
+    # Boost confidence when consensus methods agree well
+    if consensus_details is not None and consensus_details.get('agreement', 0) > 0.6:
+        consensus_bonus = 0.1 * consensus_details['agreement']
+        confidence = min(1.0, confidence + consensus_bonus)
 
-    return None, 1, 0.0, 0.0, None
+    if fpd_samples is not None and fpd_samples > 0:
+        return fpd_samples, best_sign, repol_amp, confidence, peak_samples, consensus_details
+
+    return None, 1, 0.0, 0.0, None, None
 
 
 def _find_repolarization_per_beat(data, t, spike_idx, fs,
@@ -473,6 +567,7 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
     repol_confidence = 0.0
     template_peak_samples = None
 
+    consensus_info = None
     if template is not None:
         pre_ms = rc.segment_pre_ms
         fpd_result = _find_repolarization_on_template(template, fs, pre_ms=pre_ms, cfg=cfg)
@@ -481,6 +576,7 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
             template_repol_sign = fpd_result[1]
             repol_confidence = fpd_result[3] if len(fpd_result) > 3 else 0.5
             template_peak_samples = fpd_result[4] if len(fpd_result) > 4 else None
+            consensus_info = fpd_result[5] if len(fpd_result) > 5 else None
             template_fpd_ms = template_fpd_samples / fs * 1000
 
     # ─── Per-beat extraction ───
@@ -550,5 +646,9 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
         summary['template_fpd_ms'] = template_fpd_samples / fs * 1000
     summary['fpd_method'] = rc.fpd_method
     summary['correction'] = rc.correction
+
+    # Multi-method consensus info
+    if consensus_info is not None:
+        summary['consensus'] = consensus_info
 
     return all_params, summary

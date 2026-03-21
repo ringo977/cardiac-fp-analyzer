@@ -16,6 +16,9 @@ from typing import Optional, Tuple, List
 import json
 import copy
 
+# Import sub-configs from their modules (lazy to avoid circular imports)
+# CessationConfig and SpectralConfig are re-exported here for convenience
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #   FILTERING
@@ -90,11 +93,12 @@ class RepolarizationConfig:
     """Repolarization detection and FPD measurement parameters."""
 
     # --- FPD measurement method ---
-    # 'tangent'   : max-downslope → tangent-baseline intersection (gold standard)
-    # 'peak'      : repolarization peak only (simpler, underestimates ~25%)
-    # 'max_slope'  : point of maximum downslope after peak
-    # '50pct'     : 50% amplitude on descending side
+    # 'tangent'         : max-downslope → tangent-baseline intersection (gold standard)
+    # 'peak'            : repolarization peak only (simpler, underestimates ~25%)
+    # 'max_slope'       : point of maximum downslope after peak
+    # '50pct'           : 50% amplitude on descending side
     # 'baseline_return' : zero-crossing after peak (overestimates ~5%)
+    # 'consensus'       : run all methods, pick by cluster agreement (most robust)
     fpd_method: str = 'tangent'
 
     # --- Correction formula ---
@@ -204,7 +208,9 @@ class InclusionConfig:
     enabled_fpdc_range: bool = True
 
     # FPD confidence threshold for baselines
-    min_fpd_confidence: float = 0.68
+    # 0.69 optimized via sweep: excludes bad baselines (e.g. chipE_ch2 at 0.685)
+    # while keeping valid ones (e.g. chipA_ch1 at 0.691)
+    min_fpd_confidence: float = 0.69
     enabled_confidence: bool = True
 
 
@@ -231,6 +237,16 @@ class NormalizationConfig:
     # 'n_above' : drug positive if ≥ n concentrations > threshold
     classification_method: str = 'max'
     classification_n_above: int = 2  # used when method = 'n_above'
+
+    # Smart cessation override
+    # When a drug causes cessation AND waveform destruction (low FPD confidence),
+    # elevate the drug to positive even if FPDcF measurement failed.
+    # This catches drugs like dofetilide that destroy waveform morphology.
+    # Only triggers when min FPD confidence across concentrations < threshold,
+    # preventing false positives for drugs with cessation at extreme doses
+    # but good FPD data (e.g. ranolazine at 100µM).
+    enable_cessation_override: bool = True
+    cessation_override_max_fpd_confidence: float = 0.60
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -325,6 +341,10 @@ class AnalysisConfig:
     arrhythmia: ArrhythmiaConfig = field(default_factory=ArrhythmiaConfig)
     channel_selection: ChannelSelectionConfig = field(default_factory=ChannelSelectionConfig)
 
+    # Advanced analysis modules (enabled by default)
+    enable_cessation: bool = True
+    enable_spectral: bool = True
+
     # ── Serialization ──
 
     def to_dict(self) -> dict:
@@ -368,6 +388,13 @@ class AnalysisConfig:
                         if isinstance(current, tuple) and isinstance(v, list):
                             v = tuple(v)
                         setattr(section, k, v)
+
+        # Top-level flags
+        if 'enable_cessation' in d:
+            cfg.enable_cessation = d['enable_cessation']
+        if 'enable_spectral' in d:
+            cfg.enable_spectral = d['enable_spectral']
+
         return cfg
 
     @classmethod

@@ -242,13 +242,19 @@ def _compute_tdp_score(result, norm, cfg=None):
         for flag in ar.flags:
             ftype = flag.get('type', '')
             severity = flag.get('severity', '')
-            if ftype == 'cessation':
+            if ftype == 'cessation' or ftype == 'beat_cessation':
                 has_cessation = True
             # Only count EADs and premature beats as proarrhythmic
             # if FPDcF is also trending upward (confirming drug effect)
             if ftype in ('ead_events',) and severity == 'critical':
                 if pct > 0:  # Must show some prolongation trend
                     has_severe_arrhythmia = True
+
+    # Also check cessation detection module (more robust)
+    cess = result.get('cessation_report')
+    if cess is not None and cess.has_cessation:
+        if cess.cessation_confidence > 0.5:
+            has_cessation = True
 
     # Score based on FPDcF change (primary criterion)
     t_low, t_mid, t_high = _get_norm_thresholds(cfg)
@@ -268,11 +274,163 @@ def _compute_tdp_score(result, norm, cfg=None):
         return 0
 
 
+def classify_drug(results_list, cfg=None):
+    """
+    Classify each drug as positive/negative for QT prolongation.
+
+    Groups drug recordings by drug name (across all chips/channels/concentrations)
+    and applies the classification method from config:
+      - 'max'     : positive if ANY concentration exceeds threshold (default, most sensitive)
+      - 'mean'    : positive if MEAN %FPDcF change exceeds threshold (reduces borderline FPs)
+      - 'n_above' : positive if ≥ N concentrations exceed threshold (strict)
+
+    Returns dict: drug_name → {
+        'positive': bool,
+        'method': str,
+        'max_pct_change': float,
+        'mean_pct_change': float,
+        'n_above': int,
+        'concentrations': list of (conc, pct_change),
+        'threshold_used': float,
+    }
+    """
+    if cfg is None:
+        from .config import NormalizationConfig
+        cfg = NormalizationConfig()
+
+    t_low, t_mid, t_high = _get_norm_thresholds(cfg)
+    threshold_map = {'low': t_low, 'mid': t_mid, 'high': t_high}
+    threshold = threshold_map.get(cfg.classification_threshold, t_mid)
+
+    # Group by drug — collect FPDcF data for classification
+    drug_data = defaultdict(list)
+    for r in results_list:
+        if _is_baseline(r) or _is_control(r):
+            continue
+        norm = r.get('normalization', {})
+        if not norm.get('has_baseline'):
+            continue
+        inc = r.get('inclusion', {})
+        if not inc.get('passed', True):
+            continue
+
+        fi = r.get('file_info', {})
+        drug = str(fi.get('drug', '') or '').lower()
+        conc = fi.get('concentration', '')
+        pct = norm.get('pct_fpdc_change', np.nan)
+
+        if drug and not np.isnan(pct):
+            drug_data[drug].append({
+                'concentration': conc,
+                'pct_fpdc_change': pct,
+                'tdp_score': norm.get('tdp_score', 0),
+            })
+
+    # Collect cessation data per drug (from ALL drug recordings, not just those
+    # with valid FPD — the whole point is to catch drugs that destroy waveforms)
+    drug_cessation = defaultdict(lambda: {'has_cessation': False, 'min_fpd_conf': 1.0,
+                                           'cessation_details': []})
+    enable_cess = getattr(cfg, 'enable_cessation_override', True)
+    cess_max_conf = getattr(cfg, 'cessation_override_max_fpd_confidence', 0.60)
+
+    if enable_cess:
+        for r in results_list:
+            if _is_baseline(r) or _is_control(r):
+                continue
+            fi = r.get('file_info', {})
+            drug = str(fi.get('drug', '') or '').lower()
+            if not drug:
+                continue
+
+            # Check cessation
+            cess = r.get('cessation_report')
+            if cess is not None and cess.has_cessation and cess.cessation_confidence > 0.5:
+                drug_cessation[drug]['has_cessation'] = True
+                drug_cessation[drug]['cessation_details'].append({
+                    'concentration': fi.get('concentration', ''),
+                    'type': cess.cessation_type,
+                    'confidence': cess.cessation_confidence,
+                })
+
+            # Track min FPD confidence across all concentrations
+            summary = r.get('summary', {})
+            fpd_conf = summary.get('fpd_confidence', 1.0)
+            if fpd_conf is not None and not np.isnan(fpd_conf):
+                drug_cessation[drug]['min_fpd_conf'] = min(
+                    drug_cessation[drug]['min_fpd_conf'], fpd_conf)
+
+    # Classify each drug
+    classifications = {}
+    for drug, entries in drug_data.items():
+        pct_values = [e['pct_fpdc_change'] for e in entries]
+        conc_list = [(e['concentration'], e['pct_fpdc_change']) for e in entries]
+
+        max_pct = max(pct_values)
+        mean_pct = np.mean(pct_values)
+        n_above = sum(1 for p in pct_values if p >= threshold)
+
+        if cfg.classification_method == 'mean':
+            positive = mean_pct >= threshold
+        elif cfg.classification_method == 'n_above':
+            positive = n_above >= cfg.classification_n_above
+        else:  # 'max' (default)
+            positive = max_pct >= threshold
+
+        # Smart cessation override: if the drug causes cessation AND waveform
+        # destruction (low FPD confidence), elevate to positive.
+        # This catches drugs like dofetilide that destroy waveform morphology
+        # so FPD can't be measured, but does NOT trigger for drugs like
+        # ranolazine that have cessation at extreme doses with intact FPD.
+        cessation_override = False
+        cess_info = drug_cessation.get(drug, {})
+        if (enable_cess and cess_info.get('has_cessation', False)
+                and cess_info.get('min_fpd_conf', 1.0) < cess_max_conf):
+            cessation_override = True
+            positive = True
+
+        classifications[drug] = {
+            'positive': positive,
+            'method': cfg.classification_method,
+            'max_pct_change': max_pct,
+            'mean_pct_change': mean_pct,
+            'n_above_threshold': n_above,
+            'n_concentrations': len(pct_values),
+            'concentrations': conc_list,
+            'threshold_used': threshold,
+            'threshold_name': cfg.classification_threshold,
+            'cessation_override': cessation_override,
+            'cessation_info': cess_info if cessation_override else {},
+        }
+
+    # Also check for drugs that ONLY have cessation (no valid FPD data at all)
+    # but were detected in the cessation scan
+    if enable_cess:
+        for drug, cess_info in drug_cessation.items():
+            if drug not in classifications and cess_info['has_cessation']:
+                if cess_info['min_fpd_conf'] < cess_max_conf:
+                    classifications[drug] = {
+                        'positive': True,
+                        'method': 'cessation_only',
+                        'max_pct_change': np.nan,
+                        'mean_pct_change': np.nan,
+                        'n_above_threshold': 0,
+                        'n_concentrations': 0,
+                        'concentrations': [],
+                        'threshold_used': threshold,
+                        'threshold_name': cfg.classification_threshold,
+                        'cessation_override': True,
+                        'cessation_info': cess_info,
+                    }
+
+    return classifications
+
+
 def normalize_all_results(results_list, cfg=None):
     """
     Run baseline normalization on all results.
 
     Adds 'normalization' key to each result dict.
+    Also runs drug-level classification and adds 'drug_classification' to each drug result.
     Returns the modified results_list.
     """
     baseline_map = pair_with_baselines(results_list)
@@ -298,5 +456,15 @@ def normalize_all_results(results_list, cfg=None):
                 'exceeds_HIGH': False,
                 'tdp_score': 0,
             }
+
+    # Drug-level classification
+    drug_cls = classify_drug(results_list, cfg=cfg)
+
+    # Annotate each result with its drug classification
+    for r in results_list:
+        fi = r.get('file_info', {})
+        drug = str(fi.get('drug', '') or '').lower()
+        if drug in drug_cls:
+            r['normalization']['drug_classification'] = drug_cls[drug]
 
     return results_list

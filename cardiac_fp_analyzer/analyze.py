@@ -148,13 +148,44 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
         if verbose:
             print(f"  {ar.classification} (Risk: {ar.risk_score}/100)")
 
-        return {'metadata': metadata, 'file_info': file_info, 'summary': summary,
+        result = {'metadata': metadata, 'file_info': file_info, 'summary': summary,
                 'all_params': all_p, 'arrhythmia_report': ar,
                 'beat_indices': bi_clean, 'beat_indices_raw': bi,
                 'beat_periods': bp, 'filtered_signal': filtered,
                 'time_vector': df['time'].values,
                 'beats_data': bd_clean, 'beats_time': btm_clean,
                 'qc_report': qc_report}
+
+        # ─── Cessation detection ───
+        if config.enable_cessation:
+            from .cessation import detect_cessation
+            cess = detect_cessation(filtered, fs, bi, all_p,
+                                     beat_indices_clean=bi_clean,
+                                     qc_report=qc_report)
+            result['cessation_report'] = cess
+            if verbose and cess.has_cessation:
+                print(f"  CESSATION: {cess.cessation_type} "
+                      f"(conf={cess.cessation_confidence:.2f}, "
+                      f"silent={cess.total_silent_s:.1f}s, "
+                      f"max_gap={cess.max_gap_s:.1f}s)")
+
+        # ─── Spectral analysis ───
+        if config.enable_spectral:
+            from .spectral import analyze_spectral
+            spec = analyze_spectral(filtered, fs, bi_clean, bd_clean)
+            result['spectral_report'] = spec
+            if verbose:
+                parts = []
+                if not np.isnan(spec.spectral_entropy):
+                    parts.append(f"entropy={spec.spectral_entropy:.2f}")
+                if not np.isnan(spec.fundamental_freq_hz):
+                    parts.append(f"f0={spec.fundamental_freq_hz:.2f}Hz")
+                if spec.n_harmonics_detected > 0:
+                    parts.append(f"harmonics={spec.n_harmonics_detected}")
+                if parts:
+                    print(f"  Spectral: {', '.join(parts)}")
+
+        return result
     except Exception as e:
         print(f"  ERROR: {e}")
         if verbose: traceback.print_exc()
@@ -362,7 +393,7 @@ def main():
                         choices=['fridericia', 'bazett', 'none'],
                         help='QT correction formula (default: fridericia)')
     parser.add_argument('--fpd-method', default=None,
-                        choices=['tangent', 'peak', 'max_slope', '50pct', 'baseline_return'],
+                        choices=['tangent', 'peak', 'max_slope', '50pct', 'baseline_return', 'consensus'],
                         help='FPD measurement method')
     args = parser.parse_args()
 
