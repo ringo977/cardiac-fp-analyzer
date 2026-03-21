@@ -46,7 +46,7 @@ def generate_excel_report(results_list, output_path):
                 'Classification': ar.classification if ar else '', 'Risk Score': ar.risk_score if ar else 0,
             })
         df_s = pd.DataFrame(rows)
-        df_s.to_excel(writer, sheet_name='Summary', index=False, startrow=1)
+        df_s.to_excel(writer, sheet_name='Summary', index=False, startrow=1, header=False)
         ws = writer.sheets['Summary']
         for c, col in enumerate(df_s.columns):
             ws.write(0, c, col, hdr)
@@ -68,7 +68,7 @@ def generate_excel_report(results_list, output_path):
                                   'Description': f['description']})
         if frows:
             df_f = pd.DataFrame(frows)
-            df_f.to_excel(writer, sheet_name='Arrhythmia Flags', index=False, startrow=1)
+            df_f.to_excel(writer, sheet_name='Arrhythmia Flags', index=False, startrow=1, header=False)
             ws2 = writer.sheets['Arrhythmia Flags']
             for c, col in enumerate(df_f.columns):
                 ws2.write(0, c, col, hdr)
@@ -82,7 +82,7 @@ def generate_excel_report(results_list, output_path):
                 brows.append(row)
         if brows:
             df_b = pd.DataFrame(brows)
-            df_b.to_excel(writer, sheet_name='Per-Beat Data', index=False, startrow=1)
+            df_b.to_excel(writer, sheet_name='Per-Beat Data', index=False, startrow=1, header=False)
             ws3 = writer.sheets['Per-Beat Data']
             for c, col in enumerate(df_b.columns):
                 ws3.write(0, c, col, hdr)

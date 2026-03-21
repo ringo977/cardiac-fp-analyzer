@@ -90,7 +90,7 @@ def analyze_single_file(filepath, channel='auto', verbose=True):
             bi, bt, det = detect_beats(filtered, fs, method='auto', min_distance_ms=300, threshold_factor=3.0)
             if verbose: print(f"  Retry: {det['n_beats']} beats")
 
-        bd, btm, vi = segment_beats(filtered, df['time'].values, bi, fs, pre_ms=50, post_ms=600)
+        bd, btm, vi = segment_beats(filtered, df['time'].values, bi, fs, pre_ms=50, post_ms=850)
 
         # ─── Quality Control: validate beats ───
         qc_report, bi_clean, bd_clean, btm_clean = validate_beats(
