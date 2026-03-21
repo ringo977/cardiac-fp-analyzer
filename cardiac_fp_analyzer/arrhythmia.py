@@ -41,7 +41,12 @@ class ArrhythmiaReport:
         return '\n'.join(lines)
 
 
-def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs, baseline_summary=None):
+def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs, baseline_summary=None, cfg=None):
+    """Analyze arrhythmia. cfg = ArrhythmiaConfig or None (uses module defaults)."""
+    if cfg is None:
+        from .config import ArrhythmiaConfig
+        cfg = ArrhythmiaConfig()
+
     report = ArrhythmiaReport()
     bp_ms = beat_periods * 1000 if len(beat_periods) > 0 else np.array([])
 
@@ -55,21 +60,21 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs, base
     report.details.update({'mean_bp_ms': mean_bp, 'cv_bp_pct': cv_bp, 'n_beats': len(beat_indices),
                            'bpm': 60000/mean_bp if mean_bp > 0 else 0})
 
-    if mean_bp < TACHYCARDIA_BP_MS:
+    if mean_bp < cfg.tachycardia_bp_ms:
         report.add_flag('tachycardia', 'warning', f'Mean BP = {mean_bp:.0f} ms ({60000/mean_bp:.0f} BPM)')
-    elif mean_bp > BRADYCARDIA_BP_MS:
+    elif mean_bp > cfg.bradycardia_bp_ms:
         report.add_flag('bradycardia', 'warning', f'Mean BP = {mean_bp:.0f} ms ({60000/mean_bp:.0f} BPM)')
 
-    if cv_bp > RR_IRREGULARITY_CV:
-        sev = 'critical' if cv_bp > 30 else 'warning'
+    if cv_bp > cfg.rr_irregularity_cv:
+        sev = 'critical' if cv_bp > cfg.rr_critical_cv else 'warning'
         report.add_flag('rr_irregular', sev, f'RR CV = {cv_bp:.1f}%')
 
     n_prem, n_del = 0, 0
     for i, bp in enumerate(bp_ms):
-        if bp < mean_bp * PREMATURE_BEAT_FACTOR:
+        if bp < mean_bp * cfg.premature_beat_factor:
             n_prem += 1
             report.add_event(i+1, 'premature_beat', f'BP={bp:.0f}ms')
-        elif bp > mean_bp * DELAYED_BEAT_FACTOR:
+        elif bp > mean_bp * cfg.delayed_beat_factor:
             n_del += 1
             report.add_event(i+1, 'delayed_beat', f'BP={bp:.0f}ms')
 
@@ -80,12 +85,12 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs, base
         pct = n_del/len(bp_ms)*100
         report.add_flag('delayed_beats', 'warning' if pct>5 else 'info', f'{n_del} delayed ({pct:.1f}%)')
 
-    pauses = bp_ms[bp_ms > mean_bp * CESSATION_FACTOR]
+    pauses = bp_ms[bp_ms > mean_bp * cfg.cessation_factor]
     if len(pauses) > 0:
         report.add_flag('beat_cessation', 'critical', f'{len(pauses)} pause(s), max={np.max(pauses):.0f}ms')
 
     stv = summary.get('stv_ms', np.nan)
-    if not np.isnan(stv) and stv > STV_HIGH_RISK_MS:
+    if not np.isnan(stv) and stv > cfg.stv_high_risk_ms:
         report.add_flag('high_stv', 'warning', f'STV = {stv:.1f} ms')
 
     fpd_vals = [p['fpd_ms'] for p in all_params if not np.isnan(p.get('fpd_ms', np.nan))]
@@ -93,9 +98,9 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs, base
         mean_fpd = np.mean(fpd_vals)
         if baseline_summary and 'fpd_ms_mean' in baseline_summary:
             ratio = mean_fpd / baseline_summary['fpd_ms_mean']
-            if ratio > FPD_PROLONGATION_THRESHOLD:
+            if ratio > cfg.fpd_prolongation_threshold:
                 report.add_flag('fpd_prolongation', 'critical', f'FPD {ratio:.0%} of baseline')
-        if mean_fpd > 500:
+        if mean_fpd > cfg.fpd_critical_length_ms:
             report.add_flag('fpd_very_long', 'critical', f'FPD = {mean_fpd:.0f} ms')
 
     # EAD detection
@@ -105,30 +110,42 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs, base
         mad_fpd = np.median(np.abs(np.array(fpd_vals) - med_fpd))
         for i, p in enumerate(all_params):
             fpd = p.get('fpd_ms', np.nan)
-            if not np.isnan(fpd) and mad_fpd > 0 and (fpd - med_fpd) > 3 * mad_fpd * 1.4826:
+            if not np.isnan(fpd) and mad_fpd > 0 and (fpd - med_fpd) > cfg.ead_mad_factor * mad_fpd * 1.4826:
                 n_ead += 1
                 report.add_event(i+1, 'ead_suspect', f'FPD={fpd:.0f}ms')
         if n_ead > 0:
-            report.add_flag('ead_events', 'critical' if n_ead>3 else 'warning', f'{n_ead} EAD-like event(s)')
+            report.add_flag('ead_events',
+                          'critical' if n_ead > cfg.ead_critical_count else 'warning',
+                          f'{n_ead} EAD-like event(s)')
 
     # Amplitude instability
     amps = [p['spike_amplitude_mV'] for p in all_params if not np.isnan(p.get('spike_amplitude_mV', np.nan))]
     if len(amps) > 5:
         amp_cv = np.std(amps) / np.mean(amps) * 100
-        if amp_cv > 30:
+        if amp_cv > cfg.amplitude_instability_cv:
             report.add_flag('amplitude_instability', 'warning', f'Amplitude CV = {amp_cv:.1f}%')
 
     # Classification
     crit = [f for f in report.flags if f['severity'] == 'critical']
-    if len(pauses) > 0 and cv_bp > 40: report.classification = 'Fibrillation-like / Chaotic Rhythm'
-    elif n_ead > 3: report.classification = 'EAD with Triggered Activity'
-    elif n_ead > 0 and crit: report.classification = 'Proarrhythmic (EAD-prone)'
-    elif len(pauses) > 0: report.classification = 'Intermittent Cessation'
-    elif cv_bp > 30: report.classification = 'Highly Irregular Rhythm'
-    elif n_prem > 5: report.classification = 'Frequent Premature Beats'
-    elif cv_bp > RR_IRREGULARITY_CV: report.classification = 'Irregular Rhythm'
-    elif mean_bp < TACHYCARDIA_BP_MS: report.classification = 'Tachycardia'
-    elif mean_bp > BRADYCARDIA_BP_MS: report.classification = 'Bradycardia'
-    elif [f for f in report.flags if f['severity'] == 'warning']: report.classification = 'Borderline / Mild Abnormalities'
+    if len(pauses) > 0 and cv_bp > cfg.fibrillation_cv:
+        report.classification = 'Fibrillation-like / Chaotic Rhythm'
+    elif n_ead > cfg.ead_critical_count:
+        report.classification = 'EAD with Triggered Activity'
+    elif n_ead > 0 and crit:
+        report.classification = 'Proarrhythmic (EAD-prone)'
+    elif len(pauses) > 0:
+        report.classification = 'Intermittent Cessation'
+    elif cv_bp > cfg.rr_critical_cv:
+        report.classification = 'Highly Irregular Rhythm'
+    elif n_prem > cfg.premature_count_threshold:
+        report.classification = 'Frequent Premature Beats'
+    elif cv_bp > cfg.rr_irregularity_cv:
+        report.classification = 'Irregular Rhythm'
+    elif mean_bp < cfg.tachycardia_bp_ms:
+        report.classification = 'Tachycardia'
+    elif mean_bp > cfg.bradycardia_bp_ms:
+        report.classification = 'Bradycardia'
+    elif [f for f in report.flags if f['severity'] == 'warning']:
+        report.classification = 'Borderline / Mild Abnormalities'
 
     return report

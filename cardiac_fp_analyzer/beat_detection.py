@@ -12,8 +12,16 @@ import numpy as np
 from scipy import signal as sig
 
 
+def _get_bd_cfg(cfg=None):
+    """Return a BeatDetectionConfig, creating default if needed."""
+    if cfg is not None:
+        return cfg
+    from .config import BeatDetectionConfig
+    return BeatDetectionConfig()
+
+
 def detect_beats(data, fs, method='auto', min_distance_ms=400,
-                 threshold_factor=4.0, channel_data=None):
+                 threshold_factor=4.0, channel_data=None, cfg=None):
     """
     Detect beat (depolarization spike) locations in FP signal.
 
@@ -24,6 +32,7 @@ def detect_beats(data, fs, method='auto', min_distance_ms=400,
     method : str — 'auto' (recommended), 'prominence', 'derivative', or 'peak'
     min_distance_ms : float — minimum inter-beat interval in ms
     threshold_factor : float — multiplier for adaptive threshold
+    cfg : BeatDetectionConfig or None — if provided, overrides method/min_distance_ms/threshold_factor
 
     Returns
     -------
@@ -31,39 +40,48 @@ def detect_beats(data, fs, method='auto', min_distance_ms=400,
     beat_times : array of float
     info : dict — detection diagnostics
     """
+    if cfg is not None:
+        method = cfg.method
+        min_distance_ms = cfg.min_distance_ms
+        threshold_factor = cfg.threshold_factor
+
     data = np.array(data, dtype=np.float64)
     min_dist = int(min_distance_ms * fs / 1000)
 
     if method == 'auto':
-        return _detect_auto(data, fs, min_dist, threshold_factor)
+        return _detect_auto(data, fs, min_dist, threshold_factor, cfg=cfg)
     elif method == 'prominence':
         return _detect_prominence(data, fs, min_dist, threshold_factor)
     elif method == 'derivative':
-        return _detect_derivative(data, fs, min_dist, threshold_factor)
+        return _detect_derivative(data, fs, min_dist, threshold_factor, cfg=cfg)
     elif method == 'peak':
         return _detect_peak(data, fs, min_dist, threshold_factor)
     else:
         raise ValueError(f"Unknown method: {method}")
 
 
-def _detect_auto(data, fs, min_dist, threshold_factor):
+def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
     """Auto-select best method based on physiological plausibility."""
+    c = _get_bd_cfg(cfg)
     results = []
     for method_fn, name in [(_detect_prominence, 'prominence'),
                              (_detect_derivative, 'derivative'),
                              (_detect_peak, 'peak')]:
         try:
-            bi, bt, info = method_fn(data, fs, min_dist, threshold_factor)
+            if name == 'derivative':
+                bi, bt, info = method_fn(data, fs, min_dist, threshold_factor, cfg=cfg)
+            else:
+                bi, bt, info = method_fn(data, fs, min_dist, threshold_factor)
             bp = np.diff(bi) / fs if len(bi) > 1 else np.array([])
             score = 0
             if len(bp) > 2:
                 mean_bp = np.mean(bp)
                 cv_bp = np.std(bp) / mean_bp if mean_bp > 0 else 999
-                if 0.4 <= mean_bp <= 3.0: score += 30
-                elif 0.3 <= mean_bp <= 5.0: score += 15
-                if cv_bp < 0.15: score += 30
-                elif cv_bp < 0.30: score += 20
-                elif cv_bp < 0.50: score += 10
+                if c.bp_ideal_range_s[0] <= mean_bp <= c.bp_ideal_range_s[1]: score += 30
+                elif c.bp_extended_range_s[0] <= mean_bp <= c.bp_extended_range_s[1]: score += 15
+                if cv_bp < c.cv_good: score += 30
+                elif cv_bp < c.cv_fair: score += 20
+                elif cv_bp < c.cv_marginal: score += 10
                 duration_s = len(data) / fs
                 if duration_s/3 <= len(bi) <= duration_s/0.3: score += 20
                 elif len(bi) > 3: score += 10
@@ -106,11 +124,12 @@ def _detect_prominence(data, fs, min_dist, threshold_factor):
     return peaks, peaks / fs, {'method': 'prominence', 'polarity': polarity, 'n_beats': len(peaks)}
 
 
-def _detect_derivative(data, fs, min_dist, threshold_factor):
+def _detect_derivative(data, fs, min_dist, threshold_factor, cfg=None):
     """Derivative-based: detects steepest slope at depolarization."""
+    c = _get_bd_cfg(cfg)
     dt = 1.0 / fs
     deriv = np.gradient(data, dt)
-    win = max(3, int(0.002 * fs))
+    win = max(3, int(c.deriv_smooth_ms / 1000.0 * fs))
     if win % 2 == 0: win += 1
     deriv_smooth = sig.savgol_filter(deriv, win, 2) if fs >= 1000 else deriv
 
@@ -132,7 +151,7 @@ def _detect_derivative(data, fs, min_dist, threshold_factor):
                 best_score, best_peaks, best_pol = score, pks, pol
 
     # Refine to signal peaks
-    w = int(0.01 * fs)
+    w = int(c.peak_refine_window_ms / 1000.0 * fs)
     refined = []
     for p in best_peaks:
         s, e = max(0, p-w), min(len(data), p+w+1)
@@ -164,8 +183,17 @@ def _detect_peak(data, fs, min_dist, threshold_factor):
     return bi, bi / fs, {'method': 'peak', 'polarity': pol, 'n_beats': len(bi)}
 
 
-def segment_beats(data, time, beat_indices, fs, pre_ms=50, post_ms=600):
-    """Segment signal into individual beats aligned to depolarization spike."""
+def segment_beats(data, time, beat_indices, fs, pre_ms=50, post_ms=600, cfg=None):
+    """Segment signal into individual beats aligned to depolarization spike.
+
+    If cfg (RepolarizationConfig) is provided, pre_ms is taken from
+    cfg.segment_pre_ms and post_ms from cfg.search_end_ms + margin.
+    Explicit pre_ms/post_ms still override when cfg is None.
+    """
+    if cfg is not None:
+        pre_ms = cfg.segment_pre_ms
+        # post_ms should cover the full repolarization search + some margin
+        post_ms = max(post_ms, cfg.search_end_ms + 50)
     pre, post = int(pre_ms * fs / 1000), int(post_ms * fs / 1000)
     beats_data, beats_time, valid = [], [], []
     for i, idx in enumerate(beat_indices):

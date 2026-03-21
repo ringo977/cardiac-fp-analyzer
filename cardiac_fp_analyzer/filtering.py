@@ -6,6 +6,8 @@ Provides:
   - Bandpass filter for FP signal extraction
   - Baseline drift removal
   - Savitzky-Golay smoothing for gentle noise reduction
+
+All parameters are configurable via FilterConfig (see config.py).
 """
 
 import numpy as np
@@ -54,14 +56,27 @@ def smooth_savgol(data, window_length=11, polyorder=3):
     return signal.savgol_filter(data, window_length, polyorder)
 
 
-def full_filter_pipeline(data, fs, notch_freq=50.0, bp_low=0.5, bp_high=500.0):
+def full_filter_pipeline(data, fs, cfg=None):
     """
     Complete filtering pipeline:
       1. Notch at 50 Hz (+ harmonics)
       2. Bandpass 0.5–500 Hz
       3. Light Savitzky-Golay smoothing
+
+    Parameters
+    ----------
+    data : array-like — raw signal
+    fs : float — sample rate (Hz)
+    cfg : FilterConfig or None — if None, uses defaults
     """
-    y = notch_filter(data, fs, freq=notch_freq)
-    y = bandpass_filter(y, fs, lowcut=bp_low, highcut=bp_high)
-    y = smooth_savgol(y, window_length=7, polyorder=3)
+    if cfg is None:
+        from .config import FilterConfig
+        cfg = FilterConfig()
+
+    y = notch_filter(data, fs, freq=cfg.notch_freq_hz,
+                     n_harmonics=cfg.notch_harmonics, Q=cfg.notch_q)
+    y = bandpass_filter(y, fs, lowcut=cfg.bandpass_low_hz,
+                        highcut=cfg.bandpass_high_hz, order=cfg.bandpass_order)
+    y = smooth_savgol(y, window_length=cfg.savgol_window,
+                      polyorder=cfg.savgol_polyorder)
     return y

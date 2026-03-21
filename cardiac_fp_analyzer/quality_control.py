@@ -24,21 +24,24 @@ import numpy as np
 from scipy import signal as sig
 
 
-# ─── Thresholds ───
+# ─── Module-level defaults (used when no config is provided) ───
 GLOBAL_SNR_EXCELLENT = 8.0
 GLOBAL_SNR_GOOD = 5.0
 GLOBAL_SNR_FAIR = 3.0
 GLOBAL_SNR_POOR = 2.0
 
-# Amplitude: reject beats whose amplitude is below this fraction of the
-# robust reference amplitude (median of the top-50% beats)
-AMPLITUDE_REJECT_FRACTION = 0.25   # < 25% of reference → noise spike
-
-MORPHOLOGY_CORR_ACCEPT = 0.4    # correlation with template ≥ 0.4 → accept
-MORPHOLOGY_CORR_MARGINAL = 0.2  # below this → reject
-
-# Maximum fraction of beats that can be rejected before downgrading quality
+AMPLITUDE_REJECT_FRACTION = 0.25
+MORPHOLOGY_CORR_ACCEPT = 0.4
+MORPHOLOGY_CORR_MARGINAL = 0.2
 MAX_REJECTION_RATE = 0.40
+
+
+def _get_qc_cfg(cfg=None):
+    """Return a QualityConfig, creating default if needed."""
+    if cfg is not None:
+        return cfg
+    from .config import QualityConfig
+    return QualityConfig()
 
 
 class QualityReport:
@@ -222,7 +225,7 @@ def morphology_correlation(beat_data, template):
 def validate_beats(data, beat_indices, beats_data, beats_time, fs,
                    snr_threshold=None, morphology_threshold=MORPHOLOGY_CORR_ACCEPT,
                    amplitude_threshold=AMPLITUDE_REJECT_FRACTION,
-                   use_morphology=True):
+                   use_morphology=True, cfg=None):
     """
     Validate each detected beat using amplitude consistency and morphology.
 
@@ -243,6 +246,8 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
     snr_threshold : float — (legacy, ignored — kept for API compatibility)
     morphology_threshold : float — minimum correlation with template
     amplitude_threshold : float — min amplitude ratio to reference (default 0.25)
+    use_morphology : bool — whether to use morphological filtering
+    cfg : QualityConfig or None — if provided, overrides threshold parameters
 
     Returns
     -------
@@ -251,6 +256,14 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
     accepted_beats_data : list — beat waveforms of accepted beats
     accepted_beats_time : list — time vectors of accepted beats
     """
+    c = _get_qc_cfg(cfg)
+
+    # When config is provided, use its values
+    if cfg is not None:
+        morphology_threshold = c.morphology_threshold
+        amplitude_threshold = c.amplitude_reject_fraction
+        use_morphology = c.use_morphology
+
     qc = QualityReport()
     qc.n_beats_input = len(beat_indices)
 
@@ -262,11 +275,11 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
     # ─── Step 1: Global SNR ───
     qc.global_snr = estimate_global_snr(data, beat_indices, fs)
 
-    if qc.global_snr < GLOBAL_SNR_POOR:
+    if qc.global_snr < c.snr_poor:
         qc.notes.append(f'Very low global SNR ({qc.global_snr:.1f}) — signal may be mostly noise')
 
     # ─── Step 2: Beat amplitudes and amplitude ratios ───
-    amplitudes = compute_beat_amplitudes(data, beat_indices, fs, window_ms=20)
+    amplitudes = compute_beat_amplitudes(data, beat_indices, fs, window_ms=c.morphology_window_ms)
     amp_ratios, ref_amplitude = compute_amplitude_ratios(amplitudes)
 
     # Store amplitude ratios as "per_beat_snr" for report compatibility
@@ -279,7 +292,7 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
     if use_morphology and len(beats_data) >= 5:
         # Build template from highest-amplitude beats (most likely real)
         bd_amps = amplitudes[:len(beats_data)] if len(amplitudes) >= len(beats_data) else amplitudes
-        template = compute_beat_template(beats_data, amplitudes=bd_amps, max_beats=30)
+        template = compute_beat_template(beats_data, amplitudes=bd_amps, max_beats=c.morphology_max_beats)
 
         if template is not None:
             morphology_corrs = []
@@ -330,7 +343,7 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
     qc.mean_morphology_corr = np.mean(accepted_corrs) if accepted_corrs else 0
 
     # ─── Step 5: Assign quality grade ───
-    qc.grade = _assign_grade(qc)
+    qc.grade = _assign_grade(qc, cfg=c)
 
     # ─── Step 6: Build accepted outputs ───
     accepted_beat_indices = beat_indices[np.array(accepted_mask)]
@@ -344,7 +357,7 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
             accepted_beats_time.append(beats_time[i])
 
     # Add notes
-    if qc.rejection_rate > 0.5:
+    if qc.rejection_rate > c.rejection_high_note:
         qc.notes.append(f'High rejection rate ({qc.rejection_rate*100:.0f}%) — signal quality is poor')
     if n_rej_amp > 0:
         qc.notes.append(f'{n_rej_amp} beats rejected for low amplitude '
@@ -356,31 +369,32 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
     return qc, accepted_beat_indices, accepted_beats_data, accepted_beats_time
 
 
-def _assign_grade(qc):
+def _assign_grade(qc, cfg=None):
     """Assign overall quality grade based on SNR and rejection metrics."""
+    c = _get_qc_cfg(cfg)
     gsnr = qc.global_snr
     rej = qc.rejection_rate
     n_acc = qc.n_beats_accepted
     mean_corr = qc.mean_morphology_corr
 
     # F: unanalyzable
-    if n_acc < 3:
+    if n_acc < c.min_beats_for_analysis:
         return 'F'
-    if gsnr < GLOBAL_SNR_POOR and rej > 0.6:
+    if gsnr < c.snr_poor and rej > 0.6:
         return 'F'
 
     # D: poor
-    if gsnr < GLOBAL_SNR_FAIR or rej > MAX_REJECTION_RATE:
+    if gsnr < c.snr_fair or rej > c.max_rejection_rate:
         return 'D'
 
     # C: fair
-    if gsnr < GLOBAL_SNR_GOOD or rej > 0.20:
+    if gsnr < c.snr_good or rej > c.rejection_grade_c:
         return 'C'
-    if mean_corr < MORPHOLOGY_CORR_ACCEPT:
+    if mean_corr < c.morphology_threshold:
         return 'C'
 
     # B: good
-    if gsnr < GLOBAL_SNR_EXCELLENT or rej > 0.05:
+    if gsnr < c.snr_excellent or rej > c.rejection_grade_b:
         return 'B'
 
     # A: excellent

@@ -24,29 +24,38 @@ from cardiac_fp_analyzer.report import generate_excel_report, generate_pdf_repor
 warnings.filterwarnings('ignore', category=RuntimeWarning)
 
 
-def _select_best_channel(df, fs):
+def _select_best_channel(df, fs, cfg=None):
+    """Select the best channel based on beat detection quality. cfg = AnalysisConfig."""
+    if cfg is not None:
+        cs = cfg.channel_selection
+        fc = cfg.filtering
+    else:
+        from .config import ChannelSelectionConfig, FilterConfig
+        cs = ChannelSelectionConfig()
+        fc = FilterConfig()
+
     best_ch, best_score = 'ch1', -999
     details = {}
     for ch in ['ch1', 'ch2']:
         try:
-            filt = full_filter_pipeline(df[ch].values, fs)
+            filt = full_filter_pipeline(df[ch].values, fs, cfg=fc)
             bi, bt, info = detect_beats(filt, fs, method='auto', min_distance_ms=400)
             bp = compute_beat_periods(bi, fs)
             score = 0
             if len(bp) > 2:
                 mbp, cv = np.mean(bp), np.std(bp)/np.mean(bp) if np.mean(bp)>0 else 999
-                if 0.3 <= mbp <= 4.0: score += 30
-                if cv < 0.10: score += 40
-                elif cv < 0.20: score += 30
-                elif cv < 0.35: score += 15
+                if cs.bp_ideal_range_s[0] <= mbp <= cs.bp_ideal_range_s[1]: score += 30
+                if cv*100 < cs.cv_excellent: score += 40
+                elif cv*100 < cs.cv_good: score += 30
+                elif cv*100 < cs.cv_fair: score += 15
                 rate = len(bi) / (len(df)/fs)
-                if 0.3 <= rate <= 3.5: score += 20
+                if cs.rate_range_per_s[0] <= rate <= cs.rate_range_per_s[1]: score += 20
                 p5, p95 = np.percentile(filt, [5, 95])
                 nm = (filt >= p5) & (filt <= p95)
                 ns = np.std(filt[nm]) if np.sum(nm)>100 else np.std(filt)
                 snr = np.mean(np.abs(filt[bi]))/ns if ns>0 else 0
-                if snr > 5: score += 20
-                elif snr > 3: score += 10
+                if snr > cs.snr_good: score += 20
+                elif snr > cs.snr_fair: score += 10
                 details[ch] = f'{len(bi)} beats, BP={mbp*1000:.0f}ms, CV={cv*100:.1f}%, score={score}'
             else:
                 details[ch] = f'{len(bi)} beats (too few)'
@@ -57,7 +66,20 @@ def _select_best_channel(df, fs):
     return best_ch, details
 
 
-def analyze_single_file(filepath, channel='auto', verbose=True):
+def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
+    """Analyze a single CSV file through the full pipeline.
+
+    Parameters
+    ----------
+    filepath : path to CSV file
+    channel : 'auto', 'ch1', or 'ch2'
+    verbose : print progress
+    config : AnalysisConfig or None — controls all pipeline parameters
+    """
+    if config is None:
+        from .config import AnalysisConfig
+        config = AnalysisConfig()
+
     filepath = Path(filepath)
     if verbose:
         print(f"\n{'='*60}\n  Analyzing: {filepath.name}\n{'='*60}")
@@ -72,7 +94,7 @@ def analyze_single_file(filepath, channel='auto', verbose=True):
 
         actual_ch = channel
         if channel == 'auto':
-            actual_ch, ch_det = _select_best_channel(df, fs)
+            actual_ch, ch_det = _select_best_channel(df, fs, cfg=config)
             if verbose:
                 print(f"  Channel selection:")
                 for ch, d in ch_det.items():
@@ -80,23 +102,30 @@ def analyze_single_file(filepath, channel='auto', verbose=True):
         file_info['analyzed_channel'] = actual_ch
 
         raw = df[actual_ch].values
-        filtered = full_filter_pipeline(raw, fs)
+        filtered = full_filter_pipeline(raw, fs, cfg=config.filtering)
         if verbose: print(f"  Filtered ({actual_ch})")
 
-        bi, bt, det = detect_beats(filtered, fs, method='auto', min_distance_ms=400)
+        bd_cfg = config.beat_detection
+        bi, bt, det = detect_beats(filtered, fs, cfg=bd_cfg)
         if verbose: print(f"  Beats: {det['n_beats']} ({det['method']})")
 
         if det['n_beats'] < 5 and len(df) > fs*10:
-            bi, bt, det = detect_beats(filtered, fs, method='auto', min_distance_ms=300, threshold_factor=3.0)
+            bi, bt, det = detect_beats(
+                filtered, fs,
+                method=bd_cfg.method,
+                min_distance_ms=bd_cfg.retry_min_distance_ms,
+                threshold_factor=bd_cfg.retry_threshold_factor
+            )
             if verbose: print(f"  Retry: {det['n_beats']} beats")
 
-        bd, btm, vi = segment_beats(filtered, df['time'].values, bi, fs, pre_ms=50, post_ms=850)
+        rep_cfg = config.repolarization
+        bd, btm, vi = segment_beats(filtered, df['time'].values, bi, fs,
+                                     pre_ms=rep_cfg.segment_pre_ms,
+                                     post_ms=max(850, rep_cfg.search_end_ms + 50))
 
         # ─── Quality Control: validate beats ───
         qc_report, bi_clean, bd_clean, btm_clean = validate_beats(
-            filtered, bi, bd, btm, fs,
-            morphology_threshold=0.4,
-            use_morphology=True
+            filtered, bi, bd, btm, fs, cfg=config.quality
         )
         if verbose:
             n_rej = qc_report.n_beats_input - qc_report.n_beats_accepted
@@ -108,13 +137,14 @@ def analyze_single_file(filepath, channel='auto', verbose=True):
                 print(f"    >> {note}")
 
         # Use cleaned beats for parameter extraction
-        all_p, summary = extract_all_parameters(bd_clean, btm_clean, bi_clean, fs)
+        all_p, summary = extract_all_parameters(bd_clean, btm_clean, bi_clean, fs,
+                                                 cfg=rep_cfg)
         bp = compute_beat_periods(bi_clean, fs)
 
         if verbose and len(bp) > 0:
             print(f"  BP: {np.mean(bp)*1000:.0f}ms ({60/np.mean(bp):.1f} BPM)")
 
-        ar = analyze_arrhythmia(bi_clean, bp, all_p, summary, fs)
+        ar = analyze_arrhythmia(bi_clean, bp, all_p, summary, fs, cfg=config.arrhythmia)
         if verbose:
             print(f"  {ar.classification} (Risk: {ar.risk_score}/100)")
 
@@ -131,7 +161,149 @@ def analyze_single_file(filepath, channel='auto', verbose=True):
         return None
 
 
-def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True):
+def _apply_inclusion_criteria(results, verbose=True, cfg=None):
+    """
+    Apply quality-based inclusion criteria (as in Visone et al. 2023).
+
+    Parameters
+    ----------
+    results : list of result dicts
+    verbose : print progress
+    cfg : InclusionConfig or None — if None, uses defaults
+
+    Criteria applied:
+      1. Baseline CV of BP must be < max_cv_bp (paper: 25%)
+      2. FPDcF plausibility: recordings outside range are flagged
+      3. FPD confidence: baselines with low confidence are excluded
+    """
+    if cfg is None:
+        from .config import InclusionConfig
+        cfg = InclusionConfig()
+
+    from .normalization import _get_group_key, _is_baseline
+
+    max_cv_bp = cfg.max_cv_bp if cfg.enabled_cv else 999.0
+    fpdc_range = (cfg.fpdc_range_min, cfg.fpdc_range_max) if cfg.enabled_fpdc_range else (0, 99999)
+    min_fpd_confidence = cfg.min_fpd_confidence if cfg.enabled_confidence else 0.0
+
+    # Step 1: identify failing baselines and flag their groups
+    excluded_groups = set()
+    n_bl_ok = 0
+    n_bl_fail = 0
+    n_bl_conf_fail = 0
+    for r in results:
+        if not _is_baseline(r):
+            continue
+        cv = r.get('summary', {}).get('beat_period_ms_cv', np.nan)
+        conf = r.get('summary', {}).get('fpd_confidence', np.nan)
+        group = _get_group_key(r)
+
+        fail_reason = None
+        if cfg.enabled_cv and (np.isnan(cv) or cv >= max_cv_bp):
+            fail_reason = f'Baseline CV={cv:.1f}% >= {max_cv_bp}%'
+        elif cfg.enabled_confidence and not np.isnan(conf) and conf < min_fpd_confidence:
+            fail_reason = f'Baseline FPD confidence={conf:.2f} < {min_fpd_confidence}'
+            n_bl_conf_fail += 1
+
+        if fail_reason:
+            excluded_groups.add(group)
+            r['inclusion'] = {'passed': False, 'reason': fail_reason}
+            n_bl_fail += 1
+        else:
+            r['inclusion'] = {'passed': True, 'reason': ''}
+            n_bl_ok += 1
+
+    if verbose:
+        print(f"  Inclusion criteria (CV BP < {max_cv_bp}%, FPD conf >= {min_fpd_confidence}): "
+              f"{n_bl_ok} baselines OK, {n_bl_fail} excluded "
+              f"({len(excluded_groups)} groups removed)"
+              + (f" [{n_bl_conf_fail} low confidence]" if n_bl_conf_fail > 0 else ""))
+
+    # Step 2: flag drug recordings in excluded groups
+    n_drug_excl = 0
+    for r in results:
+        if _is_baseline(r):
+            continue
+        group = _get_group_key(r)
+        if group in excluded_groups:
+            r['inclusion'] = {'passed': False, 'reason': f'Baseline of group {group} failed inclusion'}
+            n_drug_excl += 1
+        else:
+            r.setdefault('inclusion', {'passed': True, 'reason': ''})
+
+    # Step 3: FPDcF plausibility check
+    n_fpdc_fail = 0
+    if cfg.enabled_fpdc_range:
+        for r in results:
+            fpdc = r.get('summary', {}).get('fpdc_ms_mean', np.nan)
+            if not np.isnan(fpdc) and (fpdc < fpdc_range[0] or fpdc > fpdc_range[1]):
+                inc = r.setdefault('inclusion', {'passed': True, 'reason': ''})
+                inc['fpdc_plausible'] = False
+                inc['fpdc_note'] = f'FPDcF={fpdc:.0f}ms outside [{fpdc_range[0]}-{fpdc_range[1]}]ms'
+                n_fpdc_fail += 1
+            else:
+                inc = r.setdefault('inclusion', {'passed': True, 'reason': ''})
+                inc['fpdc_plausible'] = True
+
+    if verbose and n_fpdc_fail > 0:
+        print(f"  FPDcF plausibility: {n_fpdc_fail} recordings outside {fpdc_range[0]}-{fpdc_range[1]}ms range")
+
+    # Step 4: Flag drug recordings with low FPD confidence
+    n_drug_conf = 0
+    if cfg.enabled_confidence:
+        for r in results:
+            if _is_baseline(r):
+                continue
+            conf = r.get('summary', {}).get('fpd_confidence', np.nan)
+            inc = r.setdefault('inclusion', {'passed': True, 'reason': ''})
+            if not np.isnan(conf) and conf < min_fpd_confidence:
+                inc['fpd_reliable'] = False
+                n_drug_conf += 1
+            else:
+                inc['fpd_reliable'] = True
+
+    if verbose and n_drug_conf > 0:
+        print(f"  FPD reliability: {n_drug_conf} drug recordings with confidence < {min_fpd_confidence}")
+
+    return results
+
+
+def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
+                  config=None,
+                  # Legacy parameters (ignored when config is provided)
+                  inclusion_cv=25.0, fpdc_range=(100, 1200),
+                  min_fpd_confidence=0.68):
+    """
+    Batch analysis of all CSV files in a directory.
+
+    Parameters
+    ----------
+    data_dir : path to directory with CSV files
+    channel : 'auto', 'ch1', or 'ch2'
+    output_dir : output directory (default: data_dir/analysis_results)
+    verbose : print progress
+    config : AnalysisConfig or None — controls all pipeline parameters.
+             When provided, legacy parameters (inclusion_cv, fpdc_range,
+             min_fpd_confidence) are ignored.
+    """
+    if config is None:
+        from .config import AnalysisConfig
+        config = AnalysisConfig()
+        # Apply legacy overrides if they differ from defaults
+        if inclusion_cv is None:
+            config.inclusion.enabled_cv = False
+        elif inclusion_cv != 25.0:
+            config.inclusion.max_cv_bp = inclusion_cv
+        if fpdc_range is None:
+            config.inclusion.enabled_fpdc_range = False
+        elif fpdc_range != (100, 1200):
+            config.inclusion.fpdc_range_min = fpdc_range[0]
+            config.inclusion.fpdc_range_max = fpdc_range[1]
+        if min_fpd_confidence is None or min_fpd_confidence == 0:
+            config.inclusion.enabled_confidence = False
+        elif min_fpd_confidence != 0.68:
+            config.inclusion.min_fpd_confidence = min_fpd_confidence
+
     data_dir = Path(data_dir)
     if output_dir is None: output_dir = data_dir / 'analysis_results'
     output_dir = Path(output_dir)
@@ -140,12 +312,25 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True):
     csv_files = sorted(data_dir.rglob('*.csv'))
     print(f"\n{'#'*60}\n  CARDIAC FP ANALYZER\n  Files: {len(csv_files)} | Channel: {channel}\n{'#'*60}")
 
+    # Save config alongside results
+    config.to_json(str(output_dir / 'analysis_config.json'))
+
     results, errors = [], []
     for i, f in enumerate(csv_files):
         print(f"\n[{i+1}/{len(csv_files)}] {f.name}")
-        r = analyze_single_file(f, channel=channel, verbose=verbose)
+        r = analyze_single_file(f, channel=channel, verbose=verbose, config=config)
         if r: results.append(r)
         else: errors.append(str(f))
+
+    # ─── Inclusion criteria ───
+    results = _apply_inclusion_criteria(results, verbose=verbose, cfg=config.inclusion)
+
+    # ─── Baseline normalization ───
+    from .normalization import normalize_all_results
+    results = normalize_all_results(results, cfg=config.normalization)
+    n_with_bl = sum(1 for r in results if r.get('normalization', {}).get('has_baseline'))
+    if verbose and n_with_bl > 0:
+        print(f"  Baseline normalization: {n_with_bl}/{len(results)} recordings paired")
 
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
     print(f"\n  Generating reports... ({len(results)}/{len(csv_files)} OK)")
@@ -156,13 +341,58 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True):
 
 
 def main():
+    from .config import AnalysisConfig
+
     parser = argparse.ArgumentParser(description='Cardiac FP Analyzer for hiPSC-CM µECG')
     parser.add_argument('data_dir')
     parser.add_argument('--channel', default='auto', choices=['auto','ch1','ch2'])
     parser.add_argument('--output', '-o', default=None)
     parser.add_argument('--quiet', '-q', action='store_true')
+    parser.add_argument('--config', default=None,
+                        help='Path to JSON config file (overrides all other flags)')
+    parser.add_argument('--preset', default=None,
+                        choices=['default', 'conservative', 'sensitive', 'peak_method', 'no_filters'],
+                        help='Named config preset')
+    # Legacy flags (applied if no --config or --preset)
+    parser.add_argument('--inclusion-cv', type=float, default=25.0,
+                        help='Max CV%% of baseline BP for inclusion (default 25, 0=disabled)')
+    parser.add_argument('--no-fpdc-filter', action='store_true',
+                        help='Disable FPDcF plausibility filter')
+    parser.add_argument('--correction', default='fridericia',
+                        choices=['fridericia', 'bazett', 'none'],
+                        help='QT correction formula (default: fridericia)')
+    parser.add_argument('--fpd-method', default=None,
+                        choices=['tangent', 'peak', 'max_slope', '50pct', 'baseline_return'],
+                        help='FPD measurement method')
     args = parser.parse_args()
-    batch_analyze(args.data_dir, args.channel, args.output, not args.quiet)
+
+    # Build config
+    if args.config:
+        config = AnalysisConfig.from_json(args.config)
+    elif args.preset:
+        config = AnalysisConfig.preset(args.preset)
+    else:
+        config = AnalysisConfig()
+
+    # Apply CLI overrides
+    if args.correction != 'fridericia':
+        config.repolarization.correction = args.correction
+    if args.fpd_method:
+        config.repolarization.fpd_method = args.fpd_method
+    if args.inclusion_cv == 0:
+        config.inclusion.enabled_cv = False
+    elif args.inclusion_cv != 25.0:
+        config.inclusion.max_cv_bp = args.inclusion_cv
+    if args.no_fpdc_filter:
+        config.inclusion.enabled_fpdc_range = False
+
+    # Show non-default config
+    desc = config.describe()
+    if desc != '(all defaults)' and not args.quiet:
+        print(f"\n  Config overrides:\n{desc}")
+
+    batch_analyze(args.data_dir, args.channel, args.output, not args.quiet,
+                  config=config)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,441 @@
+"""
+config.py — Central configuration for Cardiac FP Analyzer.
+
+All tunable parameters are organized into logical groups using dataclasses.
+The top-level AnalysisConfig holds all sub-configurations and provides:
+  - JSON serialization / deserialization (for GUI persistence)
+  - Named presets (e.g. "default", "conservative", "sensitive")
+  - Method selection for key algorithms (FPD measurement, correction, etc.)
+
+Every function in the pipeline accepts the relevant config section, so the
+entire analysis behaviour can be controlled from a single config object.
+"""
+
+from dataclasses import dataclass, field, asdict
+from typing import Optional, Tuple, List
+import json
+import copy
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#   FILTERING
+# ═════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class FilterConfig:
+    """Signal preprocessing / filtering parameters."""
+
+    # Notch filter (powerline removal)
+    notch_freq_hz: float = 50.0
+    notch_harmonics: int = 3
+    notch_q: float = 30.0
+
+    # Bandpass filter
+    bandpass_low_hz: float = 0.5
+    bandpass_high_hz: float = 500.0
+    bandpass_order: int = 4
+
+    # Baseline drift removal (highpass)
+    highpass_cutoff_hz: float = 0.5
+    highpass_order: int = 4
+
+    # Anti-alias / smoothing (lowpass)
+    lowpass_cutoff_hz: float = 200.0
+    lowpass_order: int = 4
+
+    # Final smoothing (Savitzky-Golay)
+    savgol_window: int = 7
+    savgol_polyorder: int = 3
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#   BEAT DETECTION
+# ═════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class BeatDetectionConfig:
+    """Beat detection parameters."""
+
+    # Detection method: 'auto', 'prominence', 'derivative', 'peak'
+    method: str = 'auto'
+
+    # Minimum inter-beat interval (ms)
+    min_distance_ms: float = 400.0
+
+    # Adaptive threshold multiplier for spike detection
+    threshold_factor: float = 4.0
+
+    # Retry parameters (used when first attempt gives poor results)
+    retry_min_distance_ms: float = 300.0
+    retry_threshold_factor: float = 3.0
+
+    # Physiological plausibility scoring
+    bp_ideal_range_s: Tuple[float, float] = (0.4, 3.0)
+    bp_extended_range_s: Tuple[float, float] = (0.3, 5.0)
+    cv_good: float = 0.15        # CV < 15% → good score
+    cv_fair: float = 0.30        # CV < 30% → fair
+    cv_marginal: float = 0.50    # CV < 50% → marginal
+
+    # Derivative method
+    deriv_smooth_ms: float = 2.0       # smoothing window for derivative (ms)
+    peak_refine_window_ms: float = 10.0  # ±window for peak refinement (ms)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#   REPOLARIZATION / FPD MEASUREMENT
+# ═════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class RepolarizationConfig:
+    """Repolarization detection and FPD measurement parameters."""
+
+    # --- FPD measurement method ---
+    # 'tangent'   : max-downslope → tangent-baseline intersection (gold standard)
+    # 'peak'      : repolarization peak only (simpler, underestimates ~25%)
+    # 'max_slope'  : point of maximum downslope after peak
+    # '50pct'     : 50% amplitude on descending side
+    # 'baseline_return' : zero-crossing after peak (overestimates ~5%)
+    fpd_method: str = 'tangent'
+
+    # --- Correction formula ---
+    # 'fridericia' : FPDcF = FPD / RR^(1/3)
+    # 'bazett'     : FPDcB = FPD / sqrt(RR)
+    # 'none'       : no correction (raw FPD)
+    correction: str = 'fridericia'
+
+    # --- Template averaging ---
+    max_beats_template: int = 60
+    alignment_max_shift_ms: float = 50.0
+    alignment_depol_region_ms: float = 100.0  # first N ms used for alignment
+
+    # --- Spike detection on template ---
+    spike_search_window_ms: float = 50.0
+
+    # --- Repolarization search window ---
+    search_start_ms: float = 150.0      # start searching N ms after spike
+    search_end_ms: float = 900.0        # stop searching N ms after spike
+
+    # --- Signal conditioning for repolarization ---
+    repol_lowpass_hz: float = 20.0       # low-pass cutoff for repol region
+    repol_filter_order: int = 3
+    detrend_margin_frac: float = 0.08    # linear detrend: use first/last 8%
+
+    # --- Peak detection ---
+    peak_prominence_factor: float = 0.15  # min prominence = factor × std(segment)
+    peak_min_distance_ms: float = 50.0    # min distance between candidate peaks
+
+    # --- Tangent method ---
+    tangent_max_slope_window_ms: float = 300.0  # max distance peak → max-slope
+    tangent_max_extension_ms: float = 400.0     # max distance peak → tangent intersection
+
+    # --- Per-beat detection ---
+    per_beat_tolerance_ms: float = 150.0  # search window ±tolerance around template FPD
+    per_beat_peak_distance_ms: float = 30.0
+    per_beat_distance_penalty_ms: float = 50.0  # distance penalty scale
+
+    # --- Confidence scoring ---
+    confidence_prominence_scale: float = 3.0  # prominence / (scale × noise) → saturates at 1
+    confidence_agreement_range_ms: float = 300.0  # endpoint spread → 0% confidence
+    confidence_weight_prominence: float = 0.6
+    confidence_weight_agreement: float = 0.4
+
+    # FPD confidence: template vs consistency weights
+    fpd_conf_weight_template: float = 0.5
+    fpd_conf_weight_consistency: float = 0.5
+    fpd_cv_max_for_confidence: float = 0.5  # CV = 50% → consistency confidence = 0
+
+    # --- Spike region for amplitude ---
+    spike_pre_ms: float = 10.0       # before spike for amplitude calc
+    spike_post_ms: float = 20.0      # after spike
+    segment_pre_ms: float = 50.0     # pre-spike in segmented beats
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#   QUALITY CONTROL
+# ═════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class QualityConfig:
+    """Signal quality assessment and beat validation."""
+
+    # SNR thresholds for grading
+    snr_excellent: float = 8.0   # Grade A
+    snr_good: float = 5.0       # Grade B
+    snr_fair: float = 3.0       # Grade C
+    snr_poor: float = 2.0       # Grade D / F boundary
+
+    # Beat amplitude rejection
+    amplitude_reject_fraction: float = 0.25  # reject if < 25% of reference
+
+    # Morphology correlation
+    morphology_threshold: float = 0.40    # min corr for acceptance
+    morphology_marginal: float = 0.20     # below this → forced rejection
+    use_morphology: bool = True
+
+    # Rejection rate thresholds for grade downgrade
+    max_rejection_rate: float = 0.40      # above → Grade D
+    rejection_high_note: float = 0.50     # above → add warning note
+    rejection_grade_c: float = 0.20       # above → limits to Grade C
+    rejection_grade_b: float = 0.05       # above → limits to Grade B
+
+    # Template building for morphology QC
+    morphology_max_beats: int = 30
+    morphology_window_ms: float = 20.0    # amplitude computation window
+
+    # Minimum accepted beats
+    min_beats_for_analysis: int = 3       # below → Grade F
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#   INCLUSION CRITERIA
+# ═════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class InclusionConfig:
+    """Inclusion criteria for baseline normalization."""
+
+    # Baseline CV of beat period
+    max_cv_bp: float = 25.0            # % — paper standard
+    enabled_cv: bool = True
+
+    # FPDcF plausibility range (ms)
+    fpdc_range_min: float = 100.0
+    fpdc_range_max: float = 1200.0
+    enabled_fpdc_range: bool = True
+
+    # FPD confidence threshold for baselines
+    min_fpd_confidence: float = 0.68
+    enabled_confidence: bool = True
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#   NORMALIZATION & TdP SCORING
+# ═════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class NormalizationConfig:
+    """Baseline normalization and TdP risk scoring."""
+
+    # FPDcF change thresholds for TdP scoring (%)
+    threshold_low: float = 10.0     # score 1 if ≥ LOW
+    threshold_mid: float = 15.0     # score 2 if ≥ MID
+    threshold_high: float = 20.0    # score 3 if ≥ HIGH
+
+    # Sensitivity/Specificity classification threshold
+    # (which threshold to use for positive/negative call)
+    classification_threshold: str = 'mid'  # 'low', 'mid', 'high'
+
+    # Classification method for drug-level decision
+    # 'max'  : drug positive if any concentration > threshold
+    # 'mean' : drug positive if mean across concentrations > threshold
+    # 'n_above' : drug positive if ≥ n concentrations > threshold
+    classification_method: str = 'max'
+    classification_n_above: int = 2  # used when method = 'n_above'
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#   ARRHYTHMIA DETECTION
+# ═════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class ArrhythmiaConfig:
+    """Arrhythmia detection thresholds."""
+
+    # Heart rate classification
+    tachycardia_bp_ms: float = 300.0
+    bradycardia_bp_ms: float = 2500.0
+
+    # Rhythm regularity
+    rr_irregularity_cv: float = 15.0        # % — CV threshold
+    rr_critical_cv: float = 30.0            # % — critical severity
+    fibrillation_cv: float = 40.0           # % — chaotic/fibrillation-like
+
+    # Beat timing classification
+    premature_beat_factor: float = 0.7      # < 70% of mean BP
+    delayed_beat_factor: float = 1.5        # > 150% of mean BP
+    cessation_factor: float = 3.0           # > 300% of mean BP
+
+    # STV (short-term variability)
+    stv_high_risk_ms: float = 10.0
+
+    # FPD prolongation (ratio vs baseline)
+    fpd_prolongation_threshold: float = 1.3   # > 130% of baseline
+    fpd_critical_length_ms: float = 500.0     # FPD above which prolongation is critical
+
+    # EAD detection
+    ead_mad_factor: float = 3.0             # 3× median absolute deviation
+    ead_critical_count: int = 3             # ≥ 3 EADs → critical severity
+
+    # Amplitude instability
+    amplitude_instability_cv: float = 30.0  # %
+
+    # Premature beat classification threshold
+    premature_count_threshold: int = 5
+
+    # TdP scoring — restrict to severe events only
+    # (EADs with critical severity + positive FPDcF trend, or cessation)
+    tdp_require_severe_only: bool = True
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#   CHANNEL SELECTION
+# ═════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class ChannelSelectionConfig:
+    """Parameters for automatic channel selection."""
+
+    bp_ideal_range_s: Tuple[float, float] = (0.3, 4.0)
+    cv_excellent: float = 10.0    # CV < 10% → +40 score
+    cv_good: float = 20.0        # CV < 20% → +30
+    cv_fair: float = 35.0        # CV < 35% → +15
+    rate_range_per_s: Tuple[float, float] = (0.3, 3.5)
+    snr_good: float = 5.0        # +20
+    snr_fair: float = 3.0        # +10
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#   TOP-LEVEL CONFIG
+# ═════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class AnalysisConfig:
+    """
+    Top-level configuration for the entire Cardiac FP Analyzer pipeline.
+
+    Usage:
+        config = AnalysisConfig()                     # defaults
+        config = AnalysisConfig.from_json("my.json")  # load from file
+        config = AnalysisConfig.preset("conservative") # named preset
+
+        # Modify individual parameters
+        config.repolarization.fpd_method = 'peak'
+        config.inclusion.max_cv_bp = 30.0
+
+        # Pass to pipeline
+        batch_analyze(data_dir, config=config)
+    """
+
+    filtering: FilterConfig = field(default_factory=FilterConfig)
+    beat_detection: BeatDetectionConfig = field(default_factory=BeatDetectionConfig)
+    repolarization: RepolarizationConfig = field(default_factory=RepolarizationConfig)
+    quality: QualityConfig = field(default_factory=QualityConfig)
+    inclusion: InclusionConfig = field(default_factory=InclusionConfig)
+    normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
+    arrhythmia: ArrhythmiaConfig = field(default_factory=ArrhythmiaConfig)
+    channel_selection: ChannelSelectionConfig = field(default_factory=ChannelSelectionConfig)
+
+    # ── Serialization ──
+
+    def to_dict(self) -> dict:
+        """Convert entire config to a nested dictionary."""
+        return asdict(self)
+
+    def to_json(self, path: Optional[str] = None, indent: int = 2) -> str:
+        """Serialize to JSON string. Optionally write to file."""
+        d = self.to_dict()
+        s = json.dumps(d, indent=indent, ensure_ascii=False)
+        if path:
+            with open(path, 'w') as f:
+                f.write(s)
+        return s
+
+    @classmethod
+    def from_dict(cls, d: dict) -> 'AnalysisConfig':
+        """Create config from a (possibly partial) nested dictionary.
+
+        Missing keys keep their defaults — so you can provide only
+        the parameters you want to override.
+        """
+        cfg = cls()
+        section_map = {
+            'filtering': (FilterConfig, 'filtering'),
+            'beat_detection': (BeatDetectionConfig, 'beat_detection'),
+            'repolarization': (RepolarizationConfig, 'repolarization'),
+            'quality': (QualityConfig, 'quality'),
+            'inclusion': (InclusionConfig, 'inclusion'),
+            'normalization': (NormalizationConfig, 'normalization'),
+            'arrhythmia': (ArrhythmiaConfig, 'arrhythmia'),
+            'channel_selection': (ChannelSelectionConfig, 'channel_selection'),
+        }
+        for key, (klass, attr) in section_map.items():
+            if key in d:
+                section = getattr(cfg, attr)
+                for k, v in d[key].items():
+                    if hasattr(section, k):
+                        # Handle tuple fields
+                        current = getattr(section, k)
+                        if isinstance(current, tuple) and isinstance(v, list):
+                            v = tuple(v)
+                        setattr(section, k, v)
+        return cfg
+
+    @classmethod
+    def from_json(cls, path: str) -> 'AnalysisConfig':
+        """Load config from a JSON file."""
+        with open(path) as f:
+            d = json.load(f)
+        return cls.from_dict(d)
+
+    @classmethod
+    def preset(cls, name: str) -> 'AnalysisConfig':
+        """
+        Named presets for common use cases.
+
+        Available presets:
+          - 'default'       : standard parameters (tangent method, paper criteria)
+          - 'conservative'  : stricter inclusion, higher confidence thresholds
+          - 'sensitive'     : looser thresholds, catches more but more FP risk
+          - 'peak_method'   : use peak instead of tangent (backwards compatibility)
+          - 'no_filters'    : disable all inclusion criteria
+        """
+        cfg = cls()
+
+        if name == 'default':
+            pass  # all defaults
+
+        elif name == 'conservative':
+            cfg.inclusion.max_cv_bp = 20.0
+            cfg.inclusion.min_fpd_confidence = 0.75
+            cfg.quality.morphology_threshold = 0.50
+            cfg.normalization.classification_threshold = 'high'
+            cfg.arrhythmia.rr_irregularity_cv = 12.0
+
+        elif name == 'sensitive':
+            cfg.inclusion.max_cv_bp = 30.0
+            cfg.inclusion.min_fpd_confidence = 0.50
+            cfg.quality.morphology_threshold = 0.30
+            cfg.normalization.classification_threshold = 'low'
+
+        elif name == 'peak_method':
+            cfg.repolarization.fpd_method = 'peak'
+
+        elif name == 'no_filters':
+            cfg.inclusion.enabled_cv = False
+            cfg.inclusion.enabled_fpdc_range = False
+            cfg.inclusion.enabled_confidence = False
+
+        else:
+            raise ValueError(f"Unknown preset: {name!r}. "
+                           f"Available: default, conservative, sensitive, "
+                           f"peak_method, no_filters")
+
+        return cfg
+
+    def describe(self) -> str:
+        """Human-readable summary of non-default parameters."""
+        default = AnalysisConfig()
+        lines = []
+        for section_name in ['filtering', 'beat_detection', 'repolarization',
+                             'quality', 'inclusion', 'normalization',
+                             'arrhythmia', 'channel_selection']:
+            section = getattr(self, section_name)
+            default_section = getattr(default, section_name)
+            diffs = []
+            for k in vars(section):
+                if getattr(section, k) != getattr(default_section, k):
+                    diffs.append(f"  {k} = {getattr(section, k)!r}  (default: {getattr(default_section, k)!r})")
+            if diffs:
+                lines.append(f"[{section_name}]")
+                lines.extend(diffs)
+        return '\n'.join(lines) if lines else '(all defaults)'
