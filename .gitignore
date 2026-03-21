@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+.env
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Analysis outputs
+analysis_results/
+
+# Large local datasets (keep repo code-only)
+µECG-Pharma Calibration - EXCEL DATA/
