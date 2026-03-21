@@ -28,6 +28,8 @@
 5. [Configurazione](#5-configurazione)
 6. [Razionale scientifico](#6-razionale-scientifico)
 7. [Validazione](#7-validazione)
+8. [Interfaccia grafica (Streamlit)](#8-interfaccia-grafica-streamlit)
+9. [Export CDISC SEND](#9-export-cdisc-send)
 
 ---
 
@@ -704,3 +706,97 @@ Fridericia (FPDcF = FPD / RR^(1/3)) è preferita per i microtessuti cardiaci per
 | Ranolazine (−) | 0.0 | 0.3 | LOW | ✓ |
 
 Mexiletine è l'unico farmaco misclassificato. Questo è coerente con il framework CiPA dove la mexiletina è un farmaco borderline (bloccante Na con effetti multipli sui canali ionici).
+
+---
+
+## 8. Interfaccia grafica (Streamlit)
+
+Il software include un'interfaccia web costruita con Streamlit (`app.py`), che espone tutte le funzionalità della pipeline senza richiedere interazione da riga di comando.
+
+### Avvio
+
+```bash
+pip install streamlit plotly
+streamlit run app.py
+```
+
+L'applicazione si apre nel browser alla porta 8501.
+
+### Pagine
+
+L'interfaccia è organizzata in tre pagine, selezionabili dal menu laterale.
+
+**1. Analisi Singolo File** — Caricamento di un singolo file CSV per analisi immediata. Mostra: il tracciato del segnale con beat detection sovrapposta, l'overlay dei battiti segmentati, la tabella dei parametri estratti (BP, FPDcF, ampiezza, durata spike) con statistiche, il report aritmico completo (rischio, classificazione, metriche residuali, incidenza EAD).
+
+**2. Analisi Batch + Risk Map** — Tre modalità di caricamento: selezione cartella tramite dialog nativo del sistema operativo (tkinter `filedialog.askdirectory`), upload multiplo di file CSV, oppure upload di archivio ZIP. Dopo il caricamento, la pipeline `batch_analyze()` processa tutte le registrazioni. I risultati sono presentati su tre tab: la risk map CiPA interattiva (Plotly), con zone colorate LOW/INTERMEDIATE/HIGH e scatter per farmaco; il riepilogo tabellare con QC, inclusione, normalizzazione e classificazione per ogni registrazione; la vista dettagliata di ogni singola registrazione. È possibile specificare opzionalmente il ground truth dei farmaci per colorare i marker sulla risk map. Nella sezione download: report Excel, report PDF, configurazione JSON, e pacchetto CDISC SEND.
+
+**3. Confronto Farmaci** — Dashboard comparativa disponibile dopo l'analisi batch. Permette di selezionare un sottoinsieme di farmaci e visualizzare: curve dose-response (ΔFPDcF% per concentrazione crescente), barre metriche aritmiche (morphology instability, EAD%, STV FPDcF, spectral change), overlay dei template waveform rappresentativi per confronto morfologico diretto.
+
+### Pannello di configurazione
+
+Il sidebar contiene tutti i parametri dell'`AnalysisConfig`, organizzati in sezioni espandibili: pre-processing (filtri, gain amplificatore), beat detection (altezza minima, distanza, prominenza), parametri FPD (finestre di ricerca, soglie di confidenza), QC (soglie di qualità), aritmie (soglie instabilità, EAD, STV), classificazione (pesi dell'indice proaritmico). I parametri possono essere importati/esportati come file JSON.
+
+### Requisiti aggiuntivi
+
+```
+streamlit>=1.28
+plotly>=5.0
+xlsxwriter  # per export Excel
+```
+
+---
+
+## 9. Export CDISC SEND
+
+Il modulo `cardiac_fp_analyzer/cdisc_export.py` genera un pacchetto CDISC SEND conforme alle specifiche SENDIG v3.1 per la submission regolatoria (FDA, EMA) dei dati di elettrofisiologia cardiaca in vitro.
+
+### Formato di output
+
+Il pacchetto è composto da file SAS Transport v5 (`.xpt`), il formato richiesto dalla FDA per le submission elettroniche, più un file di metadati Define-XML 2.0. Tutti i file `.xpt` utilizzano encoding latin-1 come richiesto dalle specifiche SAS Transport v5.
+
+### Domini SEND generati
+
+**TS (Trial Summary)** — Metadati a livello di studio: identificativo, titolo, tipo di studio (IN VITRO), specie (HUMAN IPSC-CM), piattaforma, durata, sponsor, data di inizio. 12 record che descrivono il contesto sperimentale.
+
+**DM (Demographics)** — Un record per ogni soggetto/microtessuto, identificato da `USUBJID` univoco. Include il chip di registrazione e l'assegnazione al gruppo di trattamento (ARM/ARMCD). Il dominio permette la tracciabilità di ogni campione biologico nel dataset.
+
+**EX (Exposure)** — Un record per ogni trattamento farmacologico applicato, con: farmaco normalizzato (uppercase SEND-compatibile), concentrazione dose, unità, timing relativo allo studio. Copre tutte le condizioni di esposizione incluse baseline e washout.
+
+**EG (ECG Test Results)** — Il dominio principale dei dati quantitativi. Ogni riga è una misurazione su un singolo battito: Beat Period (EGBP, ms), FPDcF corretto per frequenza (EGFPDCF, ms), ampiezza del spike (EGAMP, µV), durata del depolarizzazione (EGSPKD, ms). I codici test seguono la terminologia controllata NCI. Un esperimento tipico produce 1000–2000 record EG.
+
+**RISK (Custom — Arrhythmia Risk)** — Dominio custom che estende SENDIG con i risultati della valutazione del rischio proaritmico. Contiene: rischio per farmaco, classificazione (Normal/Low Risk/Moderate Risk/High Risk/TdP-like), indice proaritmico composito, componenti dell'indice (spectral change, morphology instability baseline-relative, EAD incidence), variazione percentuale FPDcF. Questo dominio, essendo custom, è documentato in dettaglio nel Define-XML.
+
+**define.xml** — Metadata file in formato Define-XML 2.0 che descrive: ogni dominio con la lista delle variabili, tipo dati, label, lunghezza, ruolo CDISC (Identifier, Topic, Result, Record Qualifier). Necessario per la validazione Pinnacle 21 e per l'interpretazione dei dati da parte del reviewer FDA.
+
+### Utilizzo da riga di comando
+
+```python
+from cardiac_fp_analyzer.cdisc_export import export_send_package
+from cardiac_fp_analyzer.analyze import batch_analyze
+from cardiac_fp_analyzer.config import AnalysisConfig
+
+config = AnalysisConfig()
+results = batch_analyze('data_folder/', config=config)
+export_send_package(results, 'send_output/', study_id='CIPA001')
+```
+
+Il pacchetto viene generato nella cartella specificata, contenente: `ts.xpt`, `dm.xpt`, `ex.xpt`, `eg.xpt`, `risk.xpt`, e `define.xml`.
+
+### Utilizzo dalla GUI
+
+Nella pagina "Analisi Batch + Risk Map", dopo aver eseguito l'analisi, la sezione download include il pulsante "Export CDISC SEND". Cliccando si genera un archivio ZIP contenente tutti i file `.xpt` e il `define.xml`. Lo Study ID è configurabile tramite il pannello "Impostazioni CDISC SEND" nella stessa pagina.
+
+### Validazione e conformità
+
+Il pacchetto generato è progettato per superare la validazione Pinnacle 21 Community (lo strumento standard per la verifica di conformità CDISC). Per la validazione:
+
+1. Scaricare Pinnacle 21 Community da pinnacle21.com
+2. Creare un nuovo progetto di tipo SEND
+3. Caricare i file `.xpt` e il `define.xml`
+4. Eseguire la validazione
+
+I campi obbligatori CDISC (STUDYID, DOMAIN, USUBJID, --SEQ) sono sempre popolati. Le variabili seguono le naming convention SEND (prefisso dominio + suffisso semantico). Le unità di misura utilizzano la terminologia controllata NCI.
+
+### Limitazioni note
+
+I nomi delle variabili sono limitati a 8 caratteri (requisito SAS Transport v5). I valori stringa sono limitati a 200 caratteri e codificati in latin-1 (caratteri non-ASCII vengono sostituiti). Il dominio RISK è un'estensione custom non presente nello standard SENDIG ufficiale — necessita di una Reviewer's Guide che ne giustifichi l'inclusione.
