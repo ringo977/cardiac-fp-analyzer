@@ -202,16 +202,44 @@ class InclusionConfig:
     max_cv_bp: float = 25.0            # % — paper standard
     enabled_cv: bool = True
 
-    # FPDcF plausibility range (ms)
+    # FPDcF plausibility range (ms) — wide safety net
     fpdc_range_min: float = 100.0
     fpdc_range_max: float = 1200.0
     enabled_fpdc_range: bool = True
 
-    # FPD confidence threshold for baselines
-    # 0.69 optimized via sweep: excludes bad baselines (e.g. chipE_ch2 at 0.685)
-    # while keeping valid ones (e.g. chipA_ch1 at 0.691)
-    min_fpd_confidence: float = 0.69
+    # FPD confidence threshold for baselines (data-driven)
+    # With physiological filter ON (criterion 4), the critical chipE_ch2
+    # baseline (FPDcF=346ms) is already excluded by the physiol range,
+    # so this threshold only needs to separate chipE_ch1 (0.659, bad)
+    # from chipA_ch1 (0.691, good).  Gap = 0.032, any value in [0.66, 0.69]
+    # works.  Lowered from 0.69 → 0.66 for generality (midpoint ≈ 0.675).
+    min_fpd_confidence: float = 0.66
     enabled_confidence: bool = True
+
+    # ── Physiological FPDcF range for baselines (literature-based) ──
+    # hiPSC-CM FPDcF values from literature:
+    #   Visone et al. 2023: 560 ± 150 ms (n=51 microtissues)
+    #   Asakura et al. 2015: 400–700 ms (hiPSC-CM on MEA)
+    #   Blinova et al. 2017 (CiPA): 350–800 ms typical range
+    # Baselines outside this range likely have erroneous FPD detection.
+    # More defensible than a data-driven confidence threshold because
+    # the bounds come from published population data, not from fitting
+    # to a specific dataset.
+    fpdc_physiol_min: float = 350.0     # ms — lower bound
+    fpdc_physiol_max: float = 800.0     # ms — upper bound
+    enabled_fpdc_physiol: bool = True    # ON by default (literature-based)
+
+    # ── Population-based outlier exclusion for baselines ──
+    # Within a batch, exclude baselines whose FPDcF is > N standard
+    # deviations from the median of all baselines in the same experiment.
+    # This is a data-adaptive alternative to fixed thresholds: it lets
+    # each experiment define its own "normal" range, accommodating
+    # biological variability across preparations while still catching
+    # outliers.  Requires ≥ min_baselines_for_stats baselines to compute
+    # statistics; with fewer, this criterion is silently skipped.
+    fpdc_outlier_n_sigma: float = 2.0          # reject if |FPDcF - median| > N × MAD
+    fpdc_outlier_min_baselines: int = 3        # need at least 3 baselines to compute stats
+    enabled_fpdc_outlier: bool = False          # off by default (opt-in)
 
 
 # ═════════════════════════════════════════════════════════════════════════

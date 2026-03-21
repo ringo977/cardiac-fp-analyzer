@@ -359,6 +359,14 @@ def classify_drug(results_list, cfg=None):
                 drug_cessation[drug]['min_fpd_conf'] = min(
                     drug_cessation[drug]['min_fpd_conf'], fpd_conf)
 
+            # Track spectral morphology change (from normalization step)
+            norm = r.get('normalization', {})
+            spec_score = norm.get('spectral_change_score', np.nan)
+            if spec_score is not None and not np.isnan(spec_score):
+                if 'spectral_scores' not in drug_cessation[drug]:
+                    drug_cessation[drug]['spectral_scores'] = []
+                drug_cessation[drug]['spectral_scores'].append(spec_score)
+
     # Classify each drug
     classifications = {}
     for drug, entries in drug_data.items():
@@ -388,6 +396,11 @@ def classify_drug(results_list, cfg=None):
             cessation_override = True
             positive = True
 
+        # Spectral morphology change summary for this drug
+        spec_scores = cess_info.get('spectral_scores', [])
+        max_spec = max(spec_scores) if spec_scores else np.nan
+        mean_spec = np.mean(spec_scores) if spec_scores else np.nan
+
         classifications[drug] = {
             'positive': positive,
             'method': cfg.classification_method,
@@ -400,6 +413,8 @@ def classify_drug(results_list, cfg=None):
             'threshold_name': cfg.classification_threshold,
             'cessation_override': cessation_override,
             'cessation_info': cess_info if cessation_override else {},
+            'max_spectral_change': max_spec,
+            'mean_spectral_change': mean_spec,
         }
 
     # Also check for drugs that ONLY have cessation (no valid FPD data at all)
@@ -430,10 +445,17 @@ def normalize_all_results(results_list, cfg=None):
     Run baseline normalization on all results.
 
     Adds 'normalization' key to each result dict.
-    Also runs drug-level classification and adds 'drug_classification' to each drug result.
+    Also computes spectral comparison vs baseline (spectral_change_score).
+    Runs drug-level classification and adds 'drug_classification' to each drug result.
     Returns the modified results_list.
     """
     baseline_map = pair_with_baselines(results_list)
+
+    # Lazy import to avoid circular dependency
+    try:
+        from .spectral import compute_morphology_change_score, _compare_with_baseline, SpectralConfig
+    except ImportError:
+        compute_morphology_change_score = None
 
     for r in results_list:
         fname = r.get('metadata', {}).get('filename', '')
@@ -441,6 +463,26 @@ def normalize_all_results(results_list, cfg=None):
 
         if bl is not None:
             r['normalization'] = compute_normalized_parameters(r, bl, cfg=cfg)
+
+            # ─── Spectral comparison vs baseline ───
+            if compute_morphology_change_score is not None:
+                bl_spec = bl.get('spectral_report')
+                dr_spec = r.get('spectral_report')
+                if bl_spec is not None and dr_spec is not None:
+                    # Run PSD comparison if not already done (baseline_spectral
+                    # wasn't available during single-file analysis)
+                    if np.isnan(dr_spec.spectral_correlation):
+                        bl_freqs = bl_spec.details.get('freqs')
+                        dr_freqs = dr_spec.details.get('freqs')
+                        dr_psd = dr_spec.details.get('psd')
+                        if bl_freqs is not None and dr_freqs is not None and dr_psd is not None:
+                            _compare_with_baseline(
+                                dr_freqs, dr_psd, bl_spec, SpectralConfig(), dr_spec)
+
+                    score = compute_morphology_change_score(dr_spec, bl_spec)
+                    r['normalization']['spectral_change_score'] = score
+                else:
+                    r['normalization']['spectral_change_score'] = np.nan
         else:
             r['normalization'] = {
                 'has_baseline': False,
@@ -455,6 +497,7 @@ def normalize_all_results(results_list, cfg=None):
                 'exceeds_MID': False,
                 'exceeds_HIGH': False,
                 'tdp_score': 0,
+                'spectral_change_score': np.nan,
             }
 
     # Drug-level classification
