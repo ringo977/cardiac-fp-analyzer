@@ -36,6 +36,31 @@ def _get_norm_thresholds(cfg=None):
     return cfg.threshold_low, cfg.threshold_mid, cfg.threshold_high
 
 
+def _get_base_key(result):
+    """
+    Extract the base grouping key (experiment + chip + chamber) WITHOUT electrode.
+    E.g. chipA_ch1_terfe_300nM → "EXP 5/chipA_ch1"
+
+    Used for fallback pairing when auto-selection picks different electrodes
+    for baseline vs drug recordings on the same chip+chamber.
+    """
+    fi = result.get('file_info', {})
+    exp = fi.get('experiment', '')
+    chip = fi.get('chip', '')
+    channel_label = fi.get('channel_label', '')
+
+    meta = result.get('metadata', {})
+    fname = meta.get('filename', '')
+
+    parts = fname.split('_')
+    if len(parts) >= 2 and parts[0].startswith('chip'):
+        chip_ch = f"{parts[0]}_{parts[1]}"
+    else:
+        chip_ch = f"chip{chip}_{channel_label}" if chip and channel_label else fname
+
+    return f"{exp}/{chip_ch}"
+
+
 def _get_group_key(result):
     """
     Extract the grouping key (experiment + chip + chamber + electrode) from a result.
@@ -44,27 +69,11 @@ def _get_group_key(result):
     The group key includes the electrode (el1/el2) so that dual-electrode
     analyses of the same file are kept in separate normalization groups.
     """
-    fi = result.get('file_info', {})
-    exp = fi.get('experiment', '')
-    chip = fi.get('chip', '')
-    channel_label = fi.get('channel_label', '')  # e.g. ch1, ch2, ch3 (chamber from filename)
-    electrode = fi.get('analyzed_channel', '')     # e.g. el1, el2 (electrode)
-
-    # Also extract from filename
-    meta = result.get('metadata', {})
-    fname = meta.get('filename', '')
-
-    # Parse chip_chamber from filename (e.g. chipA_ch1_terfe_300nM → chipA_ch1)
-    parts = fname.split('_')
-    if len(parts) >= 2 and parts[0].startswith('chip'):
-        chip_ch = f"{parts[0]}_{parts[1]}"
-    else:
-        chip_ch = f"chip{chip}_{channel_label}" if chip and channel_label else fname
-
-    key = f"{exp}/{chip_ch}"
+    base = _get_base_key(result)
+    electrode = result.get('file_info', {}).get('analyzed_channel', '')
     if electrode:
-        key = f"{key}/{electrode}"
-    return key
+        return f"{base}/{electrode}"
+    return base
 
 
 def _is_baseline(result):
@@ -88,56 +97,76 @@ def pair_with_baselines(results_list):
     """
     Pair each drug recording with its baseline.
 
-    Groups results by experiment + chip + channel, finds the baseline
-    in each group, and pairs drug recordings with it.
+    Groups results by experiment + chip + chamber + electrode, finds the
+    baseline in each group, and pairs drug recordings with it.
+
+    **Fallback**: when auto-selection picks a different electrode for the
+    baseline and the drug recording (e.g. baseline on el2, drug on el1
+    because the CSV has identical columns), the electrode-specific group
+    will lack a baseline.  In that case we fall back to the same
+    chip+chamber *without* electrode matching and use the best available
+    baseline from any electrode.
 
     Returns a dict: filename → baseline_result (or None if no baseline found).
     """
-    # Group results
+    # ── Primary grouping (with electrode) ──
     groups = defaultdict(list)
     for r in results_list:
         key = _get_group_key(r)
         groups[key].append(r)
 
-    # For each group, find baseline and pair
-    baseline_map = {}  # filename → baseline result
+    # ── Secondary grouping (without electrode) for fallback ──
+    base_groups = defaultdict(list)
+    for r in results_list:
+        bkey = _get_base_key(r)
+        base_groups[bkey].append(r)
 
-    for key, group_results in groups.items():
-        # Find baseline(s) in this group
-        baselines = [r for r in group_results if _is_baseline(r)]
-
+    def _pick_best_baseline(baselines):
+        """Select the best baseline from a list, preferring better QC grade."""
         if not baselines:
-            # No baseline — check if controls exist
+            return None
+        if len(baselines) == 1:
+            return baselines[0]
+        grade_order = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'F': 4}
+        return min(baselines,
+                   key=lambda r: grade_order.get(
+                       r.get('qc_report', type('', (), {'grade': 'F'})()).grade, 5))
+
+    def _find_baseline(group_results):
+        """Find baselines in a group, falling back to controls."""
+        baselines = [r for r in group_results if _is_baseline(r)]
+        if not baselines:
             controls = [r for r in group_results if _is_control(r)]
             if controls:
-                baselines = controls[:1]  # Use first control as pseudo-baseline
+                baselines = controls[:1]
+        return baselines
 
-        if not baselines:
-            # No baseline found for this group
-            for r in group_results:
-                fname = r.get('metadata', {}).get('filename', '')
-                baseline_map[fname] = None
-            continue
+    # ── Build baseline map ──
+    baseline_map = {}
 
-        # Use the first baseline (or the one with best QC grade)
-        best_bl = baselines[0]
-        if len(baselines) > 1:
-            # Prefer the one with better QC grade
-            grade_order = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'F': 4}
-            best_bl = min(baselines,
-                         key=lambda r: grade_order.get(
-                             r.get('qc_report', type('', (), {'grade': 'F'})()).grade, 5))
+    for key, group_results in groups.items():
+        baselines = _find_baseline(group_results)
+        best_bl = _pick_best_baseline(baselines)
+
+        # Fallback: no baseline in electrode-specific group → search base group
+        if best_bl is None:
+            bkey = _get_base_key(group_results[0])
+            all_in_base = base_groups.get(bkey, [])
+            baselines_fallback = _find_baseline(all_in_base)
+            best_bl = _pick_best_baseline(baselines_fallback)
 
         # Check if baseline passes inclusion criteria
-        bl_inclusion = best_bl.get('inclusion', {})
-        bl_passed = bl_inclusion.get('passed', True)  # default: pass if no criteria applied
+        bl_passed = True
+        if best_bl is not None:
+            bl_inclusion = best_bl.get('inclusion', {})
+            bl_passed = bl_inclusion.get('passed', True)
 
         for r in group_results:
             fname = r.get('metadata', {}).get('filename', '')
             if _is_baseline(r) or _is_control(r):
-                baseline_map[fname] = None  # baselines don't have a reference
-            elif not bl_passed:
-                baseline_map[fname] = None  # baseline excluded → skip normalization
+                baseline_map[fname] = None
+            elif not bl_passed or best_bl is None:
+                baseline_map[fname] = None
             else:
                 baseline_map[fname] = best_bl
 
