@@ -19,7 +19,7 @@ def load_csv(filepath):
     Returns
     -------
     metadata : dict
-    df : pd.DataFrame with columns: 'time', 'ch1', 'ch2'
+    df : pd.DataFrame with columns: 'time', 'el1', 'el2'
     """
     filepath = Path(filepath)
     metadata = {
@@ -65,13 +65,13 @@ def load_csv(filepath):
 
     df = pd.read_csv(filepath, skiprows=header_lines, header=0)
     if len(df.columns) == 3:
-        df.columns = ['time', 'ch1', 'ch2']
+        df.columns = ['time', 'el1', 'el2']
     elif len(df.columns) == 2:
-        df.columns = ['time', 'ch1']
-        df['ch2'] = df['ch1']
+        df.columns = ['time', 'el1']
+        df['el2'] = df['el1']
     else:
         df = df.iloc[:, :3]
-        df.columns = ['time', 'ch1', 'ch2']
+        df.columns = ['time', 'el1', 'el2']
 
     if metadata['sample_rate'] is None and len(df) > 1:
         dt = df['time'].iloc[1] - df['time'].iloc[0]

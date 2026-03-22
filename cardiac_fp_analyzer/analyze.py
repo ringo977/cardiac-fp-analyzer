@@ -25,7 +25,7 @@ warnings.filterwarnings('ignore', category=RuntimeWarning)
 
 
 def _select_best_channel(df, fs, cfg=None):
-    """Select the best channel based on beat detection quality. cfg = AnalysisConfig."""
+    """Select the best electrode based on beat detection quality. cfg = AnalysisConfig."""
     if cfg is not None:
         cs = cfg.channel_selection
         fc = cfg.filtering
@@ -34,10 +34,10 @@ def _select_best_channel(df, fs, cfg=None):
         cs = ChannelSelectionConfig()
         fc = FilterConfig()
 
-    best_ch, best_score = 'ch1', -999
+    best_ch, best_score = 'el1', -999
     gain = cfg.amplifier_gain if cfg is not None else 1.0
     details = {}
-    for ch in ['ch1', 'ch2']:
+    for ch in ['el1', 'el2']:
         try:
             raw_ch = df[ch].values
             if gain != 1.0:
@@ -76,7 +76,7 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
     Parameters
     ----------
     filepath : path to CSV file
-    channel : 'auto', 'ch1', or 'ch2'
+    channel : 'auto', 'el1', or 'el2'
     verbose : print progress
     config : AnalysisConfig or None — controls all pipeline parameters
     """
@@ -401,7 +401,7 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
     Parameters
     ----------
     data_dir : path to directory with CSV files
-    channel : 'auto', 'ch1', 'ch2', or 'both'
+    channel : 'auto', 'el1', 'el2', or 'both'
     output_dir : output directory (default: data_dir/analysis_results)
     verbose : print progress
     config : AnalysisConfig or None — controls all pipeline parameters.
@@ -439,8 +439,8 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
 
     results, errors = [], []
 
-    # When channel='both', analyze each file for ch1 and ch2 separately
-    channels_to_run = ['ch1', 'ch2'] if channel == 'both' else [channel]
+    # When channel='both', analyze each file for el1 and el2 separately
+    channels_to_run = ['el1', 'el2'] if channel == 'both' else [channel]
 
     if n_workers > 1 and len(csv_files) > 1:
         # Parallel pass 1: each file is independent
@@ -580,7 +580,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='Cardiac FP Analyzer for hiPSC-CM µECG')
     parser.add_argument('data_dir')
-    parser.add_argument('--channel', default='auto', choices=['auto','ch1','ch2'])
+    parser.add_argument('--channel', default='auto', choices=['auto','el1','el2','both'])
     parser.add_argument('--output', '-o', default=None)
     parser.add_argument('--quiet', '-q', action='store_true')
     parser.add_argument('--config', default=None,

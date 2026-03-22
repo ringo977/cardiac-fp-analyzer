@@ -40,7 +40,7 @@ def generate_excel_report(results_list, output_path):
             nrm = r.get('normalization', {})
             row = {
                 'File': m.get('filename',''), 'Experiment': fi.get('experiment',''),
-                'Chip': fi.get('chip',''), 'Channel': fi.get('analyzed_channel',''),
+                'Chip': fi.get('chip',''), 'Electrode': fi.get('analyzed_channel',''),
                 'Drug': fi.get('drug',''), 'Concentration': fi.get('concentration',''),
                 'QC Grade': qc.grade if qc else '',
                 'Global SNR': qc.global_snr if qc else np.nan,
@@ -253,7 +253,11 @@ def generate_pdf_report(results_list, output_path, data_dir=None):
             if filtered is not None and time is not None:
                 params_plot = dict(summary)
                 params_plot['fs'] = meta.get('sample_rate', 2000)
-                fig = plot_analysis_summary(time, filtered, bi, params_plot, meta, figsize=(11, 14))
+                # Pass analyzed_channel into metadata for PDF title
+                fi = r.get('file_info', {})
+                meta_plot = dict(meta)
+                meta_plot['analyzed_channel'] = fi.get('analyzed_channel', '')
+                fig = plot_analysis_summary(time, filtered, bi, params_plot, meta_plot, figsize=(11, 14))
                 # Footer: arrhythmia + normalization info
                 footer_parts = []
                 if ar:

@@ -89,11 +89,11 @@ def _canonical_drug_send(raw: str) -> str:
 
 
 def _make_usubjid(study_id: str, result: dict) -> str:
-    """Generate USUBJID from study + chip + channel."""
+    """Generate USUBJID from study + chip + electrode."""
     fi = result.get('file_info', {})
     chip = fi.get('chip', 'X')
-    ch = fi.get('analyzed_channel', fi.get('channel_label', 'ch0'))
-    return f"{study_id}-{chip}-{ch}".upper()
+    el = fi.get('analyzed_channel', fi.get('channel_label', 'el0'))
+    return f"{study_id}-{chip}-{el}".upper()
 
 
 def _make_seq(counter: dict, domain: str) -> int:

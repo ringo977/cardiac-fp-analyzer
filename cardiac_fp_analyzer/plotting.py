@@ -36,7 +36,7 @@ def minmax_downsample(x, y, target_points=5000):
     return np.array(out_x), np.array(out_y)
 
 
-def plot_raw_trace(df, metadata, channel='ch1', target_points=8000,
+def plot_raw_trace(df, metadata, channel='el1', target_points=8000,
                    save_path=None, figsize=(16, 4)):
     """Plot a single raw FP trace with smart downsampling."""
     fig, ax = plt.subplots(figsize=figsize)
@@ -62,11 +62,11 @@ def plot_both_channels(df, metadata, target_points=8000, save_path=None, figsize
     """Plot both channels stacked vertically."""
     fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True)
     t = df['time'].values
-    for i, ch in enumerate(['ch1', 'ch2']):
-        y = df[ch].values
+    for i, el in enumerate(['el1', 'el2']):
+        y = df[el].values
         t_ds, y_ds = minmax_downsample(t, y, target_points=target_points)
         axes[i].plot(t_ds, y_ds * 1000, linewidth=0.5, color=['#1f77b4', '#d62728'][i])
-        axes[i].set_ylabel(f'{ch.upper()} (mV)'); axes[i].grid(True, alpha=0.3)
+        axes[i].set_ylabel(f'{el.upper()} (mV)'); axes[i].grid(True, alpha=0.3)
     axes[1].set_xlabel('Time (s)')
     axes[0].set_title(f"{metadata.get('filename', 'Unknown')} — Raw Traces", fontsize=10)
     plt.tight_layout()
@@ -75,7 +75,7 @@ def plot_both_channels(df, metadata, target_points=8000, save_path=None, figsize
     return fig, axes
 
 
-def plot_beat_overlay(beats_time, beats_data, metadata, channel='ch1',
+def plot_beat_overlay(beats_time, beats_data, metadata, channel='el1',
                       save_path=None, figsize=(10, 6)):
     """Overlay all detected beats aligned to depolarization spike."""
     fig, ax = plt.subplots(figsize=figsize)
@@ -92,7 +92,7 @@ def plot_beat_overlay(beats_time, beats_data, metadata, channel='ch1',
 
 
 def plot_analysis_summary(df_time, filtered, beat_indices, params, metadata,
-                          channel='ch1', save_path=None, figsize=(16, 14)):
+                          channel='el1', save_path=None, figsize=(16, 14)):
     """
     4-panel analysis summary:
       1. Full filtered trace with beat markers
@@ -111,7 +111,9 @@ def plot_analysis_summary(df_time, filtered, beat_indices, params, metadata,
     if len(beat_indices) > 0:
         ax1.plot(t[beat_indices], y[beat_indices] * 1000, 'rv', markersize=3, alpha=0.6)
     ax1.set_ylabel('Voltage (mV)')
-    ax1.set_title(f"{metadata.get('filename', '')} — Analysis Summary", fontsize=11, fontweight='bold')
+    el_label = metadata.get('analyzed_channel', '')
+    title_suffix = f" [{el_label.upper()}]" if el_label else ""
+    ax1.set_title(f"{metadata.get('filename', '')}{title_suffix} — Analysis Summary", fontsize=11, fontweight='bold')
     ax1.grid(True, alpha=0.3)
 
     ax2 = fig.add_subplot(gs[1])

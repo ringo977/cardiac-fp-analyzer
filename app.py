@@ -57,12 +57,12 @@ TRANSLATIONS = {
         'single_file_desc': 'Upload di un file CSV per visualizzare segnale, battiti, parametri e aritmie.',
         'upload_csv': 'Scegli un file CSV',
         'upload_csv_info': 'Carica un file CSV dal sistema µECG-Pharma per iniziare.',
-        'channel': 'Canale',
+        'channel': 'Elettrodo',
         'analyze': 'Analizza',
         'analyzing': 'Analisi in corso...',
         'analysis_complete': 'Analisi completata',
         'analysis_error': "Errore nell'analisi. Verifica il formato del file.",
-        'chip_channel': 'Chip/Canale',
+        'chip_channel': 'Chip/Elettrodo',
         'drug': 'Farmaco',
         'risk_score': 'Risk Score',
         'filtered_signal': 'Segnale filtrato',
@@ -212,11 +212,11 @@ TRANSLATIONS = {
         'export_excel_single': 'Report Excel',
         'export_summary': 'Riepilogo CSV',
         'both_channels': 'Entrambi',
-        'channel_comparison': 'Confronto canali',
+        'channel_comparison': 'Confronto elettrodi',
         'analyzing_ch': 'Analisi {ch}...',
         'channel_failed': 'Analisi {ch} fallita',
-        'no_valid_channel': 'Nessun canale valido.',
-        'select_channel': 'Seleziona canale da visualizzare',
+        'no_valid_channel': 'Nessun elettrodo valido.',
+        'select_channel': 'Seleziona elettrodo da visualizzare',
     },
     'en': {
         'app_title': 'Cardiac FP Analyzer',
@@ -232,12 +232,12 @@ TRANSLATIONS = {
         'single_file_desc': 'Upload a CSV file to visualize signal, beats, parameters and arrhythmias.',
         'upload_csv': 'Choose a CSV file',
         'upload_csv_info': 'Upload a CSV file from the µECG-Pharma system to begin.',
-        'channel': 'Channel',
+        'channel': 'Electrode',
         'analyze': 'Analyze',
         'analyzing': 'Analysis in progress...',
         'analysis_complete': 'Analysis complete',
         'analysis_error': 'Analysis error. Check the file format.',
-        'chip_channel': 'Chip/Channel',
+        'chip_channel': 'Chip/Electrode',
         'drug': 'Drug',
         'risk_score': 'Risk Score',
         'filtered_signal': 'Filtered signal',
@@ -387,11 +387,11 @@ TRANSLATIONS = {
         'export_excel_single': 'Excel Report',
         'export_summary': 'Summary CSV',
         'both_channels': 'Both',
-        'channel_comparison': 'Channel comparison',
+        'channel_comparison': 'Electrode comparison',
         'analyzing_ch': 'Analyzing {ch}...',
         'channel_failed': 'Analysis failed for {ch}',
-        'no_valid_channel': 'No valid channel.',
-        'select_channel': 'Select channel to view',
+        'no_valid_channel': 'No valid electrode.',
+        'select_channel': 'Select electrode to view',
     }
 }
 
@@ -694,14 +694,14 @@ def page_single_file(config: AnalysisConfig):
         tmp_path = tmp.name
 
     channel = st.radio(T('channel'),
-                       ['auto', 'ch1', 'ch2', T('both_channels')],
+                       ['auto', 'el1', 'el2', T('both_channels')],
                        horizontal=True)
 
     if st.button(f"▶️ {T('analyze')}", type="primary", use_container_width=True):
         if channel == T('both_channels'):
-            # Analyze both channels
+            # Analyze both electrodes
             results_both = {}
-            for ch in ['ch1', 'ch2']:
+            for ch in ['el1', 'el2']:
                 with st.spinner(T('analyzing_ch', ch=ch.upper())):
                     r = analyze_single_file(tmp_path, channel=ch, verbose=False, config=config)
                 if r is not None:
@@ -721,7 +721,7 @@ def page_single_file(config: AnalysisConfig):
             if result is None:
                 st.error(T('analysis_error'))
                 return
-            st.success(f"{T('analysis_complete')} — Canale: {result['file_info'].get('analyzed_channel', '?')}")
+            st.success(f"{T('analysis_complete')} — Elettrodo: {result['file_info'].get('analyzed_channel', '?')}")
             st.session_state['single_result'] = result
             st.session_state['single_result_both'] = None
 
@@ -878,7 +878,7 @@ def _single_file_exports(result, config):
         summary_row = {
             'File': fi.get('filename', ''),
             'Chip': fi.get('chip', ''),
-            'Channel': fi.get('analyzed_channel', ''),
+            'Electrode': fi.get('analyzed_channel', ''),
             'Drug': fi.get('drug', 'N/A'),
             'Concentration': fi.get('concentration', ''),
             'QC_Grade': qc.grade,
@@ -1345,7 +1345,7 @@ def page_batch_analysis(config: AnalysisConfig):
                 ground_truth[drug.strip().lower()] = val.strip() == '+'
 
     channel = st.radio(T('channel'),
-                       ['auto', 'ch1', 'ch2', T('both_channels')],
+                       ['auto', 'el1', 'el2', T('both_channels')],
                        horizontal=True, key='batch_ch')
 
     # Map translated label back to engine value

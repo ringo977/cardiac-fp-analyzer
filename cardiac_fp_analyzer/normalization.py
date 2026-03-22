@@ -38,26 +38,33 @@ def _get_norm_thresholds(cfg=None):
 
 def _get_group_key(result):
     """
-    Extract the grouping key (experiment + chip + channel prefix) from a result.
-    E.g. chipA_ch1_terfe_300nM → group = "EXP 5/chipA_ch1"
+    Extract the grouping key (experiment + chip + chamber + electrode) from a result.
+    E.g. chipA_ch1_terfe_300nM analyzed on el1 → group = "EXP 5/chipA_ch1/el1"
+
+    The group key includes the electrode (el1/el2) so that dual-electrode
+    analyses of the same file are kept in separate normalization groups.
     """
     fi = result.get('file_info', {})
     exp = fi.get('experiment', '')
     chip = fi.get('chip', '')
-    channel_label = fi.get('channel_label', '')  # e.g. ch1, ch2, ch3
+    channel_label = fi.get('channel_label', '')  # e.g. ch1, ch2, ch3 (chamber from filename)
+    electrode = fi.get('analyzed_channel', '')     # e.g. el1, el2 (electrode)
 
     # Also extract from filename
     meta = result.get('metadata', {})
     fname = meta.get('filename', '')
 
-    # Parse chip_channel from filename (e.g. chipA_ch1_terfe_300nM → chipA_ch1)
+    # Parse chip_chamber from filename (e.g. chipA_ch1_terfe_300nM → chipA_ch1)
     parts = fname.split('_')
     if len(parts) >= 2 and parts[0].startswith('chip'):
         chip_ch = f"{parts[0]}_{parts[1]}"
     else:
         chip_ch = f"chip{chip}_{channel_label}" if chip and channel_label else fname
 
-    return f"{exp}/{chip_ch}"
+    key = f"{exp}/{chip_ch}"
+    if electrode:
+        key = f"{key}/{electrode}"
+    return key
 
 
 def _is_baseline(result):
