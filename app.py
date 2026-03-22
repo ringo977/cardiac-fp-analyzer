@@ -207,6 +207,10 @@ TRANSLATIONS = {
         'reanalyze_btn': 'Ri-analizza con battiti modificati',
         'reanalysis_done': 'Ri-analisi completata con {n} battiti',
         'beats_modified': 'Battiti modificati: {orig} originali → {new} inclusi',
+        'export_section': 'Esporta risultati',
+        'export_csv': 'Parametri CSV',
+        'export_excel_single': 'Report Excel',
+        'export_summary': 'Riepilogo CSV',
     },
     'en': {
         'app_title': 'Cardiac FP Analyzer',
@@ -372,6 +376,10 @@ TRANSLATIONS = {
         'reanalyze_btn': 'Re-analyze with modified beats',
         'reanalysis_done': 'Re-analysis complete with {n} beats',
         'beats_modified': 'Beats modified: {orig} original → {new} included',
+        'export_section': 'Export results',
+        'export_csv': 'Parameters CSV',
+        'export_excel_single': 'Excel Report',
+        'export_summary': 'Summary CSV',
     }
 }
 
@@ -464,42 +472,52 @@ def build_config_from_sidebar() -> AnalysisConfig:
             config.amplifier_gain = st.number_input(
                 T('cfg_amp_gain'),
                 value=1e4, min_value=1.0, format="%.0e",
-                help=T('cfg_amp_gain_help')
+                help=T('cfg_amp_gain_help'),
+                key='cfg_amp_gain'
             )
             _notch_options = {'50 Hz': 50.0, '60 Hz': 60.0, 'Off': 0.0}
+            _notch_reverse = {v: k for k, v in _notch_options.items()}
             _notch_sel = st.selectbox(
-                f"{T('cfg_mains_freq')}", list(_notch_options.keys()), index=0
+                f"{T('cfg_mains_freq')}", list(_notch_options.keys()), index=0,
+                key='cfg_notch'
             )
             config.filtering.notch_freq_hz = _notch_options[_notch_sel]
             config.filtering.bandpass_low_hz = st.number_input(
-                T('cfg_bandpass_low'), value=0.5, min_value=0.1, max_value=10.0, step=0.1
+                T('cfg_bandpass_low'), value=0.5, min_value=0.1, max_value=10.0, step=0.1,
+                key='cfg_bp_low'
             )
             config.filtering.bandpass_high_hz = st.number_input(
-                T('cfg_bandpass_high'), value=500.0, min_value=50.0, max_value=5000.0, step=50.0
+                T('cfg_bandpass_high'), value=500.0, min_value=50.0, max_value=5000.0, step=50.0,
+                key='cfg_bp_high'
             )
 
         # ── Beat detection ──
         with st.expander(f"💓 {T('cfg_beat_detection')}", expanded=False):
             config.beat_detection.method = st.selectbox(
                 T('cfg_method'), ['auto', 'prominence', 'derivative', 'peak'],
-                help=T('cfg_method_help')
+                help=T('cfg_method_help'),
+                key='cfg_bd_method'
             )
             config.beat_detection.min_distance_ms = st.number_input(
                 T('cfg_min_distance'), value=400.0, min_value=100.0, max_value=2000.0,
-                help=T('cfg_min_distance_help')
+                help=T('cfg_min_distance_help'),
+                key='cfg_bd_min_dist'
             )
             config.beat_detection.threshold_factor = st.number_input(
-                T('cfg_threshold'), value=4.0, min_value=1.0, max_value=10.0, step=0.5
+                T('cfg_threshold'), value=4.0, min_value=1.0, max_value=10.0, step=0.5,
+                key='cfg_bd_thresh'
             )
             st.caption(f"🔬 {T('cfg_qc_section')}")
             config.quality.morphology_threshold = st.slider(
                 T('cfg_morph_threshold'), min_value=0.0, max_value=1.0,
                 value=0.4, step=0.05,
-                help=T('cfg_morph_threshold_help')
+                help=T('cfg_morph_threshold_help'),
+                key='cfg_morph_thresh'
             )
             config.quality.use_morphology = st.checkbox(
                 T('cfg_use_morphology'), value=True,
-                help=T('cfg_use_morphology_help')
+                help=T('cfg_use_morphology_help'),
+                key='cfg_use_morph'
             )
 
         # ── FPD ──
@@ -507,63 +525,76 @@ def build_config_from_sidebar() -> AnalysisConfig:
             config.repolarization.fpd_method = st.selectbox(
                 T('cfg_fpd_method'),
                 ['tangent', 'peak', 'max_slope', '50pct', 'baseline_return', 'consensus'],
-                help=T('cfg_fpd_method_help')
+                help=T('cfg_fpd_method_help'),
+                key='cfg_fpd_method'
             )
             config.repolarization.correction = st.selectbox(
                 T('cfg_qt_correction'), ['fridericia', 'bazett', 'none'],
-                help=T('cfg_qt_help')
+                help=T('cfg_qt_help'),
+                key='cfg_qt_corr'
             )
             config.repolarization.search_start_ms = st.number_input(
-                T('cfg_repol_start'), value=150.0, min_value=50.0, max_value=400.0
+                T('cfg_repol_start'), value=150.0, min_value=50.0, max_value=400.0,
+                key='cfg_repol_start'
             )
             config.repolarization.search_end_ms = st.number_input(
-                T('cfg_repol_end'), value=900.0, min_value=400.0, max_value=1500.0
+                T('cfg_repol_end'), value=900.0, min_value=400.0, max_value=1500.0,
+                key='cfg_repol_end'
             )
 
         # ── Arrhythmia ──
         with st.expander(f"⚡ {T('cfg_arrhythmia')}", expanded=False):
             config.arrhythmia.ead_residual_prominence = st.number_input(
-                T('cfg_ead_prominence'), value=6.0, min_value=2.0, max_value=15.0, step=0.5
+                T('cfg_ead_prominence'), value=6.0, min_value=2.0, max_value=15.0, step=0.5,
+                key='cfg_ead_prom'
             )
             config.arrhythmia.ead_residual_min_amp_frac = st.number_input(
-                T('cfg_ead_min_amp'), value=0.08, min_value=0.01, max_value=0.50, step=0.01
+                T('cfg_ead_min_amp'), value=0.08, min_value=0.01, max_value=0.50, step=0.01,
+                key='cfg_ead_min_amp'
             )
             config.arrhythmia.ead_residual_min_width_ms = st.number_input(
-                T('cfg_ead_min_width'), value=8.0, min_value=1.0, max_value=50.0
+                T('cfg_ead_min_width'), value=8.0, min_value=1.0, max_value=50.0,
+                key='cfg_ead_min_w'
             )
             config.arrhythmia.ead_residual_max_width_ms = st.number_input(
-                T('cfg_ead_max_width'), value=150.0, min_value=50.0, max_value=500.0
+                T('cfg_ead_max_width'), value=150.0, min_value=50.0, max_value=500.0,
+                key='cfg_ead_max_w'
             )
             config.arrhythmia.risk_score_mode = st.selectbox(
                 T('cfg_risk_mode'),
                 ['manual', 'data_driven'],
-                help=("'manual': pesi esperti (letteratura). "
-                      "'data_driven': pesi da regressione logistica su dataset CiPA "
-                      "(sperimentale — richiede fitted_weights.json)")
+                help=T('cfg_risk_mode_help'),
+                key='cfg_risk_mode'
             )
 
         # ── Inclusion ──
         with st.expander(f"🔍 {T('cfg_inclusion')}", expanded=False):
             config.inclusion.max_cv_bp = st.number_input(
-                T('cfg_max_cv'), value=25.0, min_value=5.0, max_value=50.0
+                T('cfg_max_cv'), value=25.0, min_value=5.0, max_value=50.0,
+                key='cfg_max_cv'
             )
             config.inclusion.min_fpd_confidence = st.number_input(
-                T('cfg_min_fpd_conf'), value=0.66, min_value=0.0, max_value=1.0, step=0.01
+                T('cfg_min_fpd_conf'), value=0.66, min_value=0.0, max_value=1.0, step=0.01,
+                key='cfg_min_fpd_conf'
             )
             config.inclusion.enabled_fpdc_physiol = st.checkbox(
-                T('cfg_physiol_filter'), value=True
+                T('cfg_physiol_filter'), value=True,
+                key='cfg_physiol'
             )
 
         # ── Normalization ──
         with st.expander(f"📊 {T('cfg_normalization')}", expanded=False):
             config.normalization.threshold_low = st.number_input(
-                T('cfg_threshold_low'), value=10.0, min_value=1.0, max_value=30.0
+                T('cfg_threshold_low'), value=10.0, min_value=1.0, max_value=30.0,
+                key='cfg_norm_low'
             )
             config.normalization.threshold_mid = st.number_input(
-                T('cfg_threshold_mid'), value=15.0, min_value=5.0, max_value=40.0
+                T('cfg_threshold_mid'), value=15.0, min_value=5.0, max_value=40.0,
+                key='cfg_norm_mid'
             )
             config.normalization.threshold_high = st.number_input(
-                T('cfg_threshold_high'), value=20.0, min_value=10.0, max_value=50.0
+                T('cfg_threshold_high'), value=20.0, min_value=10.0, max_value=50.0,
+                key='cfg_norm_high'
             )
 
         # ── Config import/export ──
@@ -574,13 +605,58 @@ def build_config_from_sidebar() -> AnalysisConfig:
             st.download_button(f"📥 {T('export_config')}", json_str, "analysis_config.json",
                                mime="application/json", use_container_width=True)
         with col2:
-            uploaded_cfg = st.file_uploader(f"📤 {T('import_config')}", type=['json'], key='cfg_upload',
-                                            label_visibility="collapsed")
-            if uploaded_cfg is not None:
+            uploaded_cfg = st.file_uploader(f"📤 {T('import_config')}", type=['json'], key='cfg_upload')
+            if uploaded_cfg is None:
+                st.session_state.pop('_cfg_imported', None)
+            if uploaded_cfg is not None and not st.session_state.get('_cfg_imported', False):
                 try:
-                    cfg_dict = __import__('json').loads(uploaded_cfg.read())
-                    config = AnalysisConfig.from_dict(cfg_dict)
+                    import json as _json
+                    cfg_dict = _json.loads(uploaded_cfg.read())
+                    imported = AnalysisConfig.from_dict(cfg_dict)
+                    # Update widget session_state keys so sidebar reflects imported values
+                    _cfg_widget_map = {
+                        'cfg_amp_gain': imported.amplifier_gain,
+                        'cfg_bp_low': imported.filtering.bandpass_low_hz,
+                        'cfg_bp_high': imported.filtering.bandpass_high_hz,
+                        'cfg_bd_min_dist': imported.beat_detection.min_distance_ms,
+                        'cfg_bd_thresh': imported.beat_detection.threshold_factor,
+                        'cfg_morph_thresh': imported.quality.morphology_threshold,
+                        'cfg_use_morph': imported.quality.use_morphology,
+                        'cfg_repol_start': imported.repolarization.search_start_ms,
+                        'cfg_repol_end': imported.repolarization.search_end_ms,
+                        'cfg_ead_prom': imported.arrhythmia.ead_residual_prominence,
+                        'cfg_ead_min_amp': imported.arrhythmia.ead_residual_min_amp_frac,
+                        'cfg_ead_min_w': imported.arrhythmia.ead_residual_min_width_ms,
+                        'cfg_ead_max_w': imported.arrhythmia.ead_residual_max_width_ms,
+                        'cfg_max_cv': imported.inclusion.max_cv_bp,
+                        'cfg_min_fpd_conf': imported.inclusion.min_fpd_confidence,
+                        'cfg_physiol': imported.inclusion.enabled_fpdc_physiol,
+                        'cfg_norm_low': imported.normalization.threshold_low,
+                        'cfg_norm_mid': imported.normalization.threshold_mid,
+                        'cfg_norm_high': imported.normalization.threshold_high,
+                    }
+                    for wk, wv in _cfg_widget_map.items():
+                        st.session_state[wk] = wv
+                    # Selectbox widgets: set by index
+                    _methods = ['auto', 'prominence', 'derivative', 'peak']
+                    if imported.beat_detection.method in _methods:
+                        st.session_state['cfg_bd_method'] = imported.beat_detection.method
+                    _fpd_methods = ['tangent', 'peak', 'max_slope', '50pct', 'baseline_return', 'consensus']
+                    if imported.repolarization.fpd_method in _fpd_methods:
+                        st.session_state['cfg_fpd_method'] = imported.repolarization.fpd_method
+                    _qt_methods = ['fridericia', 'bazett', 'none']
+                    if imported.repolarization.correction in _qt_methods:
+                        st.session_state['cfg_qt_corr'] = imported.repolarization.correction
+                    _risk_modes = ['manual', 'data_driven']
+                    if imported.arrhythmia.risk_score_mode in _risk_modes:
+                        st.session_state['cfg_risk_mode'] = imported.arrhythmia.risk_score_mode
+                    # Notch filter
+                    _notch_val = imported.filtering.notch_freq_hz
+                    if _notch_val in _notch_reverse:
+                        st.session_state['cfg_notch'] = _notch_reverse[_notch_val]
+                    st.session_state['_cfg_imported'] = True
                     st.success(T('config_loaded'))
+                    st.rerun()
                 except Exception as e:
                     st.error(f"{T('error')}: {e}")
 
@@ -654,6 +730,101 @@ def page_single_file(config: AnalysisConfig):
 
     with tab_arrhythmia:
         _show_arrhythmia(result)
+
+    # ── Export section ──
+    _single_file_exports(result, config)
+
+
+def _single_file_exports(result, config):
+    """Provide download buttons for single-file analysis results."""
+    st.divider()
+    st.subheader(f"📥 {T('export_section')}")
+
+    fi = result['file_info']
+    summary = result['summary']
+    qc = result['qc_report']
+    ar = result['arrhythmia_report']
+    all_p = result.get('all_params', [])
+    fname_base = fi.get('filename', 'recording').replace('.csv', '')
+
+    cols = st.columns(3)
+
+    # ── 1. Per-beat parameters CSV ──
+    with cols[0]:
+        if all_p:
+            rows = []
+            for p in all_p:
+                rows.append({
+                    'Beat': p.get('beat_number', ''),
+                    'RR_interval_ms': p.get('rr_interval_ms', np.nan),
+                    'Spike_amplitude_mV': p.get('spike_amplitude_mV', np.nan),
+                    'FPD_ms': p.get('fpd_ms', np.nan),
+                    'FPDcF_ms': p.get('fpdc_ms', np.nan),
+                    'Rise_time_ms': p.get('rise_time_ms', np.nan),
+                    'Max_dVdt': p.get('max_dvdt', np.nan),
+                    'Morphology_corr': p.get('morphology_corr', np.nan),
+                    'FPD_confidence': p.get('fpd_confidence', np.nan),
+                })
+            df_params = pd.DataFrame(rows)
+            csv_bytes = df_params.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                f"📋 {T('export_csv')}",
+                csv_bytes,
+                f"{fname_base}_parameters.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+    # ── 2. Summary CSV (one row with all summary stats) ──
+    with cols[1]:
+        summary_row = {
+            'File': fi.get('filename', ''),
+            'Chip': fi.get('chip', ''),
+            'Channel': fi.get('analyzed_channel', ''),
+            'Drug': fi.get('drug', 'N/A'),
+            'Concentration': fi.get('concentration', ''),
+            'QC_Grade': qc.grade,
+            'Beats_accepted': summary.get('beat_period_ms_n', 0),
+            'Mean_BP_ms': summary.get('beat_period_ms_mean', np.nan),
+            'CV_BP_pct': summary.get('beat_period_ms_cv', np.nan),
+            'Mean_FPD_ms': summary.get('fpd_ms_mean', np.nan),
+            'SD_FPD_ms': summary.get('fpd_ms_std', np.nan),
+            'Mean_FPDcF_ms': summary.get('fpdc_ms_mean', np.nan),
+            'SD_FPDcF_ms': summary.get('fpdc_ms_std', np.nan),
+            'STV_FPDcF_ms': summary.get('stv_fpdc_ms', np.nan),
+            'Mean_spike_mV': summary.get('spike_amplitude_mV_mean', np.nan),
+            'Risk_score': ar.risk_score,
+            'Classification': ar.classification,
+        }
+        df_summary = pd.DataFrame([summary_row])
+        csv_summary = df_summary.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            f"📊 {T('export_summary')}",
+            csv_summary,
+            f"{fname_base}_summary.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    # ── 3. Excel report (reuse batch report generator) ──
+    with cols[2]:
+        if st.button(f"📊 {T('export_excel_single')}", use_container_width=True):
+            with st.spinner("Generazione Excel..."):
+                try:
+                    from cardiac_fp_analyzer.report import generate_excel_report
+                    with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+                        generate_excel_report([result], tmp.name)
+                        with open(tmp.name, 'rb') as f:
+                            buf = f.read()
+                    st.download_button(
+                        f"⬇️ {T('download_excel')}",
+                        buf,
+                        f"{fname_base}_report.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                    )
+                except Exception as e:
+                    st.error(f"{T('error')}: {e}")
 
 
 def _plot_signal(result):
