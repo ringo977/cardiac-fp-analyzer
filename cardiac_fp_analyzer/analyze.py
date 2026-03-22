@@ -401,7 +401,7 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
     Parameters
     ----------
     data_dir : path to directory with CSV files
-    channel : 'auto', 'ch1', or 'ch2'
+    channel : 'auto', 'ch1', 'ch2', or 'both'
     output_dir : output directory (default: data_dir/analysis_results)
     verbose : print progress
     config : AnalysisConfig or None — controls all pipeline parameters.
@@ -439,6 +439,9 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
 
     results, errors = [], []
 
+    # When channel='both', analyze each file for ch1 and ch2 separately
+    channels_to_run = ['ch1', 'ch2'] if channel == 'both' else [channel]
+
     if n_workers > 1 and len(csv_files) > 1:
         # Parallel pass 1: each file is independent
         from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -447,25 +450,35 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
         if verbose:
             print(f"  Parallel processing: {n_workers} workers")
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            futures = {executor.submit(analyze_single_file, f,
-                       channel=channel, verbose=False, config=config): f
-                       for f in csv_files}
+            futures = {}
+            for f in csv_files:
+                for ch in channels_to_run:
+                    fut = executor.submit(analyze_single_file, f,
+                                          channel=ch, verbose=False, config=config)
+                    futures[fut] = (f, ch)
+            total = len(futures)
             for i, future in enumerate(as_completed(futures)):
-                f = futures[future]
+                f, ch = futures[future]
+                ch_tag = f" ({ch})" if channel == 'both' else ""
                 if verbose:
-                    print(f"\n[{i+1}/{len(csv_files)}] {f.name}")
+                    print(f"\n[{i+1}/{total}] {f.name}{ch_tag}")
                 try:
                     r = future.result()
                     if r: results.append(r)
-                    else: errors.append(str(f))
+                    else: errors.append(f"{f}{ch_tag}")
                 except Exception as e:
-                    errors.append(f"{f}: {e}")
+                    errors.append(f"{f}{ch_tag}: {e}")
     else:
-        for i, f in enumerate(csv_files):
-            print(f"\n[{i+1}/{len(csv_files)}] {f.name}")
-            r = analyze_single_file(f, channel=channel, verbose=verbose, config=config)
-            if r: results.append(r)
-            else: errors.append(str(f))
+        total = len(csv_files) * len(channels_to_run)
+        idx = 0
+        for f in csv_files:
+            for ch in channels_to_run:
+                idx += 1
+                ch_tag = f" ({ch})" if channel == 'both' else ""
+                print(f"\n[{idx}/{total}] {f.name}{ch_tag}")
+                r = analyze_single_file(f, channel=ch, verbose=verbose, config=config)
+                if r: results.append(r)
+                else: errors.append(f"{f}{ch_tag}")
 
     # ─── Baseline risk reset ───
     # Baselines are reference recordings (no drug applied). The arrhythmia

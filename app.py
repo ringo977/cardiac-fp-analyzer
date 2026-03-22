@@ -1344,7 +1344,13 @@ def page_batch_analysis(config: AnalysisConfig):
                 drug, val = line.split('=', 1)
                 ground_truth[drug.strip().lower()] = val.strip() == '+'
 
-    channel = st.radio(T('channel'), ['auto', 'ch1', 'ch2'], horizontal=True, key='batch_ch')
+    channel = st.radio(T('channel'),
+                       ['auto', 'ch1', 'ch2', T('both_channels')],
+                       horizontal=True, key='batch_ch')
+
+    # Map translated label back to engine value
+    _ch_map = {T('both_channels'): 'both'}
+    channel_engine = _ch_map.get(channel, channel)
 
     if st.button("🚀 Avvia Analisi Batch", type="primary", use_container_width=True):
         data_dir = data_path if upload_mode == "Seleziona cartella" else tmp_dir
@@ -1355,7 +1361,7 @@ def page_batch_analysis(config: AnalysisConfig):
         with st.spinner("Pipeline in esecuzione..."):
             try:
                 results = batch_analyze(
-                    data_dir, channel=channel, verbose=False, config=config
+                    data_dir, channel=channel_engine, verbose=False, config=config
                 )
                 st.session_state['batch_results'] = results
                 st.session_state['batch_ground_truth'] = ground_truth
@@ -1522,6 +1528,7 @@ def _show_batch_summary(results):
         rows.append({
             'File': r.get('metadata', {}).get('filename', ''),
             'Chip': fi.get('chip', ''),
+            T('channel'): fi.get('analyzed_channel', ''),
             'Farmaco': fi.get('drug', ''),
             'Baseline': '✓' if _is_baseline(r) else '',
             'QC': qc.grade if qc else '',
@@ -1542,10 +1549,14 @@ def _show_batch_summary(results):
 
 def _show_batch_details(results):
     """Show details for selected file — signal, beats, params, arrhythmia."""
-    filenames = [r.get('metadata', {}).get('filename', f'file_{i}') for i, r in enumerate(results)]
-    selected = st.selectbox("Seleziona registrazione", filenames)
+    labels = []
+    for i, r in enumerate(results):
+        fname = r.get('metadata', {}).get('filename', f'file_{i}')
+        ch = r.get('file_info', {}).get('analyzed_channel', '')
+        labels.append(f"{fname} [{ch}]" if ch else fname)
+    selected = st.selectbox(T('select_recording'), labels)
 
-    idx = filenames.index(selected)
+    idx = labels.index(selected)
     result = results[idx]
 
     fi = result['file_info']
