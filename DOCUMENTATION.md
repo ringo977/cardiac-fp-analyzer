@@ -22,9 +22,10 @@
    - 4.6 [Analisi aritmie (`arrhythmia.py`)](#46-analisi-aritmie)
    - 4.7 [Rilevamento cessazione (`cessation.py`)](#47-rilevamento-cessazione)
    - 4.8 [Analisi spettrale (`spectral.py`)](#48-analisi-spettrale)
-   - 4.9 [Normalizzazione e classificazione (`normalization.py`)](#49-normalizzazione-e-classificazione)
-   - 4.10 [Risk map CiPA (`risk_map.py`)](#410-risk-map-cipa)
-   - 4.11 [Report (`report.py`)](#411-report)
+   - 4.9 [Criteri di inclusione (batch)](#49-criteri-di-inclusione-batch)
+   - 4.10 [Normalizzazione e classificazione (`normalization.py`)](#410-normalizzazione-e-classificazione)
+   - 4.11 [Risk map CiPA (`risk_map.py`)](#411-risk-map-cipa)
+   - 4.12 [Report (`report.py`)](#412-report)
 5. [Configurazione](#5-configurazione)
 6. [Razionale scientifico](#6-razionale-scientifico)
 7. [Validazione](#7-validazione)
@@ -564,7 +565,57 @@ Analizza il contenuto in frequenza del segnale FP, fornendo metriche complementa
 
 ---
 
-### 4.9 Normalizzazione e classificazione
+### 4.9 Criteri di inclusione (batch)
+
+**Modulo**: `analyze.py` → `_apply_inclusion_criteria()`
+
+In modalità batch, prima della normalizzazione viene applicata una cascata di criteri di inclusione sulle registrazioni baseline. Se una baseline fallisce, tutte le registrazioni farmaco associate allo stesso chip+canale vengono escluse dall'analisi (perché la normalizzazione vs baseline non è affidabile).
+
+#### I 5 criteri (in ordine, short-circuit al primo fallimento)
+
+1. **CV del beat period** (default: < 25%): esclude baselines con ritmo troppo irregolare. È il criterio più importante — un baseline instabile rende il ΔFPDcF inaffidabile. Corrisponde al criterio di Visone et al. 2023.
+
+2. **Range di plausibilità FPDcF** (default: 100–1200 ms): safety net per escludere misurazioni chiaramente erronee (artefatti di detection che producono FPDcF impossibili).
+
+3. **Confidenza FPD** (default: ≥ 0.66): esclude baselines dove l'algoritmo di misura del FPD non è affidabile. Il valore di confidenza (0–1) è calcolato dal consenso tra metodi multipli di misura della ripolarizzazione.
+
+4. **Range fisiologico FPDcF** (opt-in, default: 350–800 ms): esclude baselines con FPDcF fuori dal range fisiologico atteso per hiPSC-CM. Più restrittivo del criterio 2, utile per dataset ben caratterizzati.
+
+5. **Outlier nella popolazione** (opt-in, default: > 2σ dalla mediana dell'esperimento): esclude baselines con FPDcF statisticamente anomalo rispetto alle altre baselines dello stesso esperimento. Usa MAD (median absolute deviation) per robustezza.
+
+#### Logica a cascata
+
+Quando una baseline fallisce un criterio, il sistema:
+- Marca la baseline come esclusa (con la ragione specifica)
+- Identifica il gruppo chip+canale corrispondente
+- Esclude tutte le registrazioni farmaco di quel gruppo
+
+Le registrazioni farmaco possono anche essere segnalate individualmente per bassa confidenza FPD o FPDcF implausibile, anche se la baseline è valida.
+
+#### Configurazione
+
+| Parametro | Default | Descrizione |
+|-----------|---------|-------------|
+| `max_cv_bp` | 25.0 | Max CV% del beat period per la baseline |
+| `enabled_cv` | true | Attiva/disattiva criterio 1 |
+| `fpdc_range_min` | 100.0 | FPDcF minimo plausibile (ms) |
+| `fpdc_range_max` | 1200.0 | FPDcF massimo plausibile (ms) |
+| `enabled_fpdc_range` | true | Attiva/disattiva criterio 2 |
+| `min_fpd_confidence` | 0.66 | Confidenza FPD minima |
+| `enabled_confidence` | true | Attiva/disattiva criterio 3 |
+| `enabled_fpdc_physiol` | false | Attiva criterio 4 (opt-in) |
+| `fpdc_physiol_min` | 350.0 | Range fisiologico min (ms) |
+| `fpdc_physiol_max` | 800.0 | Range fisiologico max (ms) |
+| `enabled_fpdc_outlier` | false | Attiva criterio 5 (opt-in) |
+| `fpdc_outlier_n_sigma` | 2.0 | Soglia per outlier (×σ) |
+
+#### Razionale
+
+La qualità dei dati µECG è variabile: chip con cattivo contatto, microtessuti non vitali, artefatti meccanici. Piuttosto che analizzare dati inaffidabili (introducendo rumore nei risultati farmaco), è preferibile escludere a priori le registrazioni problematiche. Il criterio del CV è lo stesso usato nel paper di riferimento (Visone et al. 2023, Supplementary Methods).
+
+---
+
+### 4.10 Normalizzazione e classificazione
 
 **Modulo**: `normalization.py`
 
@@ -622,7 +673,7 @@ Tre metodi disponibili per aggregare le concentrazioni:
 
 ---
 
-### 4.10 Risk map CiPA
+### 4.11 Risk map CiPA
 
 **Modulo**: `risk_map.py`
 
@@ -654,7 +705,7 @@ I nomi dei farmaci dai filename vengono normalizzati automaticamente (es. 'terfe
 
 ---
 
-### 4.11 Report
+### 4.12 Report
 
 **Modulo**: `report.py`
 
