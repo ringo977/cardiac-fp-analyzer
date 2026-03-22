@@ -655,6 +655,10 @@ La qualità dei dati µECG è variabile: chip con cattivo contatto, microtessuti
 
 Ogni drug recording viene accoppiato al baseline dello stesso chip+camera+elettrodo nello stesso esperimento. Se più baseline esistono, viene preferito quello con grado QC migliore.
 
+**Fallback cross-electrode (v3.6)**: in modalità `auto`, ogni file sceglie indipendentemente l'elettrodo migliore. Può accadere che il baseline scelga el2 (il migliore) e il drug scelga el1 (perché il CSV ha colonne identiche, quindi pareggio → default el1). In questo caso la chiave di raggruppamento `EXP/chipA_ch1/el2` non combacerebbe con `EXP/chipA_ch1/el1`. Il sistema fa **fallback** cercando il baseline sullo stesso chip+camera senza vincolo sull'elettrodo. Questo garantisce che il pairing funzioni anche quando gli elettrodi selezionati differiscono.
+
+> **Nota**: il cross-electrode pairing può introdurre un bias sistematico sull'FPDcF se i due elettrodi misurano durate diverse. Per questo motivo i filtri QC sulla normalizzazione (vedi sotto) sono particolarmente importanti.
+
 #### Parametri normalizzati
 
 Per ogni recording con baseline, si calcolano:
@@ -687,21 +691,48 @@ Valore 0 = identico al baseline, 1 = completamente diverso. I farmaci hERG+ most
 
 Se un recording mostra cessazione (waveform destruction) con bassa confidenza FPD (< 0.60), viene classificato come positivo indipendentemente dal ΔFPDcF. Questo cattura farmaci che distruggono il segnale prima che il FPD possa allungarsi.
 
+#### Filtri QC sulla normalizzazione (v3.6)
+
+Le drug recording con segnale di bassa qualità possono produrre valori FPDcF inaffidabili, causando falsi positivi nella classificazione CiPA. Due filtri opzionali escludono queste recording dalla classificazione drug-level (la normalizzazione individuale resta visibile nel report):
+
+| Config | Default | Descrizione |
+|--------|---------|-------------|
+| `norm_min_qc_enabled` | `False` | Attiva filtro QC grade minimo |
+| `norm_min_qc_grade` | `'D'` | Grade minimo (A > B > C > D > F). Con `'C'`, solo A/B/C contribuiscono alla classificazione |
+| `norm_max_cv_enabled` | `False` | Attiva filtro CV massimo |
+| `norm_max_cv_bp` | `50.0` | % — recording con CV(BP) superiore sono escluse |
+
+**Esempio**: ranolazine mostra prolungamento apparente (+44%) a 100µM, ma QC=D con 51% dei battiti scartati. Attivando `norm_min_qc_grade='C'`, questa concentrazione viene esclusa, e le sole concentrazioni QC≥C (0.1µM, 1µM) mostrano correttamente nessun effetto (+3-4%).
+
 #### Classificazione farmaco
 
 Tre metodi disponibili per aggregare le concentrazioni:
 
-- **max** (default): positivo se QUALSIASI concentrazione supera la soglia
-- **mean**: positivo se la MEDIA delle concentrazioni supera la soglia
-- **n_above**: positivo se ≥ N concentrazioni superano la soglia
+- **max** (default): positivo se QUALSIASI concentrazione supera la soglia. Massima sensibilità, ma vulnerabile a singoli outlier.
+- **mean**: positivo se la MEDIA delle concentrazioni supera la soglia. Riduce l'impatto degli outlier.
+- **n_above**: positivo se ≥ N concentrazioni superano la soglia. Richiede conferma da più concentrazioni.
 
 | Config | Default | Descrizione |
 |--------|---------|-------------|
 | `threshold_low` | 10.0% | Soglia TdP score 1 |
 | `threshold_mid` | 15.0% | Soglia TdP score 2 (ottimale, paper) |
 | `threshold_high` | 20.0% | Soglia TdP score 3 |
-| `classification_threshold` | 'mid' | Soglia per classificazione positivo |
-| `classification_method` | 'max' | Metodo di aggregazione |
+| `classification_threshold` | `'mid'` | Soglia per classificazione positivo |
+| `classification_method` | `'max'` | Metodo di aggregazione |
+| `classification_n_above` | `2` | N minimo per metodo `n_above` |
+
+#### Confronto configurazioni sul dataset di validazione (v3.6)
+
+Accuratezza CiPA su 7 farmaci (3 positivi, 4 negativi) dal dataset Visone et al. 2023:
+
+| Configurazione | TERFE | DOFE | QUINI | ALFUZ | MEXIL | NIFED | RANOL | Score |
+|---|---|---|---|---|---|---|---|---|
+| Default (no filter, max) | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ | 4/7 |
+| **QC≥C + max** | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | **5/7** |
+| QC≥C + n_above(2) | ✓ | ✗ | ✓ | ✓ | ✗ | ✓ | ✓ | 5/7 |
+| Visone et al. 2023 | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | 6/7 |
+
+**Nota**: mexiletine rimane un falso positivo in tutte le configurazioni. Il prolungamento osservato (+28-39%) sulle concentrazioni QC≥C proviene da un unico chip (chipA_ch2, EXP 8) — potrebbe essere un effetto chip-specifico anziché un vero effetto farmacologico. Il paper originale riporta anche mexiletine come l'unico errore (6/7).
 
 ---
 

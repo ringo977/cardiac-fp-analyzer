@@ -338,8 +338,18 @@ def classify_drug(results_list, cfg=None):
     threshold_map = {'low': t_low, 'mid': t_mid, 'high': t_high}
     threshold = threshold_map.get(cfg.classification_threshold, t_mid)
 
+    # ── QC / CV filters for drug-level classification ──
+    grade_order = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'F': 4}
+    qc_filter_on = getattr(cfg, 'norm_min_qc_enabled', False)
+    qc_min_grade = getattr(cfg, 'norm_min_qc_grade', 'D')
+    qc_min_rank = grade_order.get(qc_min_grade, 3)
+
+    cv_filter_on = getattr(cfg, 'norm_max_cv_enabled', False)
+    cv_max = getattr(cfg, 'norm_max_cv_bp', 50.0)
+
     # Group by drug — collect FPDcF data for classification
     drug_data = defaultdict(list)
+    n_qc_excluded = 0
     for r in results_list:
         if _is_baseline(r) or _is_control(r):
             continue
@@ -354,6 +364,23 @@ def classify_drug(results_list, cfg=None):
         drug = str(fi.get('drug', '') or '').lower()
         conc = fi.get('concentration', '')
         pct = norm.get('pct_fpdc_change', np.nan)
+
+        # Apply QC grade filter
+        if qc_filter_on:
+            qc = r.get('qc_report')
+            qc_grade = getattr(qc, 'grade', 'F') if qc else 'F'
+            if grade_order.get(qc_grade, 4) > qc_min_rank:
+                n_qc_excluded += 1
+                continue
+
+        # Apply CV filter
+        if cv_filter_on:
+            bp = r.get('beat_periods', [])
+            if len(bp) > 1:
+                cv_val = (np.std(bp) / np.mean(bp) * 100) if np.mean(bp) > 0 else 999
+                if cv_val > cv_max:
+                    n_qc_excluded += 1
+                    continue
 
         if drug and not np.isnan(pct):
             drug_data[drug].append({

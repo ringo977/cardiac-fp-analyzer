@@ -276,6 +276,30 @@ class NormalizationConfig:
     enable_cessation_override: bool = True
     cessation_override_max_fpd_confidence: float = 0.60
 
+    # ── QC filter for normalized recordings ──
+    # When enabled, drug recordings with a QC grade below the minimum
+    # are EXCLUDED from the drug-level classification (classify_drug).
+    # They still appear in the normalization table (so the user can see
+    # the data), but they do not contribute to the positive/negative call.
+    #
+    # Rationale: low-QC recordings often have unreliable FPDcF values
+    # (high beat rejection, noisy morphology) that cause false positives.
+    # For example, a single QC=D recording with +31% FPDcF can flip the
+    # whole drug classification to "prolongation" even when all other
+    # concentrations show shortening.
+    #
+    # Grade hierarchy: A > B > C > D > F
+    # Default 'D' means only grades A, B, C are used for classification.
+    norm_min_qc_grade: str = 'D'          # minimum QC grade to include
+    norm_min_qc_enabled: bool = False      # OFF by default (opt-in)
+
+    # ── Maximum CV for normalized recordings ──
+    # Drug recordings with CV(BP) above this threshold are excluded from
+    # classification, similar to the baseline inclusion CV filter.
+    # Very irregular recordings (CV > 50%) often have unreliable FPDcF.
+    norm_max_cv_bp: float = 50.0           # %
+    norm_max_cv_enabled: bool = False       # OFF by default (opt-in)
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #   ARRHYTHMIA DETECTION
