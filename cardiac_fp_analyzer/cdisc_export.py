@@ -76,9 +76,12 @@ _DM_VAR_LABELS = {
     'SEX':      'Sex',
     'SPECIES':  'Species',
     'STRAIN':   'Strain/Substrain',
-    'ARMCD':    'Planned Arm Code',
+    'ARMCD':    'Planned Arm Code for Trial Set',
     'ARM':      'Description of Planned Arm',
     'SETCD':    'Set Code',
+    'AGE':      'Age',
+    'AGETXT':   'Age Range',
+    'AGEU':     'Age Unit',
 }
 
 # EX domain variable labels (SENDIG 3.1 exact)
@@ -88,11 +91,12 @@ _EX_VAR_LABELS = {
     'USUBJID':  'Unique Subject Identifier',
     'EXSEQ':    'Sequence Number',
     'EXTRT':    'Name of Actual Treatment',
-    'EXDOSE':   'Dose per Administration',
+    'EXDOSE':   'Dose Level',
     'EXDOSU':   'Dose Units',
     'EXDOSFRM': 'Dose Form',
     'EXDOSFRQ': 'Dosing Frequency per Interval',
     'EXROUTE':  'Route of Administration',
+    'EXTPT':    'Planned Time Point Name',
     'EPOCH':    'Epoch',
     'EXSTDTC':  'Start Date/Time of Treatment',
     'EXSTDY':   'Study Day of Start of Treatment',
@@ -281,25 +285,26 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
     end = end_date or now
 
     # (TSPARMCD, TSPARM [exact CDISC CT label], TSVAL, TSVALNF)
+    # Labels sourced from NCI Thesaurus C66738 (SEND CT 2025-09-26)
     params = [
         # Study identification
-        ('STSTDTC', 'Start Date/Time of First Exposure',          now,                      ''),
+        ('STSTDTC', 'Study Start Date',                          now,                      ''),
         ('STITLE',  'Study Title',                               study_title,              ''),
-        ('SDESIGN', 'Trial Design',                              'PARALLEL',               ''),
-        ('SSPONSOR','Sponsor',                                   sponsor or 'NOT PROVIDED',''),
+        ('SDESIGN', 'Study Design',                              'PARALLEL',               ''),
+        ('SSPONSOR','Clinical Study Sponsor',                    sponsor or 'NOT PROVIDED',''),
 
         # Species / Strain
         ('SPECIES', 'Species',                                   'HUMAN',                  ''),
         ('STRAIN',  'Strain/Substrain',                          'HIPSC-CM',               ''),
-        ('SSTYP',   'Study Type Sub Category',                   'IN VITRO',               ''),
+        ('SSTYP',   'Study Type',                                'IN VITRO',               ''),
 
         # Route and treatment
         ('ROUTE',   'Route of Administration',                   'TOPICAL',                ''),
         ('TRT',     'Investigational Therapy or Treatment',      'MULTIPLE DRUGS',         ''),
-        ('TRTV',    'Vehicle',                                   'CULTURE MEDIUM',         ''),
-        ('TRTCAS',  'CAS Number',                                '',                       'NA'),
-        ('TRTUNII', 'UNII of Investigational Therapy',           '',                       'NA'),
-        ('PCLASS',  'Pharmacological Class',                     'ION CHANNEL MODULATORS', ''),
+        ('TRTV',    'Treatment Vehicle',                         'CULTURE MEDIUM',         ''),
+        ('TRTCAS',  'CAS Registry Number',                       '',                       'NA'),
+        ('TRTUNII', 'UNII Code',                                 '',                       'NA'),
+        ('PCLASS',  'Pharmacological Class of Investigational Therapy', 'ION CHANNEL MODULATORS', ''),
 
         # Subjects / design
         ('SEXPOP',  'Sex of Participants',                       '',                       'NA'),
@@ -307,29 +312,29 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
         ('STDIR',   'Study Director',                            sponsor or 'NOT PROVIDED',''),
 
         # Timing
-        ('DOSDUR',  'Planned Duration of Dosing',                'P1D',                    ''),
-        ('DOSSTDTC','Exposure Start Date',                         now,                      ''),
-        ('DOSENDTC','Exposure End Date',                          end,                      ''),
-        ('PDOSFRQ', 'Planned Dosing Frequency',                  'ONCE',                   ''),
-        ('EXPSTDTC','Start Date/Time of First Exposure',          now,                      ''),
-        ('EXPENDTC','End Date/Time of Last Exposure',            end,                      ''),
-        ('STENDTC', 'Planned Study End Date/Time',               end,                      ''),
+        ('DOSDUR',  'Duration of Dosing',                        'P1D',                    ''),
+        ('DOSSTDTC','Date of First Dose',                        now,                      ''),
+        ('DOSENDTC','Date of Last Dose',                         end,                      ''),
+        ('PDOSFRQ', 'Dosing Frequency per Interval',             'ONCE',                   ''),
+        ('EXPSTDTC','Planned Start Date of Treatment',           now,                      ''),
+        ('EXPENDTC','Planned End Date of Treatment',             end,                      ''),
+        ('STENDTC', 'Study Completion Date',                     end,                      ''),
 
         # Regulatory / compliance
-        ('GLPFL',   'GLP Compliance Indicator',                  'N',                      ''),
+        ('GLPFL',   'GLP Study Indicator',                       'N',                      ''),
         ('GLPTYP',  'Type of GLP',                               '',                       'NA'),
-        ('SNDIGVER','SENDIG Version',                            '3.1',                    ''),
-        ('SNDCTVER','SEND CT Version',                           '2025-09-26',             ''),
+        ('SNDIGVER','Version of SENDIG',                         '3.1',                    ''),
+        ('SNDCTVER','Version of SEND CT',                        '2025-09-26',             ''),
 
         # Test facility
         ('TFCNTRY', 'Test Facility Country',                     '',                       'NA'),
         ('TSTFLOC', 'Test Facility Location',                    '',                       'NA'),
         ('TSTFNAM', 'Test Facility Name',                        '',                       'NA'),
-        ('SPLRNAM', 'Supplier Name',                             '',                       'NA'),
-        ('SPREFID', 'Supplier Study Number',                     '',                       'NA'),
-        ('SPLANSUB','Planned Number of Animals per Sex per Group','',                       'NA'),
-        ('STRPSTAT','Strain/Substrain Production Status',        '',                       'NA'),
-        ('TRMSAC',  'Disposition',                                '',                       'NA'),
+        ('SPLRNAM', 'Test Material Supplier',                    '',                       'NA'),
+        ('SPREFID', 'Supplier Test Report ID',                   '',                       'NA'),
+        ('SPLANSUB','Planned Number of Subjects per Sex per Group','',                       'NA'),
+        ('STRPSTAT','Test Material Production Status',           '',                       'NA'),
+        ('TRMSAC',  'Reason for Termination of Study',           '',                       'NA'),
 
         # Age (NA for cell lines)
         ('AGE',     'Age',                                       '',                       'NA'),
@@ -396,6 +401,9 @@ def _build_dm(results: list, study_id: str) -> pd.DataFrame:
             'ARMCD':    armcd,
             'ARM':      arm,
             'SETCD':    setcd,
+            'AGE':      '',
+            'AGETXT':   'NOT APPLICABLE',
+            'AGEU':     '',
         })
 
     return pd.DataFrame(rows)
@@ -415,7 +423,10 @@ def _build_ex(results: list, study_id: str) -> pd.DataFrame:
     rows = []
     seq_counter = {}
     seen_keys = set()
-    now = datetime.now().strftime('%Y-%m-%d')
+    now_date = datetime.now().strftime('%Y-%m-%d')
+
+    # Track dose sequence per (subject, drug) to generate unique timestamps
+    subj_drug_dose_seq = {}
 
     for r in results:
         if _is_baseline(r) or _is_control(r):
@@ -436,6 +447,15 @@ def _build_ex(results: list, study_id: str) -> pd.DataFrame:
             continue
         seen_keys.add(dedup_key)
 
+        # Generate unique timestamp per (subject, drug) to avoid SD1352
+        sd_key = (usubjid, drug)
+        subj_drug_dose_seq.setdefault(sd_key, 0)
+        subj_drug_dose_seq[sd_key] += 1
+        dose_idx = subj_drug_dose_seq[sd_key]
+        # Offset each dose by 1 hour: T08:00, T09:00, T10:00, ...
+        hour = 7 + dose_idx
+        exstdtc = f"{now_date}T{hour:02d}:00"
+
         rows.append({
             'STUDYID':  study_id,
             'DOMAIN':   'EX',
@@ -447,9 +467,10 @@ def _build_ex(results: list, study_id: str) -> pd.DataFrame:
             'EXDOSFRM': 'SOLUTION',
             'EXDOSFRQ': 'ONCE',
             'EXROUTE':  'TOPICAL',
+            'EXTPT':    f'DOSE {dose_idx}',
             'EPOCH':    'TREATMENT',
-            'EXSTDTC':  now,
-            'EXSTDY':   _make_seq(seq_counter, usubjid + '_stdy'),
+            'EXSTDTC':  exstdtc,
+            'EXSTDY':   1,
         })
 
     return pd.DataFrame(rows)
@@ -597,25 +618,35 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
 #  TX — Trial Sets (treatment group definitions)
 # ═══════════════════════════════════════════════════════════════════════
 
-def _build_tx(results: list, study_id: str) -> pd.DataFrame:
+def _build_tx(results: list, study_id: str, dm_df: pd.DataFrame = None) -> pd.DataFrame:
     """Build Trial Sets (TX) domain — one row per treatment parameter per set.
 
     Each drug set includes required parameters:
       TRT, TCNTRL, SPGRPCD, GRPLBL, ARMCD, TRTDOS, TRTDOSU, PLANMSUB, PLANFSUB
     Plus a CONTROL set for baseline/vehicle subjects.
-    """
-    from .normalization import _is_baseline, _is_control
 
+    TX SETCDs are restricted to only those present in DM to avoid SE2347.
+    """
+    # Get SETCDs actually used in DM (for cross-domain consistency)
+    if dm_df is not None and not dm_df.empty:
+        dm_setcds = set(dm_df['SETCD'].unique())
+    else:
+        dm_setcds = None
+
+    has_control = dm_setcds is not None and 'CONTROL' in dm_setcds
+
+    # Collect all drugs, but only include those that have subjects in DM
+    from .normalization import _is_baseline, _is_control
     drugs_seen = set()
-    has_control = False
     for r in results:
         if _is_baseline(r) or _is_control(r):
-            has_control = True
             continue
         fi = r.get('file_info', {})
         drug_raw = str(fi.get('drug', ''))
         if drug_raw:
-            drugs_seen.add(_canonical_drug_send(drug_raw))
+            drug = _canonical_drug_send(drug_raw)
+            if dm_setcds is None or drug[:8] in dm_setcds:
+                drugs_seen.add(drug)
 
     rows = []
     seq = 0
@@ -641,8 +672,8 @@ def _build_tx(results: list, study_id: str) -> pd.DataFrame:
         _add_tx_param(sc, sd, 'TCNTRL',   'Control Type',                         'VEHICLE')
         _add_tx_param(sc, sd, 'SPGRPCD',  'Sponsor-Defined Group Code',           'CTRL')
         _add_tx_param(sc, sd, 'GRPLBL',   'Group Label',                          'Vehicle Control')
-        _add_tx_param(sc, sd, 'ARMCD',    'Planned Arm Code',                     'CTRL')
-        _add_tx_param(sc, sd, 'TRTDOS',   'Dose per Administration',              '0')
+        _add_tx_param(sc, sd, 'ARMCD',    'Planned Arm Code for Trial Set',                     'CTRL')
+        _add_tx_param(sc, sd, 'TRTDOS',   'Dose Level',              '0')
         _add_tx_param(sc, sd, 'TRTDOSU',  'Dose Units',                           'nmol/L')
         _add_tx_param(sc, sd, 'PLANMSUB', 'Planned Number of Male Subjects',      '0')
         _add_tx_param(sc, sd, 'PLANFSUB', 'Planned Number of Female Subjects',    '0')
@@ -655,8 +686,8 @@ def _build_tx(results: list, study_id: str) -> pd.DataFrame:
         _add_tx_param(sc, sd, 'TCNTRL',   'Control Type',                         '')
         _add_tx_param(sc, sd, 'SPGRPCD',  'Sponsor-Defined Group Code',           sc)
         _add_tx_param(sc, sd, 'GRPLBL',   'Group Label',                          f'{drug} Treatment')
-        _add_tx_param(sc, sd, 'ARMCD',    'Planned Arm Code',                     'TRT')
-        _add_tx_param(sc, sd, 'TRTDOS',   'Dose per Administration',              'MULTIPLE')
+        _add_tx_param(sc, sd, 'ARMCD',    'Planned Arm Code for Trial Set',                     'TRT')
+        _add_tx_param(sc, sd, 'TRTDOS',   'Dose Level',              'MULTIPLE')
         _add_tx_param(sc, sd, 'TRTDOSU',  'Dose Units',                           'nmol/L')
         _add_tx_param(sc, sd, 'PLANMSUB', 'Planned Number of Male Subjects',      '0')
         _add_tx_param(sc, sd, 'PLANFSUB', 'Planned Number of Female Subjects',    '0')
@@ -690,8 +721,8 @@ def _build_ds(results: list, study_id: str) -> pd.DataFrame:
             'DOMAIN':   'DS',
             'USUBJID':  usubjid,
             'DSSEQ':    _make_seq(seq_counter, 'DS'),
-            'DSTERM':   'COMPLETED',
-            'DSDECOD':  'COMPLETED',
+            'DSTERM':   'TERMINAL SACRIFICE',
+            'DSDECOD':  'TERMINAL SACRIFICE',
             'DSCAT':    'DISPOSITION EVENT',
             'EPOCH':    'TREATMENT',
             'DSSTDTC':  now,
@@ -900,7 +931,7 @@ def export_send_package(
     dm_df = _build_dm(results, study_id)
     ex_df = _build_ex(results, study_id)
     eg_df = _build_eg(results, study_id)
-    tx_df = _build_tx(results, study_id)
+    tx_df = _build_tx(results, study_id, dm_df=dm_df)
     ds_df = _build_ds(results, study_id)
 
     datasets = {
