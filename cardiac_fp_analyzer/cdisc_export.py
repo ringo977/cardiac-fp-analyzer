@@ -12,7 +12,8 @@ Domains generated:
   - MI  (Custom — Arrhythmia)  : arrhythmia classification and risk scores
 
 Also generates:
-  - define.xml  : Dataset-level metadata (simplified Define-XML 2.0)
+  - define.xml        : Dataset-level metadata (Define-XML 2.1)
+  - define2-1-0.xsl   : Pinnacle 21 official stylesheet for define.xml rendering
 
 Reference standards:
   - SENDIG v3.1 (CDISC)
@@ -30,7 +31,7 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional
-import io, warnings
+import io, warnings, shutil
 
 warnings.filterwarnings('ignore')
 
@@ -351,13 +352,14 @@ def _generate_define_xml(study_id: str, datasets: dict, output_dir: Path):
     """Generate a simplified Define-XML 2.0 metadata file."""
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
-        '<!-- Define-XML v2.0 for SEND submission -->',
+        '<?xml-stylesheet type="text/xsl" href="define2-1-0.xsl"?>',
+        '<!-- Define-XML v2.1 for SEND submission -->',
         f'<!-- Study: {study_id} -->',
         f'<!-- Generated: {datetime.now().isoformat()} -->',
-        f'<!-- Generator: Cardiac FP Analyzer v3.3 -->',
+        f'<!-- Generator: Cardiac FP Analyzer v3.6 -->',
         '',
         '<ODM xmlns="http://www.cdisc.org/ns/odm/v1.3"',
-        '     xmlns:def="http://www.cdisc.org/ns/def/v2.0"',
+        '     xmlns:def="http://www.cdisc.org/ns/def/v2.1"',
         '     xmlns:xlink="http://www.w3.org/1999/xlink"',
         f'     FileOID="DEFINE.{study_id}"',
         '     FileType="Snapshot"',
@@ -576,6 +578,13 @@ def export_send_package(
     # ── Write Define-XML ──
     define_path = _generate_define_xml(study_id, datasets, output_dir)
     files.append(define_path)
+
+    # ── Copy XSL stylesheet for Define-XML rendering ──
+    _xsl_src = Path(__file__).parent / 'define2-1-0.xsl'
+    if _xsl_src.exists():
+        _xsl_dst = output_dir / 'define2-1-0.xsl'
+        shutil.copy2(_xsl_src, _xsl_dst)
+        files.append(_xsl_dst)
 
     # ── Write CSV copies (for human review) ──
     csv_dir = output_dir / 'csv_review'
