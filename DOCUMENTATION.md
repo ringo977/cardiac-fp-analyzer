@@ -412,19 +412,21 @@ L'implementazione è a due passaggi: nella prima pass si analizzano tutti i file
 
 Il risk score è un punteggio composito basato su metriche normalizzate per incidenza, non su conteggi assoluti di eventi. Questo è conforme alla letteratura (Thomsen 2004, Hondeghem 2001, Blinova 2017): tutte le metriche sono rate-based o per-beat, quindi una registrazione di 30 secondi con 2 battiti prematuri su 15 (13%) riceve correttamente un punteggio più alto di una registrazione di 5 minuti con 2 prematuri su 150 (1.3%).
 
-Le 6 componenti del risk score:
+Le 7 componenti del risk score:
 
-1. **Irregolarità ritmica** (0–25 punti): basata sul CV del beat period. CV < 10% = 0 punti. CV = 40% = 25 punti. Scala lineare nell'intervallo [10%, 40%].
+1. **Irregolarità ritmica** (0–20 punti): basata sul CV del beat period. CV < 10% = 0 punti. CV = 40% = 20 punti. Scala lineare nell'intervallo [10%, 40%].
 
-2. **Incidenza battiti anomali** (0–15 punti): percentuale di battiti prematuri + ritardati rispetto al totale. 10% di battiti anomali = 15 punti (massimo). La metrica è intrinsecamente normalizzata per la durata della registrazione.
+2. **Incidenza battiti anomali** (0–10 punti): percentuale di battiti prematuri + ritardati rispetto al totale. 10% di battiti anomali = 10 punti (massimo). La metrica è intrinsecamente normalizzata per la durata della registrazione.
 
 3. **Morphology instability** (0–20 punti): punteggio 0–1 dal residuo, normalizzato per l'ampiezza del template. Mappatura lineare: instabilità 0.5 = 10 punti, 1.0 = 20 punti. Con baseline-relative analysis (v3.3), questa metrica è discriminatoria tra farmaci positivi e negativi.
 
-4. **EAD incidence** (0–25 punti): percentuale di battiti con eventi EAD-like. 10% di battiti con EAD = 25 punti (massimo). Non dipende dal numero assoluto di EAD ma dalla loro frequenza relativa.
+4. **EAD incidence** (0–20 punti): percentuale di battiti con eventi EAD-like. 10% di battiti con EAD = 20 punti (massimo). Non dipende dal numero assoluto di EAD ma dalla loro frequenza relativa.
 
-5. **Poincaré STV** (0–10 punti): variabilità a breve termine di FPDcF in ms. STV ≤ 5 ms = 0 punti. STV = 20 ms = 10 punti. La STV è per definizione una metrica beat-to-beat (mean|x_{i+1} - x_i| / √2), indipendente dalla durata.
+5. **Amplitude instability** (0–10 punti): CV dell'ampiezza dello spike (Visone et al. 2023). CV < 10% = 0 punti. CV = 40% = 10 punti. Cattura alterazioni della depolarizzazione indotte dal farmaco: blocco hERG (triangolazione del potenziale d'azione), blocco canali Ca²⁺ L-type (riduzione d'ampiezza, come con nifedipina), degradazione progressiva del tessuto. È una metrica statistica (CV), intrinsecamente indipendente dalla durata.
 
-6. **Cessazione** (0 o 15 punti): presenza di pause > 3× il periodo medio. Binario.
+6. **Poincaré STV** (0–10 punti): variabilità a breve termine di FPDcF in ms. STV ≤ 5 ms = 0 punti. STV = 20 ms = 10 punti. La STV è per definizione una metrica beat-to-beat (mean|x_{i+1} - x_i| / √2), indipendente dalla durata.
+
+7. **Cessazione** (0 o 10 punti): presenza di pause > 3× il periodo medio. Binario.
 
 Il punteggio massimo è 100 (cap). Le registrazioni baseline ricevono sempre risk_score = 0 con classificazione "Baseline (reference)", poiché il risk score è definito come rischio proaritmico indotto dal farmaco e non ha significato senza trattamento.
 
@@ -456,6 +458,21 @@ La classificazione testuale è anch'essa basata su metriche di incidenza. La ger
 | `ead_residual_min_amp_frac` | 0.08 | Ampiezza min (% template) |
 | `ead_residual_min_width_ms` | 8.0 | Larghezza min EAD |
 | `ead_residual_max_width_ms` | 150.0 | Larghezza max EAD |
+| `risk_score_mode` | `manual` | `manual` o `data_driven` |
+
+#### Modalità di scoring: manual vs data-driven
+
+Il sistema supporta due modalità di calcolo del risk score, selezionabili tramite `ArrhythmiaConfig.risk_score_mode`:
+
+**`manual`** (default): pesi assegnati da esperto sulla base della letteratura fisiologica. Ogni componente ha un peso massimo fisso (somma = 100) con soglie e scale lineari. È la modalità raccomandata perché il risk score per-registrazione ha uno scopo diverso dalla classificazione farmacologica: quantifica quanto un singolo segnale appaia anormale, indipendentemente dal farmaco.
+
+**`data_driven`** (sperimentale): utilizza un modello di regressione logistica addestrato sul dataset CiPA a 7 farmaci (131 registrazioni etichettate, 7 farmaci di validazione). Il modello produce una probabilità P(proaritmico) mappata a 0–100.
+
+Risultati della calibrazione data-driven (Leave-One-Drug-Out cross-validation):
+
+La regressione logistica per-registrazione ha un potere discriminatorio limitato (AUC-ROC < 0.5 in LODO CV). Questo è atteso perché la classificazione CiPA opera a livello di farmaco (analisi dose-risposta), non di singola registrazione: una registrazione di dofetilide a 0.3 nM è indistinguibile da un controllo negativo. Le feature più discriminatorie a livello di registrazione (Cohen's d al massimo della concentrazione) sono: CV beat period (d=+0.57), ampiezza CV (d=+0.47), e percentuale battiti anomali (d=+0.47). EAD incidence risulta paradossalmente più alta nei farmaci negativi (mexiletina d=-0.39), confermando che gli EAD a livello di registrazione non sono specifici per farmaci proaritmici.
+
+Implicazione pratica: per la classificazione farmacologica, il sistema di normalizzazione TdP (Sezione 6) che analizza la dose-risposta di FPDcF rimane l'approccio più affidabile. Il risk score per-registrazione è utile come indicatore di qualità del segnale e per identificare registrazioni con aritmie evidenti, non per predire la classe del farmaco. I pesi data-driven sono mantenuti come opzione per futuri dataset più ricchi.
 
 ---
 

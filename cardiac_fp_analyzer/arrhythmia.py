@@ -52,14 +52,23 @@ class ArrhythmiaReport:
         self.events.append({'beat': beat_number, 'type': event_type,
                             'details': details})
 
-    def compute_risk_score(self):
+    def compute_risk_score(self, mode='manual'):
         """Compute risk score (0-100) from incidence-normalised metrics.
+
+        Parameters
+        ----------
+        mode : str — 'manual' or 'data_driven'
+            'manual': expert-assigned weights based on literature
+            'data_driven': weights from logistic regression on CiPA dataset
 
         Literature basis:
           - CV of beat period (Thomsen 2004): beat-to-beat variability
           - EAD incidence % (Visone 2023): fraction of beats with EADs
           - Morphology instability (Visone 2023): 0-1, normalised by
             template amplitude
+          - Amplitude instability (Visone 2023): CV of spike amplitude
+            — captures drug-induced depolarisation changes (hERG block,
+            Ca²⁺ block, progressive tissue degradation)
           - Poincaré STV (Hondeghem 2001): ms, inherently per-beat
           - Cessation: binary flag with confidence
 
@@ -73,38 +82,112 @@ class ArrhythmiaReport:
             self.risk_score = 0
             return
 
+        if mode == 'data_driven':
+            self._compute_risk_score_data_driven(d, n_beats)
+        else:
+            self._compute_risk_score_manual(d, n_beats)
+
+    def _compute_risk_score_manual(self, d, n_beats):
+        """Manual (expert) weights — default mode.
+
+        Component weights (sum=100):
+          CV beat period:     20  (Thomsen 2004)
+          Premature/delayed:  10  (Hondeghem 2001)
+          Morphology:         20  (Visone 2023)
+          EAD incidence:      20  (Visone 2023)
+          Amplitude CV:       10  (Visone 2023)
+          Poincaré STV:       10  (Hondeghem 2001)
+          Cessation:          10  (binary)
+        """
         score = 0.0
 
-        # 1. Rhythm irregularity: CV of beat period (0-100)
-        #    CV < 10% = normal, 15% = warning, 30% = critical, >40% = max
+        # 1. Rhythm irregularity: CV of beat period (0-20)
         cv_bp = d.get('cv_bp_pct', 0)
         if cv_bp > 10:
-            score += min(25, (cv_bp - 10) / 30 * 25)  # 10→0, 40→25
+            score += min(20, (cv_bp - 10) / 30 * 20)
 
-        # 2. Premature/delayed beat incidence (0-100)
+        # 2. Premature/delayed beat incidence (0-10)
         n_prem = d.get('n_premature', 0)
         n_del = d.get('n_delayed', 0)
         prem_pct = (n_prem + n_del) / n_beats * 100
-        score += min(15, prem_pct * 1.5)  # 10% → 15
+        score += min(10, prem_pct * 1.0)
 
         # 3. Morphology instability (0-1 → 0-20)
         morph = d.get('morphology_instability', 0)
-        score += morph * 20  # 0.5 → 10, 1.0 → 20
+        score += morph * 20
 
-        # 4. EAD incidence (% of beats → 0-25)
+        # 4. EAD incidence (% → 0-20)
         ead_pct = d.get('ead_incidence_pct', 0)
-        score += min(25, ead_pct * 2.5)  # 10% → 25
+        score += min(20, ead_pct * 2.0)
 
-        # 5. Poincaré STV of FPDcF (ms → 0-10)
+        # 5. Amplitude instability (CV → 0-10)
+        amp_cv = d.get('amplitude_cv_pct', 0)
+        if amp_cv > 10:
+            score += min(10, (amp_cv - 10) / 30 * 10)
+
+        # 6. Poincaré STV of FPDcF (ms → 0-10)
         stv = d.get('poincare_stv_fpdc_ms', 0)
         if not np.isnan(stv) and stv > 5:
-            score += min(10, (stv - 5) / 15 * 10)  # 5→0, 20→10
+            score += min(10, (stv - 5) / 15 * 10)
 
-        # 6. Cessation / pauses (binary, high impact)
+        # 7. Cessation / pauses (binary → 0-10)
         if d.get('has_pauses', False):
-            score += 15
+            score += 10
 
         self.risk_score = int(min(100, round(score)))
+
+    def _compute_risk_score_data_driven(self, d, n_beats):
+        """Data-driven weights from CiPA logistic regression.
+
+        Uses the fitted model to compute P(proarrhythmic) and maps
+        the probability to a 0-100 score.
+
+        If fitted_weights.json is not available, falls back to manual.
+        """
+        import json
+        from pathlib import Path
+
+        weights_path = Path(__file__).parent / 'fitted_weights.json'
+        if not weights_path.exists():
+            # Fallback to manual if no fitted weights
+            self._compute_risk_score_manual(d, n_beats)
+            return
+
+        try:
+            with open(weights_path) as f:
+                w = json.load(f)
+
+            coefs = np.array(w['coef_original_scale'])
+            intercept = w['intercept_original_scale']
+
+            # Extract features in the same order as training
+            n_prem = d.get('n_premature', 0)
+            n_del = d.get('n_delayed', 0)
+            prem_pct = (n_prem + n_del) / n_beats * 100
+            stv = d.get('poincare_stv_fpdc_ms', 0)
+            if np.isnan(stv):
+                stv = 0
+
+            features = np.array([
+                d.get('cv_bp_pct', 0),
+                prem_pct,
+                d.get('morphology_instability', 0),
+                d.get('ead_incidence_pct', 0),
+                d.get('amplitude_cv_pct', 0),
+                stv,
+                1.0 if d.get('has_pauses', False) else 0.0,
+            ])
+
+            # Logistic regression: P(+) = sigmoid(coefs · features + intercept)
+            logit = np.dot(coefs, features) + intercept
+            prob = 1.0 / (1.0 + np.exp(-logit))
+
+            # Map probability to 0-100 score
+            self.risk_score = int(min(100, max(0, round(prob * 100))))
+
+        except Exception:
+            # Any error → fallback to manual
+            self._compute_risk_score_manual(d, n_beats)
 
     def summary_text(self):
         lines = [f"Classification: {self.classification}",
@@ -514,14 +597,20 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs,
                 report.add_event(i + 1, 'ead_suspect_stat',
                                  f'FPD={fpd:.0f}ms')
 
-    # Amplitude instability
+    # Amplitude instability (Visone et al. 2023: amplitude variation
+    # signals altered depolarization — hERG blockers, Ca²⁺ channel
+    # blockers, or progressive tissue degradation)
     amps = [p['spike_amplitude_mV'] for p in all_params
             if not np.isnan(p.get('spike_amplitude_mV', np.nan))]
+    amp_cv = 0.0
     if len(amps) > 5:
         amp_cv = np.std(amps) / np.mean(amps) * 100
+        report.details['amplitude_cv_pct'] = amp_cv
         if amp_cv > cfg.amplitude_instability_cv:
             report.add_flag('amplitude_instability', 'warning',
                             f'Amplitude CV = {amp_cv:.1f}%')
+    else:
+        report.details['amplitude_cv_pct'] = 0.0
 
     # ── Residual analysis (paper approach) ─────────────────────────────
 
@@ -607,6 +696,7 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs,
         report.classification = 'Borderline / Mild Abnormalities'
 
     # ── Compute risk score from incidence-based metrics ──
-    report.compute_risk_score()
+    score_mode = getattr(cfg, 'risk_score_mode', 'manual')
+    report.compute_risk_score(mode=score_mode)
 
     return report

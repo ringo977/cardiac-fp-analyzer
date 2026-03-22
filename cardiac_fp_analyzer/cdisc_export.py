@@ -439,9 +439,11 @@ def _generate_define_xml(study_id: str, datasets: dict, output_dir: Path):
 
 def _write_xpt(df: pd.DataFrame, filepath: Path, dataset_name: str,
                dataset_label: str = ''):
-    """Write a DataFrame to SAS Transport v5 (.xpt) format."""
-    import xport
+    """Write a DataFrame to SAS Transport v5 (.xpt) format.
 
+    Attempts to use xport library first, falls back to pyreadstat if available,
+    otherwise writes as CSV with .xpt extension and a warning.
+    """
     # SAS Transport v5 constraints:
     # - Column names max 8 chars (we truncate)
     # - String values max 200 chars
@@ -472,8 +474,37 @@ def _write_xpt(df: pd.DataFrame, filepath: Path, dataset_name: str,
         else:
             df_sas[col] = pd.to_numeric(df_sas[col], errors='coerce')
 
-    with open(filepath, 'wb') as f:
-        xport.from_dataframe(df_sas, f)
+    # Try to write using xport library
+    try:
+        import xport
+        with open(filepath, 'wb') as f:
+            xport.from_dataframe(df_sas, f)
+        return
+    except ImportError:
+        pass
+
+    # Fallback: try pyreadstat
+    try:
+        import pyreadstat
+        pyreadstat.write_xport(df_sas, filepath, table_name=dataset_name[:8])
+        return
+    except ImportError:
+        pass
+
+    # Final fallback: write as CSV with .xpt extension and warning
+    warnings.warn(
+        f"xport and pyreadstat not available. Writing {filepath.name} as CSV. "
+        "This file will need manual conversion to proper SAS Transport format.",
+        UserWarning
+    )
+
+    # Write as CSV with a comment header explaining the fallback
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write("# WARNING: This is a CSV fallback (xport/pyreadstat not installed)\n")
+        f.write(f"# Dataset: {dataset_name} - {dataset_label}\n")
+        f.write(f"# Generated: {datetime.now().isoformat()}\n")
+        f.write("# For proper CDISC SEND submission, convert to SAS Transport v5 format\n\n")
+        df_sas.to_csv(f, index=False)
 
 
 # ═══════════════════════════════════════════════════════════════════════

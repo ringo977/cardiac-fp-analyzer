@@ -332,6 +332,16 @@ class ArrhythmiaConfig:
     # (EADs with critical severity + positive FPDcF trend, or cessation)
     tdp_require_severe_only: bool = True
 
+    # ── Risk score mode ──
+    # 'manual'      : expert-assigned weights (default — physiological rationale)
+    # 'data_driven' : weights fitted via logistic regression on CiPA dataset
+    #                 (loaded from fitted_weights.json)
+    # The manual weights are recommended as default because per-recording
+    # risk scoring serves a different purpose than drug-level classification.
+    # Data-driven weights are experimental and require the fitted_weights.json
+    # file from the CiPA calibration analysis.
+    risk_score_mode: str = 'manual'
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #   CHANNEL SELECTION

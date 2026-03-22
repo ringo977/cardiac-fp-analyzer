@@ -1,0 +1,98 @@
+{
+  "feature_names": [
+    "cv_bp_pct",
+    "premature_delayed_pct",
+    "morphology_instability",
+    "ead_incidence_pct",
+    "amplitude_cv_pct",
+    "poincare_stv_ms",
+    "has_pauses"
+  ],
+  "model_type": "logistic_regression",
+  "training_data": "CiPA 7-drug, highest concentration per drug-chip",
+  "scaler_mean": [
+    51.51747208218191,
+    30.614766301838667,
+    0.3942847491946491,
+    2.4374176548089594,
+    21.171308260498087,
+    58.16124982234922,
+    0.36363636363636365
+  ],
+  "scaler_scale": [
+    42.81724711327974,
+    31.033743464483617,
+    0.22765502286593434,
+    11.169650903383797,
+    11.618318942085727,
+    35.01044945478304,
+    0.4810456929208347
+  ],
+  "coef_scaled": [
+    0.719301288983455,
+    0.2759716374077752,
+    -0.10553802312101312,
+    -0.43841805443466614,
+    0.3687849311554567,
+    -0.14724891938608536,
+    -0.5788975471965222
+  ],
+  "intercept_scaled": -0.0953616388989406,
+  "coef_original_scale": [
+    0.016799335255730727,
+    0.008892631265177831,
+    -0.4635875009143299,
+    -0.03925082871675509,
+    0.03174167734538472,
+    -0.00420585629945315,
+    -1.2034148849385726
+  ],
+  "intercept_original_scale": -0.9444001716493007,
+  "weights_normalized_100": [
+    29.249990292867246,
+    15.48331372789103,
+    0.0,
+    0.0,
+    55.26669597924173,
+    0.0,
+    0.0
+  ],
+  "lodo_accuracy_highest_conc": 0.36363636363636365,
+  "lodo_auc_roc_highest_conc": 0.13392857142857142,
+  "lodo_accuracy_all_recordings_3feat": 0.46564885496183206,
+  "lodo_auc_roc_all_recordings_3feat": 0.22665662650602408,
+  "n_drug_chip_combos": 22,
+  "n_positive": 8,
+  "n_negative": 14,
+  "n_total_recordings": 131,
+  "drugs_used": [
+    "alfuzosin",
+    "dofetilide",
+    "mexiletine",
+    "nifedipine",
+    "quinidine",
+    "ranolazine",
+    "terfenadine"
+  ],
+  "positive_drugs": [
+    "terfenadine",
+    "quinidine",
+    "dofetilide"
+  ],
+  "negative_drugs": [
+    "alfuzosin",
+    "mexiletine",
+    "nifedipine",
+    "ranolazine"
+  ],
+  "manual_weights": [
+    20.0,
+    10.0,
+    20.0,
+    20.0,
+    10.0,
+    10.0,
+    10.0
+  ],
+  "note": "Weights fitted on CiPA 7-drug validation dataset (highest concentration per drug-chip combination) via logistic regression with balanced class weights. LODO cross-validation for unbiased performance. Key finding: morphology_instability and amplitude_cv_pct are the most discriminatory per-recording features. EAD incidence, premature beats, STV, and cessation are NOT reliably discriminatory at recording level (negative controls like mexiletine and nifedipine have similar or higher values). For drug-level classification, dose-response analysis (not single-recording scoring) is needed."
+}
