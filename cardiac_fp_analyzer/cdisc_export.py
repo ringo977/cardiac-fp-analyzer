@@ -163,7 +163,14 @@ def _parse_concentration(conc_str) -> tuple:
     """Parse concentration string like '100 nM' into (numeric_value, unit).
 
     Returns (float_value, unit_string) or (None, None) if unparseable.
+    Units are normalized to standard case: nM, uM, mM, M.
     """
+    # Standard unit normalization (case-insensitive -> canonical)
+    _UNIT_MAP = {
+        'nm': 'nM', 'um': 'uM', 'mm': 'mM', 'm': 'M',
+        'ug/ml': 'ug/mL', 'mg/ml': 'mg/mL', 'ng/ml': 'ng/mL',
+    }
+
     if conc_str is None or conc_str == '':
         return None, None
     s = str(conc_str).strip()
@@ -171,11 +178,12 @@ def _parse_concentration(conc_str) -> tuple:
     if m:
         try:
             val = float(m.group(1))
-            unit = m.group(2).strip() if m.group(2).strip() else None
-            return val, unit
+            raw_unit = m.group(2).strip() if m.group(2).strip() else None
+            if raw_unit:
+                raw_unit = _UNIT_MAP.get(raw_unit.lower(), raw_unit)
+            return val, raw_unit
         except ValueError:
             pass
-    # Try to extract just a number
     try:
         return float(s), None
     except ValueError:
@@ -314,7 +322,7 @@ def _build_dm(results: list, study_id: str) -> pd.DataFrame:
 
 def _build_ex(results: list, study_id: str) -> pd.DataFrame:
     """Build Exposure (EX) domain — one row per drug exposure event."""
-    from .normalization import _is_baseline
+    from .normalization import _is_baseline, _is_control
 
     rows = []
     seq_counter = {}
@@ -322,7 +330,7 @@ def _build_ex(results: list, study_id: str) -> pd.DataFrame:
     now = datetime.now().strftime('%Y-%m-%d')
 
     for r in results:
-        if _is_baseline(r):
+        if _is_baseline(r) or _is_control(r):
             continue
         fi = r.get('file_info', {})
         drug_raw = str(fi.get('drug', ''))
@@ -372,7 +380,7 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
     Each row = one measurement (test) for one recording.
     Multiple rows per file: FPD, FPDcF, BP, amplitude, etc.
     """
-    from .normalization import _is_baseline
+    from .normalization import _is_baseline, _is_control
 
     rows = []
     seq_counter = {}
@@ -387,7 +395,7 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
         qc = r.get('qc_report')
 
         usubjid = _make_usubjid(study_id, r)
-        is_bl = _is_baseline(r)
+        is_bl = _is_baseline(r) or _is_control(r)
         drug_raw = str(fi.get('drug', ''))
         drug = _canonical_drug_send(drug_raw) if drug_raw else 'BASELINE'
         conc = fi.get('concentration', '')
