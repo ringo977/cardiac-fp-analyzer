@@ -211,6 +211,12 @@ TRANSLATIONS = {
         'export_csv': 'Parametri CSV',
         'export_excel_single': 'Report Excel',
         'export_summary': 'Riepilogo CSV',
+        'both_channels': 'Entrambi',
+        'channel_comparison': 'Confronto canali',
+        'analyzing_ch': 'Analisi {ch}...',
+        'channel_failed': 'Analisi {ch} fallita',
+        'no_valid_channel': 'Nessun canale valido.',
+        'select_channel': 'Seleziona canale da visualizzare',
     },
     'en': {
         'app_title': 'Cardiac FP Analyzer',
@@ -380,6 +386,12 @@ TRANSLATIONS = {
         'export_csv': 'Parameters CSV',
         'export_excel_single': 'Excel Report',
         'export_summary': 'Summary CSV',
+        'both_channels': 'Both',
+        'channel_comparison': 'Channel comparison',
+        'analyzing_ch': 'Analyzing {ch}...',
+        'channel_failed': 'Analysis failed for {ch}',
+        'no_valid_channel': 'No valid channel.',
+        'select_channel': 'Select channel to view',
     }
 }
 
@@ -681,26 +693,50 @@ def page_single_file(config: AnalysisConfig):
         tmp.write(uploaded.read())
         tmp_path = tmp.name
 
-    channel = st.radio(T('channel'), ['auto', 'ch1', 'ch2'], horizontal=True)
+    channel = st.radio(T('channel'),
+                       ['auto', 'ch1', 'ch2', T('both_channels')],
+                       horizontal=True)
 
     if st.button(f"▶️ {T('analyze')}", type="primary", use_container_width=True):
-        with st.spinner(T('analyzing')):
-            result = analyze_single_file(tmp_path, channel=channel, verbose=False, config=config)
-
-        if result is None:
-            st.error(T('analysis_error'))
-            return
-
-        st.success(f"{T('analysis_complete')} — Canale: {result['file_info'].get('analyzed_channel', '?')}")
-
-        # Store in session
-        st.session_state['single_result'] = result
+        if channel == T('both_channels'):
+            # Analyze both channels
+            results_both = {}
+            for ch in ['ch1', 'ch2']:
+                with st.spinner(T('analyzing_ch', ch=ch.upper())):
+                    r = analyze_single_file(tmp_path, channel=ch, verbose=False, config=config)
+                if r is not None:
+                    results_both[ch] = r
+                else:
+                    st.warning(T('channel_failed', ch=ch.upper()))
+            if not results_both:
+                st.error(T('no_valid_channel'))
+                return
+            st.session_state['single_result'] = None
+            st.session_state['single_result_both'] = results_both
+            channels_ok = list(results_both.keys())
+            st.success(f"{T('analysis_complete')} — {', '.join(c.upper() for c in channels_ok)}")
+        else:
+            with st.spinner(T('analyzing')):
+                result = analyze_single_file(tmp_path, channel=channel, verbose=False, config=config)
+            if result is None:
+                st.error(T('analysis_error'))
+                return
+            st.success(f"{T('analysis_complete')} — Canale: {result['file_info'].get('analyzed_channel', '?')}")
+            st.session_state['single_result'] = result
+            st.session_state['single_result_both'] = None
 
     # ── Display results ──
-    result = st.session_state.get('single_result')
-    if result is None:
-        return
+    results_both = st.session_state.get('single_result_both')
+    single_result = st.session_state.get('single_result')
 
+    if results_both:
+        _display_both_channels(results_both, config)
+    elif single_result:
+        _display_single_channel(single_result, config)
+
+
+def _display_single_channel(result, config):
+    """Display results for a single channel analysis."""
     fi = result['file_info']
     summary = result['summary']
     qc = result['qc_report']
@@ -732,6 +768,68 @@ def page_single_file(config: AnalysisConfig):
         _show_arrhythmia(result)
 
     # ── Export section ──
+    _single_file_exports(result, config)
+
+
+def _display_both_channels(results_both, config):
+    """Display results for dual-channel analysis with comparison."""
+    channels = list(results_both.keys())
+
+    # ── Comparison table ──
+    st.subheader(f"📊 {T('channel_comparison')}")
+    comp_rows = []
+    for ch in channels:
+        r = results_both[ch]
+        s, qc, ar = r['summary'], r['qc_report'], r['arrhythmia_report']
+        comp_rows.append({
+            T('channel'): ch.upper(),
+            'QC Grade': qc.grade,
+            'Beats': s.get('beat_period_ms_n', 0),
+            'BP (ms)': f"{s.get('beat_period_ms_mean', 0):.0f} ± {s.get('beat_period_ms_std', 0):.0f}",
+            'CV BP%': f"{s.get('beat_period_ms_cv', 0):.1f}",
+            'FPDcF (ms)': f"{s.get('fpdc_ms_mean', 0):.0f} ± {s.get('fpdc_ms_std', 0):.0f}",
+            'Spike (mV)': f"{s.get('spike_amplitude_mV_mean', 0):.4f}",
+            'Risk': f"{ar.risk_score}/100",
+        })
+    st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)
+
+    # ── Channel selector ──
+    ch_labels = [ch.upper() for ch in channels]
+    selected_label = st.radio(T('select_channel'), ch_labels, horizontal=True)
+    selected_ch = selected_label.lower()
+    result = results_both[selected_ch]
+
+    fi = result['file_info']
+    summary = result['summary']
+    qc = result['qc_report']
+    ar = result['arrhythmia_report']
+
+    # ── Info cards ──
+    cols = st.columns(5)
+    cols[0].metric(T('chip_channel'), f"{fi.get('chip', '?')} / {selected_label}")
+    cols[1].metric(T('drug'), fi.get('drug', 'N/A'))
+    cols[2].metric("QC Grade", qc.grade)
+    cols[3].metric(T('fpdc'), f"{summary.get('fpdc_ms_mean', 0):.0f} ± {summary.get('fpdc_ms_std', 0):.0f}")
+    cols[4].metric(T('risk_score'), f"{ar.risk_score}/100")
+
+    # ── Analysis tabs for selected channel ──
+    tab_signal, tab_beats, tab_params, tab_arrhythmia = st.tabs([
+        f"📈 {T('signal')}", f"💓 {T('beats')}", f"📋 {T('params')}", f"⚡ {T('arrhythmia')}"
+    ])
+
+    with tab_signal:
+        _plot_signal(result, key_suffix=f"_{selected_ch}")
+
+    with tab_beats:
+        _plot_beats(result)
+
+    with tab_params:
+        _show_params_table(result)
+
+    with tab_arrhythmia:
+        _show_arrhythmia(result)
+
+    # ── Export section (selected channel) ──
     _single_file_exports(result, config)
 
 
@@ -827,7 +925,7 @@ def _single_file_exports(result, config):
                     st.error(f"{T('error')}: {e}")
 
 
-def _plot_signal(result):
+def _plot_signal(result, key_suffix=""):
     """Plot filtered signal with beat markers and interactive beat editor."""
     import plotly.graph_objects as go
 
@@ -836,6 +934,7 @@ def _plot_signal(result):
     sig = sig_filt * scale
     t = result['time_vector']
     fs = result['metadata']['sample_rate']
+    ks = key_suffix  # shorthand for widget key suffix
 
     # ── Build unified beat set with inclusion state ──
     # Merge auto-detected (pre-QC) + manually added beats into one set.
@@ -844,20 +943,24 @@ def _plot_signal(result):
 
     # Initialize beat editor state on first run or when result changes
     result_id = id(result['filtered_signal'])  # changes when result changes
-    if (st.session_state.get('_beat_editor_result_id') != result_id
-            or 'beat_all_indices' not in st.session_state):
-        st.session_state['_beat_editor_result_id'] = result_id
-        st.session_state['beat_all_indices'] = sorted(set(bi_raw))
-        st.session_state['beat_excluded'] = set()
+    rid_key = f'_beat_editor_result_id{ks}'
+    all_key = f'beat_all_indices{ks}'
+    excl_key = f'beat_excluded{ks}'
 
-    all_bi = sorted(st.session_state['beat_all_indices'])
-    excluded = st.session_state['beat_excluded']
+    if (st.session_state.get(rid_key) != result_id
+            or all_key not in st.session_state):
+        st.session_state[rid_key] = result_id
+        st.session_state[all_key] = sorted(set(bi_raw))
+        st.session_state[excl_key] = set()
+
+    all_bi = sorted(st.session_state[all_key])
+    excluded = st.session_state[excl_key]
 
     included_bi = np.array([i for i in all_bi if i not in excluded], dtype=int)
     excluded_bi = np.array([i for i in all_bi if i in excluded], dtype=int)
 
     # Toggle for raw signal overlay
-    show_raw = st.checkbox(T('show_raw_signal'), value=False)
+    show_raw = st.checkbox(T('show_raw_signal'), value=False, key=f'show_raw{ks}')
 
     fig = go.Figure()
     step = max(1, len(sig) // 50000)
@@ -935,7 +1038,7 @@ def _plot_signal(result):
                 '#': st.column_config.NumberColumn('#', width='small'),
                 T('time_s'): st.column_config.TextColumn(T('time_s'), width='medium'),
             },
-            key='beat_editor_table'
+            key=f'beat_editor_table{ks}'
         )
 
         # Sync checkbox changes back to session state
@@ -943,7 +1046,7 @@ def _plot_signal(result):
         for row_i, included in enumerate(edited[T('beat_include')]):
             if not included:
                 new_excluded.add(all_bi[row_i])
-        st.session_state['beat_excluded'] = new_excluded
+        st.session_state[excl_key] = new_excluded
 
         st.divider()
 
@@ -955,17 +1058,17 @@ def _plot_signal(result):
                 max_value=float(t[-1]),
                 value=float(t[len(t)//2]),
                 step=0.001, format="%.3f",
-                key='add_beat_time_input'
+                key=f'add_beat_time_input{ks}'
             )
         with col_btn:
             st.write("")
-            if st.button(T('add_beat_btn'), key='add_beat_btn'):
+            if st.button(T('add_beat_btn'), key=f'add_beat_btn{ks}'):
                 new_idx = int(np.argmin(np.abs(t - new_beat_t)))
-                if new_idx not in st.session_state['beat_all_indices']:
-                    st.session_state['beat_all_indices'].append(new_idx)
-                    st.session_state['beat_all_indices'].sort()
+                if new_idx not in st.session_state[all_key]:
+                    st.session_state[all_key].append(new_idx)
+                    st.session_state[all_key].sort()
                 # Make sure it's not excluded
-                st.session_state['beat_excluded'].discard(new_idx)
+                st.session_state[excl_key].discard(new_idx)
                 st.rerun()
 
         # --- Summary & re-analyze ---
@@ -976,16 +1079,21 @@ def _plot_signal(result):
         if has_changes:
             st.info(T('beats_modified', orig=n_orig, new=n_inc))
 
-            if st.button(T('reanalyze_btn'), type='primary', key='reanalyze_btn'):
+            if st.button(T('reanalyze_btn'), type='primary', key=f'reanalyze_btn{ks}'):
                 final_bi = np.array([i for i in all_bi if i not in new_excluded], dtype=int)
                 config = st.session_state.get('_analysis_config', AnalysisConfig())
                 with st.spinner(T('analyzing')):
                     updated = _reanalyze_with_modified_beats(result, final_bi, config)
-                st.session_state['single_result'] = updated
+                # Store updated result in the right place
+                if ks and st.session_state.get('single_result_both'):
+                    ch_name = ks.lstrip('_')  # e.g. '_ch1' -> 'ch1'
+                    st.session_state['single_result_both'][ch_name] = updated
+                else:
+                    st.session_state['single_result'] = updated
                 # Reset editor state so it re-syncs with new result
-                st.session_state.pop('_beat_editor_result_id', None)
-                st.session_state.pop('beat_all_indices', None)
-                st.session_state.pop('beat_excluded', None)
+                st.session_state.pop(rid_key, None)
+                st.session_state.pop(all_key, None)
+                st.session_state.pop(excl_key, None)
                 st.success(T('reanalysis_done', n=len(updated['beat_indices'])))
                 st.rerun()
 
