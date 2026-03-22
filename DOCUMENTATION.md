@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.4
+**Versione**: 3.5
 **Piattaforma**: Python 3.10+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -121,7 +121,8 @@ CSV file
   │     Estrazione chip, canale, farmaco, concentrazione
   │
   ├─ 3. Selezione canale (analyze.py)
-  │     Scoring automatico ch1 vs ch2 (se channel='auto')
+  │     Scoring automatico ch1 vs ch2 (se channel='auto'),
+  │     oppure analisi di entrambi i canali (se channel='both')
   │
   ├─ 4. Correzione guadagno (analyze.py)
   │     Segnale = segnale_raw / amplifier_gain
@@ -188,6 +189,38 @@ Estrae informazioni strutturate dal nome del file. Convenzione: `chipX_chN_farma
 **Esempio**: `chipA_ch1_terfe_300nM.csv` → `{chip: 'A', channel: 1, drug: 'terfenadine', concentration: '300 nM', is_baseline: False}`
 
 **Razionale**: I nomi dei file codificano l'identità del microtessuto (chip+canale) e la condizione sperimentale. Questa informazione è essenziale per il pairing baseline–farmaco nella normalizzazione.
+
+#### Selezione automatica del canale
+
+**Funzione**: `analyze.py` → `_select_best_channel(df, fs, cfg)`
+
+Il sistema µECG-Pharma registra su due canali (ch1, ch2). In modalità `auto`, il software esegue una mini-analisi su ciascun canale e assegna un punteggio basato su 4 criteri (massimo 110 punti):
+
+| Criterio | Condizione | Punti |
+|----------|-----------|-------|
+| Beat period fisiologico | 0.3–4.0 s | +30 |
+| Regolarità ritmo (CV BP) | CV < 10% | +40 |
+|  | CV < 20% | +30 |
+|  | CV < 35% | +15 |
+| Beat rate ragionevole | 0.3–3.5 battiti/s | +20 |
+| SNR segnale | SNR > 5 | +20 |
+|  | SNR > 3 | +10 |
+
+Il canale con lo score più alto viene selezionato. Se un canale ha meno di 3 battiti rilevati, resta a score 0. Il peso maggiore è sulla regolarità del ritmo (40 pt), poiché un canale con battiti regolari indica un buon contatto elettrico.
+
+**Modalità disponibili**: `auto` (scoring), `ch1`, `ch2`, `both` (analizza entrambi i canali separatamente, v3.5).
+
+I parametri di scoring sono configurabili tramite `ChannelSelectionConfig`:
+
+| Parametro | Default | Descrizione |
+|-----------|---------|-------------|
+| `bp_ideal_range_s` | (0.3, 4.0) | Range fisiologico beat period |
+| `cv_excellent` | 10.0 | Soglia CV% per punteggio massimo |
+| `cv_good` | 20.0 | Soglia CV% per punteggio buono |
+| `cv_fair` | 35.0 | Soglia CV% per punteggio sufficiente |
+| `rate_range_per_s` | (0.3, 3.5) | Range beat rate accettabile |
+| `snr_good` | 5.0 | Soglia SNR per punteggio massimo |
+| `snr_fair` | 3.0 | Soglia SNR per punteggio sufficiente |
 
 ---
 
@@ -849,7 +882,7 @@ L'applicazione si apre nel browser alla porta 8501.
 
 L'interfaccia è organizzata in tre pagine, selezionabili dal menu laterale.
 
-**1. Analisi Singolo File** — Caricamento di un singolo file CSV per analisi immediata. Mostra: il tracciato del segnale filtrato con beat markers sovrapposti (con opzione di overlay del segnale grezzo non filtrato per verifica), l'overlay dei battiti segmentati, la tabella dei parametri estratti (BP, FPDcF, ampiezza, durata spike) con statistiche, il report aritmico completo (rischio, classificazione, metriche residuali, incidenza EAD). Include un editor interattivo dei battiti (v3.4) per aggiungere/rimuovere manualmente i marker e ri-analizzare in tempo reale.
+**1. Analisi Singolo File** — Caricamento di un singolo file CSV per analisi immediata. Quattro modalità di selezione canale: `auto` (scoring automatico), `ch1`, `ch2`, o `Entrambi` (analisi duale, v3.5). Mostra: il tracciato del segnale filtrato con beat markers sovrapposti (con opzione di overlay del segnale grezzo non filtrato per verifica), l'overlay dei battiti segmentati, la tabella dei parametri estratti (BP, FPDcF, ampiezza, durata spike) con statistiche, il report aritmico completo (rischio, classificazione, metriche residuali, incidenza EAD). Include un editor interattivo dei battiti (v3.4) per aggiungere/rimuovere manualmente i marker e ri-analizzare in tempo reale. Sezione di export con parametri CSV, riepilogo CSV e report Excel (v3.5).
 
 **2. Analisi Batch + Risk Map** — Tre modalità di caricamento: selezione cartella tramite dialog nativo del sistema operativo (tkinter `filedialog.askdirectory`), upload multiplo di file CSV, oppure upload di archivio ZIP. Dopo il caricamento, la pipeline `batch_analyze()` processa tutte le registrazioni. I risultati sono presentati su tre tab: la risk map CiPA interattiva (Plotly), con zone colorate LOW/INTERMEDIATE/HIGH e scatter per farmaco; il riepilogo tabellare con QC, inclusione, normalizzazione e classificazione per ogni registrazione; la vista dettagliata di ogni singola registrazione. È possibile specificare opzionalmente il ground truth dei farmaci per colorare i marker sulla risk map. Nella sezione download: report Excel, report PDF, configurazione JSON, e pacchetto CDISC SEND.
 
@@ -869,9 +902,28 @@ I risultati aggiornati sostituiscono quelli originali e tutti i tab si aggiornan
 
 Un checkbox "Mostra segnale grezzo (non filtrato)" permette di sovrapporre il segnale originale (arancione, semitrasparente) al segnale filtrato (blu) per verificare visivamente l'effetto dei filtri.
 
+### Analisi duale canali (v3.5)
+
+Selezionando "Entrambi" nel selettore di canale, il sistema analizza ch1 e ch2 indipendentemente e presenta:
+
+- **Tabella comparativa** in testa alla pagina con metriche side-by-side: QC Grade, numero battiti, BP ± SD, CV%, FPDcF ± SD, ampiezza spike, risk score. Permette di valutare a colpo d'occhio quale canale ha la qualità migliore.
+- **Selettore canale** (radio CH1 / CH2) per passare alla vista dettagliata di ciascun canale, con i 4 tab standard (Segnale, Battiti, Parametri, Aritmie) e l'export.
+- **Editor battiti indipendente**: ciascun canale ha il proprio stato dell'editor (inclusione/esclusione battiti, battiti aggiunti manualmente). Le modifiche su un canale non influenzano l'altro.
+- **Ri-analisi per canale**: il pulsante "Ri-analizza" aggiorna solo il canale attualmente selezionato; la tabella comparativa riflette i risultati aggiornati.
+
+Questa modalità è utile per verificare la coerenza dei risultati tra canali e per escludere manualmente un canale con artefatti, senza dover ri-analizzare il file.
+
+### Export risultati singolo file (v3.5)
+
+L'analisi del singolo file include ora una sezione di export con tre opzioni:
+
+- **Parametri CSV**: tabella per-battito con RR, spike amplitude, FPD, FPDcF, rise time, dV/dt, correlazione morfologica, confidenza FPD.
+- **Riepilogo CSV**: una riga con tutte le statistiche riassuntive (medie, SD, CV%), QC grade, risk score e classificazione.
+- **Report Excel**: report completo nello stesso formato multi-sheet utilizzato dall'analisi batch.
+
 ### Pannello di configurazione
 
-Il sidebar contiene tutti i parametri dell'`AnalysisConfig`, organizzati in sezioni espandibili: pre-processing (filtri con opzione di disattivazione notch, gain amplificatore), beat detection (metodo, distanza minima, soglia adattiva, soglia morfologica, toggle filtro morfologico), parametri FPD (finestre di ricerca, soglie di confidenza), aritmie (soglie EAD, modalità risk score manual/data-driven), criteri di inclusione, normalizzazione. I parametri possono essere importati/esportati come file JSON.
+Il sidebar contiene tutti i parametri dell'`AnalysisConfig`, organizzati in sezioni espandibili: pre-processing (filtri con opzione di disattivazione notch, gain amplificatore), beat detection (metodo, distanza minima, soglia adattiva, soglia morfologica, toggle filtro morfologico), parametri FPD (finestre di ricerca, soglie di confidenza), aritmie (soglie EAD, modalità risk score manual/data-driven), criteri di inclusione, normalizzazione. I parametri possono essere esportati come file JSON e ri-importati: al caricamento del JSON, tutti i widget della sidebar si aggiornano automaticamente con i valori importati (v3.5).
 
 ### Internazionalizzazione (v3.4)
 
