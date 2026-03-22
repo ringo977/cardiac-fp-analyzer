@@ -76,7 +76,8 @@ _DM_VAR_LABELS = {
     'SEX':      'Sex',
     'SPECIES':  'Species',
     'STRAIN':   'Strain/Substrain',
-    'ARMCD':    'Planned Arm Code for Trial Set',
+    'SITEID':   'Study Site Identifier',
+    'ARMCD':    'Planned Arm Code',
     'ARM':      'Description of Planned Arm',
     'SETCD':    'Set Code',
     'AGE':      'Age',
@@ -97,6 +98,7 @@ _EX_VAR_LABELS = {
     'EXDOSFRQ': 'Dosing Frequency per Interval',
     'EXROUTE':  'Route of Administration',
     'EXTPT':    'Planned Time Point Name',
+    'EXTPTNUM': 'Planned Time Point Number',
     'EPOCH':    'Epoch',
     'EXSTDTC':  'Start Date/Time of Treatment',
     'EXSTDY':   'Study Day of Start of Treatment',
@@ -282,7 +284,9 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
     TSPARM labels must match CDISC Controlled Terminology EXACTLY.
     """
     now = start_date or datetime.now().strftime('%Y-%m-%d')
+    # End dates include T23:59 so they are always >= any EX timestamps (SE1149)
     end = end_date or now
+    end_with_time = f"{end}T23:59" if 'T' not in end else end
 
     # (TSPARMCD, TSPARM [exact CDISC CT label], TSVAL, TSVALNF)
     # Labels sourced from NCI Thesaurus C66738 (SEND CT 2025-09-26)
@@ -314,11 +318,11 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
         # Timing
         ('DOSDUR',  'Duration of Dosing',                        'P1D',                    ''),
         ('DOSSTDTC','Date of First Dose',                        now,                      ''),
-        ('DOSENDTC','Date of Last Dose',                         end,                      ''),
+        ('DOSENDTC','Date of Last Dose',                         end_with_time,            ''),
         ('PDOSFRQ', 'Dosing Frequency per Interval',             'ONCE',                   ''),
         ('EXPSTDTC','Planned Start Date of Treatment',           now,                      ''),
-        ('EXPENDTC','Planned End Date of Treatment',             end,                      ''),
-        ('STENDTC', 'Study Completion Date',                     end,                      ''),
+        ('EXPENDTC','Planned End Date of Treatment',             end_with_time,            ''),
+        ('STENDTC', 'Study Completion Date',                     end_with_time,            ''),
 
         # Regulatory / compliance
         ('GLPFL',   'GLP Study Indicator',                       'N',                      ''),
@@ -401,12 +405,16 @@ def _build_dm(results: list, study_id: str) -> pd.DataFrame:
             'ARMCD':    armcd,
             'ARM':      arm,
             'SETCD':    setcd,
-            'AGE':      '',
-            'AGETXT':   'NOT APPLICABLE',
+            'AGE':      None,
+            'AGETXT':   '',
             'AGEU':     '',
         })
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    # AGE must be numeric type (Num in SAS) even if all null — SE0055
+    if not df.empty:
+        df['AGE'] = pd.to_numeric(df['AGE'], errors='coerce')
+    return df
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -468,6 +476,7 @@ def _build_ex(results: list, study_id: str) -> pd.DataFrame:
             'EXDOSFRQ': 'ONCE',
             'EXROUTE':  'TOPICAL',
             'EXTPT':    f'DOSE {dose_idx}',
+            'EXTPTNUM': dose_idx,
             'EPOCH':    'TREATMENT',
             'EXSTDTC':  exstdtc,
             'EXSTDY':   1,
@@ -933,6 +942,42 @@ def export_send_package(
     eg_df = _build_eg(results, study_id)
     tx_df = _build_tx(results, study_id, dm_df=dm_df)
     ds_df = _build_ds(results, study_id)
+
+    # ── Enforce SENDIG 3.1 column order (SD1079) ──
+    _SENDIG_COL_ORDER = {
+        'TS': ['STUDYID','DOMAIN','TSSEQ','TSGRPID','TSPARMCD','TSPARM','TSVAL','TSVALNF'],
+        'DM': ['STUDYID','DOMAIN','USUBJID','SUBJID','RFSTDTC','RFENDTC',
+               'SITEID','AGE','AGETXT','AGEU','SEX','SPECIES','STRAIN',
+               'ARMCD','ARM','SETCD'],
+        'EX': ['STUDYID','DOMAIN','USUBJID','EXSEQ','EXTRT','EXDOSE',
+               'EXDOSU','EXDOSFRM','EXDOSFRQ','EXROUTE','EXTPT','EXTPTNUM',
+               'EPOCH','EXSTDTC','EXSTDY'],
+        'EG': ['STUDYID','DOMAIN','USUBJID','EGSEQ','EGTESTCD','EGTEST',
+               'EGORRES','EGORRESU','EGSTRESC','EGSTRESN','EGSTRESU',
+               'EGSTAT','EGMETHOD','EGBLFL','VISITDY','EGDY','EGDTC',
+               'EGTPTREF','EPOCH','EGEVAL','EGREFID'],
+        'TX': ['STUDYID','DOMAIN','SETCD','SET','TXSEQ','TXPARMCD','TXPARM','TXVAL'],
+        'DS': ['STUDYID','DOMAIN','USUBJID','DSSEQ','DSTERM','DSDECOD',
+               'DSCAT','EPOCH','DSSTDTC','DSSTDY'],
+    }
+
+    def _order_columns(df, domain):
+        """Reorder columns to match SENDIG 3.1 spec. Drops cols not in spec."""
+        order = _SENDIG_COL_ORDER.get(domain)
+        if order is None:
+            return df
+        # Keep only columns that exist in df, in spec order
+        cols = [c for c in order if c in df.columns]
+        # Append any extra columns not in spec (shouldn't happen)
+        extras = [c for c in df.columns if c not in cols]
+        return df[cols + extras]
+
+    dm_df = _order_columns(dm_df, 'DM')
+    ex_df = _order_columns(ex_df, 'EX')
+    eg_df = _order_columns(eg_df, 'EG')
+    ts_df = _order_columns(ts_df, 'TS')
+    tx_df = _order_columns(tx_df, 'TX')
+    ds_df = _order_columns(ds_df, 'DS')
 
     datasets = {
         'TS': ts_df,
