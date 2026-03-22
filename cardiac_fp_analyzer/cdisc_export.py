@@ -2,20 +2,22 @@
 cdisc_export.py — CDISC SEND export for regulatory submission.
 
 Generates SAS Transport v5 (.xpt) files following the SEND
-Implementation Guide (SENDIG v3.1.1) for nonclinical electrophysiology data.
+Implementation Guide (SENDIG v3.1) for nonclinical electrophysiology data.
 
 Domains generated:
   - TS  (Trial Summary)        : study-level metadata
   - DM  (Demographics)         : subject-level (one row per microtissue)
   - EX  (Exposure)             : drug treatments and concentrations
   - EG  (ECG Test Results)     : FPD, FPDcF, BP, amplitude measurements
+  - TX  (Trial Sets)           : treatment group definitions
+  - DS  (Disposition)          : subject completion status
 
 Also generates:
   - define.xml        : Dataset-level metadata (Define-XML 2.1)
   - define2-1-0.xsl   : Pinnacle 21 official stylesheet for define.xml rendering
 
 Reference standards:
-  - SENDIG v3.1.1 (CDISC / FDA)
+  - SENDIG v3.1 (CDISC / FDA)
   - NCI Controlled Terminology (2025-09-26)
   - CiPA framework (Blinova et al. 2017)
   - FDA Technical Conformance Guide
@@ -36,40 +38,142 @@ warnings.filterwarnings('ignore')
 
 
 # ── SEND Controlled Terminology (NCI CT 2025-09-26) ─────────────────
+# Variable labels MUST match SENDIG 3.1 specification exactly.
 
-_UNITS = {
-    'ms': 'ms',
-    'mV': 'mV',
-    'uV': 'uV',
-    'Hz': 'Hz',
-    'bpm': 'BEATS/MIN',
-    's': 's',
-    'pct': '%',
+# EG domain variable labels (SENDIG 3.1 exact)
+_EG_VAR_LABELS = {
+    'STUDYID':  'Study Identifier',
+    'DOMAIN':   'Domain Abbreviation',
+    'USUBJID':  'Unique Subject Identifier',
+    'EGSEQ':    'Sequence Number',
+    'EGTESTCD': 'ECG Test or Examination Short Name',
+    'EGTEST':   'ECG Test or Examination Name',
+    'EGORRES':  'Result or Finding in Original Units',
+    'EGORRESU':  'Original Units',
+    'EGSTRESC': 'Character Result/Finding in Std Format',
+    'EGSTRESN': 'Numeric Result/Finding in Standard Units',
+    'EGSTRESU': 'Standard Units',
+    'EGSTAT':   'Completion Status',
+    'EGMETHOD': 'Method of Test or Examination',
+    'EGCSTATE': 'Consciousness State',
+    'EGLEAD':   'Lead Used for Measurement',
+    'EGPOS':    'Position of Subject During Observation',
+    'EGBLFL':   'Baseline Flag',
+    'VISITDY':  'Planned Study Day of Visit',
+    'EGNOMDY':  'Nominal Study Day for Tabulations',
+    'EGDY':     'Study Day of ECG',
+    'EGDTC':    'Date/Time of ECG',
+    'EGTPTREF': 'Time Point Reference',
+    'EPOCH':    'Epoch',
+    'EGEVAL':   'Evaluator',
+    'EGREFID':  'Reference ID',
+}
+
+# DM domain variable labels (SENDIG 3.1 exact)
+_DM_VAR_LABELS = {
+    'STUDYID':  'Study Identifier',
+    'DOMAIN':   'Domain Abbreviation',
+    'USUBJID':  'Unique Subject Identifier',
+    'SUBJID':   'Subject Identifier for the Study',
+    'RFSTDTC':  'Subject Reference Start Date/Time',
+    'RFENDTC':  'Subject Reference End Date/Time',
+    'SEX':      'Sex',
+    'SPECIES':  'Species',
+    'STRAIN':   'Strain/Substrain',
+    'ARMCD':    'Planned Arm Code',
+    'ARM':      'Description of Planned Arm',
+    'SETCD':    'Set Code',
+}
+
+# EX domain variable labels (SENDIG 3.1 exact)
+_EX_VAR_LABELS = {
+    'STUDYID':  'Study Identifier',
+    'DOMAIN':   'Domain Abbreviation',
+    'USUBJID':  'Unique Subject Identifier',
+    'EXSEQ':    'Sequence Number',
+    'EXTRT':    'Name of Actual Treatment',
+    'EXDOSE':   'Dose per Administration',
+    'EXDOSU':   'Dose Units',
+    'EXDOSFRM': 'Dose Form',
+    'EXDOSFRQ': 'Dosing Frequency per Interval',
+    'EXROUTE':  'Route of Administration',
+    'EXLOT':    'Lot Number',
+    'EXTRTV':   'Treatment Vehicle',
+    'EPOCH':    'Epoch',
+    'EXSTDTC':  'Start Date/Time of Treatment',
+    'EXSTDY':   'Study Day of Start of Treatment',
+}
+
+# TS domain variable labels
+_TS_VAR_LABELS = {
+    'STUDYID':  'Study Identifier',
+    'DOMAIN':   'Domain Abbreviation',
+    'TSSEQ':    'Sequence Number',
+    'TSGRPID':  'Group Identifier',
+    'TSPARMCD': 'Trial Summary Parameter Short Name',
+    'TSPARM':   'Trial Summary Parameter',
+    'TSVAL':    'Parameter Value',
+    'TSVALNF':  'Parameter Null Flavor',
+}
+
+# TX domain variable labels
+_TX_VAR_LABELS = {
+    'STUDYID':  'Study Identifier',
+    'DOMAIN':   'Domain Abbreviation',
+    'SETCD':    'Set Code',
+    'SET':      'Set Description',
+    'TXSEQ':    'Sequence Number',
+    'TXPARMCD': 'Trial Set Parameter Short Name',
+    'TXPARM':   'Trial Set Parameter',
+    'TXVAL':    'Parameter Value',
+}
+
+# DS domain variable labels
+_DS_VAR_LABELS = {
+    'STUDYID':  'Study Identifier',
+    'DOMAIN':   'Domain Abbreviation',
+    'USUBJID':  'Unique Subject Identifier',
+    'DSSEQ':    'Sequence Number',
+    'DSDECOD':  'Standardized Disposition Term',
+    'DSCAT':    'Category for Disposition Event',
+    'EPOCH':    'Epoch',
+    'DSSTDTC':  'Start Date/Time of Disposition Event',
+    'DSSTDY':   'Study Day of Start of Disposition',
+}
+
+# All labels indexed by domain
+_DOMAIN_VAR_LABELS = {
+    'TS': _TS_VAR_LABELS,
+    'DM': _DM_VAR_LABELS,
+    'EX': _EX_VAR_LABELS,
+    'EG': _EG_VAR_LABELS,
+    'TX': _TX_VAR_LABELS,
+    'DS': _DS_VAR_LABELS,
 }
 
 # SEND-compliant EGTESTCD codes (max 8 chars, uppercase)
-# Format: EGTESTCD -> (category, EGTEST label, unit)
+# These are custom non-standard test codes for hiPSC-CM electrophysiology.
+# Format: EGTESTCD -> (category, EGTEST label, unit, is_score)
 _TEST_CODES = {
-    'FPD':      ('EGTEST', 'FPD',                                'ms'),
-    'FPDCF':    ('EGTEST', 'FPDcF',                              'ms'),
-    'QTCF':     ('EGTEST', 'QTcF Interval',                      'ms'),
-    'BP':       ('EGTEST', 'Beat Period',                         'ms'),
-    'SPIKEAM':  ('EGTEST', 'Spike Amplitude',                    'uV'),
-    'RISETM':   ('EGTEST', 'Rise Time 10-90',                    'ms'),
-    'MAXDVDT':  ('EGTEST', 'Maximum dV/dt',                      'mV'),
-    'INTVL':    ('EGTEST', 'Heart Rate',                         'BEATS/MIN'),
-    'FPDCFPC':  ('EGTEST', 'FPDcF Pct Change from Baseline',    '%'),
-    'BPPCT':    ('EGTEST', 'Beat Period Pct Change from BL',     '%'),
-    'AMPPCT':   ('EGTEST', 'Amplitude Pct Change from BL',      '%'),
-    'TDPSCR':   ('EGTEST', 'TdP Risk Score',                    None),
-    'QCGRADE':  ('EGTEST', 'QC Grade',                          None),
-    'FPDCONF':  ('EGTEST', 'FPD Confidence',                    None),
-    'RSKSCR':   ('EGTEST', 'Arrhythmia Risk Score',             None),
-    'MORPHIN':  ('EGTEST', 'Morphology Instability Index',      None),
-    'EADPCT':   ('EGTEST', 'EAD Incidence Pct',                 '%'),
-    'STVFPDC':  ('EGTEST', 'STV of FPDcF',                      'ms'),
-    'SPECCHG':  ('EGTEST', 'Spectral Change Index',             None),
-    'PROAIDX':  ('EGTEST', 'Proarrhythmic Index',               None),
+    'FPD':      ('EGTEST', 'FPD',                                'ms',    False),
+    'FPDCF':    ('EGTEST', 'FPDcF',                              'ms',    False),
+    'BP':       ('EGTEST', 'Beat Period',                         'ms',    False),
+    'SPIKEAM':  ('EGTEST', 'Spike Amplitude',                    'uV',    False),
+    'RISETM':   ('EGTEST', 'Rise Time',                          'ms',    False),
+    'MAXDVDT':  ('EGTEST', 'Maximum dV/dt',                      'mV/ms', False),
+    'INTVL':    ('EGTEST', 'Heart Rate',                         'beats/min', False),
+    'FPDCFPC':  ('EGTEST', 'FPDcF Pct Change',                  '%',     False),
+    'BPPCT':    ('EGTEST', 'Beat Period Pct Change',             '%',     False),
+    'AMPPCT':   ('EGTEST', 'Amplitude Pct Change',              '%',     False),
+    'TDPSCR':   ('EGTEST', 'TdP Risk Score',                    'SCORE', True),
+    'QCGRADE':  ('EGTEST', 'QC Grade',                          None,    True),
+    'FPDCONF':  ('EGTEST', 'FPD Confidence',                    'SCORE', True),
+    'RSKSCR':   ('EGTEST', 'Arrhythmia Risk Score',             'SCORE', True),
+    'MORPHIN':  ('EGTEST', 'Morphology Instability',            'SCORE', True),
+    'EADPCT':   ('EGTEST', 'EAD Incidence',                     '%',     False),
+    'STVFPDC':  ('EGTEST', 'STV of FPDcF',                      'ms',    False),
+    'SPECCHG':  ('EGTEST', 'Spectral Change',                   'SCORE', True),
+    'PROAIDX':  ('EGTEST', 'Proarrhythmic Index',               'SCORE', True),
 }
 
 # Drug name normalization for SEND
@@ -81,59 +185,6 @@ _DRUG_SEND_NAMES = {
     'mexiletine':  'MEXILETINE',
     'nifedipine':  'NIFEDIPINE',
     'ranolazine':  'RANOLAZINE',
-}
-
-# Variable labels for SEND (used in .xpt metadata)
-_VAR_LABELS = {
-    # DM
-    'STUDYID': 'Study Identifier',
-    'DOMAIN':  'Domain Abbreviation',
-    'USUBJID': 'Unique Subject Identifier',
-    'SUBJID':  'Subject Identifier for the Study',
-    'SPECIES': 'Species',
-    'STRAIN':  'Strain/Substrain',
-    'SEX':     'Sex',
-    'ARMCD':   'Planned Arm Code',
-    'ARM':     'Description of Planned Arm',
-    'SETCD':   'Set Code',
-    'RFSTDTC': 'Subject Reference Start Date/Time',
-    'RFENDTC': 'Subject Reference End Date/Time',
-    # EX
-    'EXSEQ':    'Sequence Number',
-    'EXTRT':    'Name of Treatment',
-    'EXDOSE':   'Dose',
-    'EXDOSU':   'Dose Units',
-    'EXDOSFRQ': 'Dosing Frequency per Interval',
-    'EXROUTE':  'Route of Administration',
-    'EXDOSFRM': 'Dose Form',
-    'EPOCH':    'Epoch',
-    'EXSTDTC':  'Start Date/Time of Treatment',
-    'EXSTDY':   'Study Day of Start of Treatment',
-    # EG
-    'EGSEQ':    'Sequence Number',
-    'EGTESTCD': 'ECG Test Short Name',
-    'EGTEST':   'ECG Test Name',
-    'EGORRES':  'Result or Finding in Original Units',
-    'EGORRESU': 'Original Units',
-    'EGSTRESC': 'Character Result/Finding in Std Format',
-    'EGSTRESN': 'Numeric Result/Finding in Standard Units',
-    'EGSTRESU': 'Standard Units',
-    'EGSTAT':   'Completion Status',
-    'EGMETHOD': 'Method of Test or Examination',
-    'EGBLFL':   'Baseline Flag',
-    'EGTPTREF': 'Time Point Reference',
-    'EGDTC':    'Date/Time of Collection',
-    'EGDY':     'Study Day of Collection',
-    'VISITDY':  'Planned Study Day of Visit',
-    'EGEVAL':   'Evaluator',
-    'EGREFID':  'Reference ID',
-    'EGLEAD':   'Lead Identified to Collect Measurements',
-    # TS
-    'TSSEQ':    'Sequence Number',
-    'TSPARMCD': 'Trial Summary Parameter Short Name',
-    'TSVAL':    'Parameter Value',
-    'TSVALNF':  'Parameter Null Flavor',
-    'TSPARM':   'Trial Summary Parameter',
 }
 
 
@@ -165,7 +216,6 @@ def _parse_concentration(conc_str) -> tuple:
     Returns (float_value, unit_string) or (None, None) if unparseable.
     Units are normalized to standard case: nM, uM, mM, M.
     """
-    # Standard unit normalization (case-insensitive -> canonical)
     _UNIT_MAP = {
         'nm': 'nM', 'um': 'uM', 'mm': 'mM', 'm': 'M',
         'ug/ml': 'ug/mL', 'mg/ml': 'mg/mL', 'ng/ml': 'ng/mL',
@@ -190,76 +240,80 @@ def _parse_concentration(conc_str) -> tuple:
         return None, None
 
 
+def _get_label(domain: str, varname: str) -> str:
+    """Get the correct SENDIG label for a variable in a domain."""
+    labels = _DOMAIN_VAR_LABELS.get(domain, {})
+    return labels.get(varname, varname)
+
+
 # ═══════════════════════════════════════════════════════════════════════
-#  TS — Trial Summary
+#  TS — Trial Summary (CDISC CT exact TSPARM labels)
 # ═══════════════════════════════════════════════════════════════════════
 
 def _build_ts(study_id: str, study_title: str, n_results: int,
               sponsor: str = '', start_date: str = None,
               end_date: str = None) -> pd.DataFrame:
-    """Build Trial Summary (TS) domain with all required SENDIG 3.1.1 parameters."""
+    """Build Trial Summary (TS) domain with required SENDIG 3.1 parameters.
+
+    TSPARM labels must match CDISC Controlled Terminology EXACTLY.
+    """
     now = start_date or datetime.now().strftime('%Y-%m-%d')
     end = end_date or now
 
-    # All required / expected TS parameters per SENDIG 3.1.1 + FDA
-    # TSPARMCD -> (TSPARM [matching CDISC CT exactly], TSVAL, TSVALNF)
+    # (TSPARMCD, TSPARM [exact CDISC CT label], TSVAL, TSVALNF)
     params = [
         # Study identification
-        ('STUDYID',  'Study Identifier',                          study_id,                   ''),
-        ('SSTDTC',   'Study Start Date',                          now,                        ''),
-        ('SENDTC',   'Study End Date',                            end,                        ''),
-        ('STITLE',   'Study Title',                               study_title,                ''),
-        ('SDESIGN',  'Study Design',                              'PARALLEL',                 ''),
-        ('SSPONSOR', 'Study Sponsor',                             sponsor or 'NOT PROVIDED',  ''),
-        ('STYPE',    'Study Type',                                'NONCLINICAL',              ''),
+        ('STSTDTC', 'Start Date/Time of Treatment',              now,                      ''),
+        ('STITLE',  'Study Title',                               study_title,              ''),
+        ('SDESIGN', 'Trial Design',                              'PARALLEL',               ''),
+        ('SSPONSOR','Sponsor',                                   sponsor or 'NOT PROVIDED',''),
 
         # Species / Strain
-        ('SPECIES',  'Species',                                   'HUMAN',                    ''),
-        ('STRAIN',   'Strain/Substrain',                          'HIPSC-CM',                 ''),
-        ('SSTYP',    'Study Subtype',                             'IN VITRO',                 ''),
+        ('SPECIES', 'Species',                                   'HUMAN',                  ''),
+        ('STRAIN',  'Strain/Substrain',                          'HIPSC-CM',               ''),
+        ('SSTYP',   'Study Type Sub Category',                   'IN VITRO',               ''),
 
         # Route and treatment
-        ('ROUTE',    'Route of Administration',                   'TOPICAL',                  ''),
-        ('TRT',      'Treatment',                                 'MULTIPLE DRUGS',           ''),
-        ('TRTV',     'Treatment Vehicle',                         'CULTURE MEDIUM',           ''),
-        ('TRTCAS',   'CAS Number of Treatment',                   '',                         'NA'),
-        ('TRTUNII',  'UNII of Treatment',                         '',                         'NA'),
-        ('PCLASS',   'Pharmacological Class of Treatment',        'ION CHANNEL MODULATORS',   ''),
+        ('ROUTE',   'Route of Administration',                   'TOPICAL',                ''),
+        ('TRT',     'Investigational Therapy or Treatment',      'MULTIPLE DRUGS',         ''),
+        ('TRTV',    'Vehicle',                                   'CULTURE MEDIUM',         ''),
+        ('TRTCAS',  'CAS Registry Number of Investigational Therapy', '',                  'NA'),
+        ('TRTUNII', 'UNII of Investigational Therapy',           '',                       'NA'),
+        ('PCLASS',  'Pharmacological Class of Investigational Therapy', 'ION CHANNEL MODULATORS', ''),
 
-        # Subject / design
-        ('NSUBJ',    'Number of Subjects',                        str(n_results),             ''),
-        ('SEXPOP',   'Sex of Participants',                       'UNKNOWN',                  ''),
-        ('STCAT',    'Study Category',                            'SAFETY PHARMACOLOGY',      ''),
-        ('STDIR',    'Study Director',                            sponsor or 'NOT PROVIDED',  ''),
+        # Subjects / design
+        ('SEXPOP',  'Sex of Participants',                       '',                       'NA'),
+        ('STCAT',   'Study Category',                            'SAFETY PHARMACOLOGY',    ''),
+        ('STDIR',   'Study Director',                            sponsor or 'NOT PROVIDED',''),
 
         # Timing
-        ('DOSDUR',   'Duration of Dosing',                        'ACUTE',                    ''),
-        ('DOSSTDTC', 'Start Date of Dosing',                      now,                        ''),
-        ('DOSENDTC', 'End Date of Dosing',                        end,                        ''),
-        ('PDOSFRQ',  'Planned Dosing Frequency',                  'ONCE',                     ''),
-        ('EXPSTDTC', 'Start Date of Experimental Phase',          now,                        ''),
-        ('EXPENDTC', 'End Date of Experimental Phase',            end,                        ''),
-        ('STSTDTC',  'Start Date of Treatment',                   now,                        ''),
+        ('DOSDUR',  'Planned Duration of Dosing',                'P1D',                    ''),
+        ('DOSSTDTC','Date of First Dose',                        now,                      ''),
+        ('DOSENDTC','Date of Last Dose',                         end,                      ''),
+        ('PDOSFRQ', 'Planned Dosing Frequency',                  'ONCE',                   ''),
+        ('EXPSTDTC','Start Date of Experimental Phase',          now,                      ''),
+        ('EXPENDTC','End Date of Experimental Phase',            end,                      ''),
+        ('STENDTC', 'Planned Study End Date',                    end,                      ''),
 
         # Regulatory / compliance
-        ('GLPFL',    'GLP Study Flag',                            'N',                        ''),
-        ('GLPTYP',   'GLP Study Type',                            '',                         'NA'),
-        ('SNDIGVER', 'SENDIG Version',                            '3.1.1',                    ''),
-        ('SNDCTVER', 'SEND Controlled Terminology Version',       '2025-09-26',               ''),
-        ('REGID',    'Regulatory Identifier',                     'CIPA',                     ''),
+        ('GLPFL',   'GLP Compliance Indicator',                  'N',                      ''),
+        ('GLPTYP',  'Type of GLP',                               '',                       'NA'),
+        ('SNDIGVER','SENDIG Version',                            '3.1',                    ''),
+        ('SNDCTVER','SEND CT Version',                           '2025-09-26',             ''),
 
         # Test facility
-        ('TSTFLOC',  'Test Facility Location',                    '',                         'NA'),
-        ('TSTFNAM',  'Test Facility Name',                        '',                         'NA'),
-        ('SPLRNAM',  'Supplier Name',                             '',                         'NA'),
-        ('SPREFID',  'Supplier Reference Identifier',             '',                         'NA'),
-        ('SPLANSUB', 'Planned Number of Animals per Subset',      '',                         'NA'),
-        ('STRPSTAT', 'Strain Production Status',                  '',                         'NA'),
-        ('TRMSAC',   'Reason for Sacrifice',                      '',                         'NA'),
+        ('TFCNTRY', 'Test Facility Country',                     '',                       'NA'),
+        ('TSTFLOC', 'Test Facility Location',                    '',                       'NA'),
+        ('TSTFNAM', 'Test Facility Name',                        '',                       'NA'),
+        ('SPLRNAM', 'Supplier Name',                             '',                       'NA'),
+        ('SPREFID', 'Supplier Study Number',                     '',                       'NA'),
+        ('SPLANSUB','Planned Number of Animals per Group per Sex','',                      'NA'),
+        ('STRPSTAT','Strain/Substrain Production Status',        '',                       'NA'),
+        ('TRMSAC',  'Disposition Reason',                        '',                       'NA'),
 
         # Age (NA for cell lines)
-        ('AGE',      'Subject Age at Start of Study',             '',                         'NA'),
-        ('AGEU',     'Age Unit',                                  '',                         'NA'),
+        ('AGE',     'Age',                                       '',                       'NA'),
+        ('AGEU',    'Age Unit',                                  '',                       'NA'),
     ]
 
     rows = []
@@ -268,6 +322,7 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
             'STUDYID':  study_id,
             'DOMAIN':   'TS',
             'TSSEQ':    i,
+            'TSGRPID':  '',
             'TSPARMCD': parmcd,
             'TSPARM':   parm,
             'TSVAL':    val,
@@ -279,6 +334,8 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
 
 # ═══════════════════════════════════════════════════════════════════════
 #  DM — Demographics (one row per microtissue)
+#  Variable order per SENDIG 3.1: STUDYID, DOMAIN, USUBJID, SUBJID,
+#    RFSTDTC, RFENDTC, SEX, SPECIES, STRAIN, ARMCD, ARM, SETCD
 # ═══════════════════════════════════════════════════════════════════════
 
 def _build_dm(results: list, study_id: str) -> pd.DataFrame:
@@ -298,6 +355,8 @@ def _build_dm(results: list, study_id: str) -> pd.DataFrame:
         fi = r.get('file_info', {})
         exp = fi.get('experiment', '')
 
+        # Variable order: STUDYID, DOMAIN, USUBJID, SUBJID, RFSTDTC,
+        #   RFENDTC, SEX, SPECIES, STRAIN, ARMCD, ARM, SETCD
         rows.append({
             'STUDYID':  study_id,
             'DOMAIN':   'DM',
@@ -305,9 +364,9 @@ def _build_dm(results: list, study_id: str) -> pd.DataFrame:
             'SUBJID':   usubjid.split('-', 1)[-1] if '-' in usubjid else usubjid,
             'RFSTDTC':  now,
             'RFENDTC':  now,
+            'SEX':      'U',
             'SPECIES':  'HUMAN',
             'STRAIN':   'HIPSC-CM',
-            'SEX':      'U',
             'ARMCD':    'TRT',
             'ARM':      'Treatment',
             'SETCD':    exp.replace(' ', '') if exp else 'SET1',
@@ -318,6 +377,9 @@ def _build_dm(results: list, study_id: str) -> pd.DataFrame:
 
 # ═══════════════════════════════════════════════════════════════════════
 #  EX — Exposure (drug treatments)
+#  Variable order per SENDIG 3.1: STUDYID, DOMAIN, USUBJID, EXSEQ,
+#    EXTRT, EXDOSE, EXDOSU, EXDOSFRM, EXDOSFRQ, EXROUTE, EXLOT,
+#    EXTRTV, EPOCH, EXSTDTC, EXSTDY
 # ═══════════════════════════════════════════════════════════════════════
 
 def _build_ex(results: list, study_id: str) -> pd.DataFrame:
@@ -340,8 +402,6 @@ def _build_ex(results: list, study_id: str) -> pd.DataFrame:
         drug = _canonical_drug_send(drug_raw)
         conc_raw = fi.get('concentration', '')
         usubjid = _make_usubjid(study_id, r)
-
-        # Parse concentration into numeric + unit
         dose_num, dose_unit = _parse_concentration(conc_raw)
 
         # De-duplicate: same subject + drug + concentration
@@ -358,9 +418,11 @@ def _build_ex(results: list, study_id: str) -> pd.DataFrame:
             'EXTRT':    drug,
             'EXDOSE':   dose_num if dose_num is not None else 0.0,
             'EXDOSU':   dose_unit or 'nM',
+            'EXDOSFRM': 'SOLUTION',
             'EXDOSFRQ': 'ONCE',
             'EXROUTE':  'TOPICAL',
-            'EXDOSFRM': 'SOLUTION',
+            'EXLOT':    '',
+            'EXTRTV':   'CULTURE MEDIUM',
             'EPOCH':    'TREATMENT',
             'EXSTDTC':  now,
             'EXSTDY':   1,
@@ -371,21 +433,23 @@ def _build_ex(results: list, study_id: str) -> pd.DataFrame:
 
 # ═══════════════════════════════════════════════════════════════════════
 #  EG — ECG Test Results (the main data domain)
+#  Variable order per SENDIG 3.1: STUDYID, DOMAIN, USUBJID, EGSEQ,
+#    EGTESTCD, EGTEST, EGORRES, EGORRESU, EGSTRESC, EGSTRESN, EGSTRESU,
+#    EGSTAT, EGMETHOD, EGCSTATE, EGLEAD, EGPOS, EGBLFL, VISITDY,
+#    EGNOMDY, EGDY, EGDTC, EGTPTREF, EPOCH, EGEVAL, EGREFID
 # ═══════════════════════════════════════════════════════════════════════
 
 def _build_eg(results: list, study_id: str) -> pd.DataFrame:
-    """
-    Build ECG Test Results (EG) domain.
-
-    Each row = one measurement (test) for one recording.
-    Multiple rows per file: FPD, FPDcF, BP, amplitude, etc.
-    """
+    """Build ECG Test Results (EG) domain."""
     from .normalization import _is_baseline, _is_control
 
     rows = []
     seq_counter = {}
     seen_keys = set()
     now = datetime.now().strftime('%Y-%m-%d')
+
+    # Track concentration index per subject for VISITDY
+    subj_conc_counter = {}
 
     for r in results:
         fi = r.get('file_info', {})
@@ -403,29 +467,45 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
 
         tptref = 'BASELINE' if is_bl else f"{drug} {conc}".strip()
         epoch = 'BASELINE' if is_bl else 'TREATMENT'
-        visitdy = 1
+
+        # Assign unique VISITDY per subject-concentration to avoid duplicates
+        conc_key = (usubjid, tptref)
+        if conc_key not in subj_conc_counter:
+            subj_conc_counter.setdefault(usubjid, 0)
+            subj_conc_counter[usubjid] += 1
+            subj_conc_counter[conc_key] = subj_conc_counter[usubjid]
+        visitdy = subj_conc_counter[conc_key]
 
         def _add_row(testcd, value, unit_override=None):
             """Helper to add one EG row."""
             if value is None or (isinstance(value, float) and np.isnan(value)):
                 return
-            code_info = _TEST_CODES.get(testcd, ('EGTEST', testcd, unit_override))
+            code_info = _TEST_CODES.get(testcd, ('EGTEST', testcd, unit_override, False))
             unit = unit_override or code_info[2] or ''
+            is_score = code_info[3] if len(code_info) > 3 else False
 
-            # Round EGSTRESN to match EGSTRESC (fix SD1212)
-            if isinstance(value, float):
+            # For QCGRADE (character-only), handle specially
+            if testcd == 'QCGRADE':
+                stresc = str(value)
+                stresn = None
+                unit = ''
+            elif isinstance(value, float):
                 stresc = f"{value:.4f}"
                 stresn = round(value, 4)
+            elif isinstance(value, int):
+                stresc = str(value)
+                stresn = float(value)
             else:
                 stresc = str(value)
-                stresn = float(value) if isinstance(value, (int, float)) else None
+                stresn = None
 
-            # De-duplicate key
-            dk = (usubjid, testcd, epoch, tptref)
+            # De-duplicate: unique per subject + test + visit
+            dk = (usubjid, testcd, visitdy)
             if dk in seen_keys:
                 return
             seen_keys.add(dk)
 
+            # Column order matches SENDIG 3.1 specification
             rows.append({
                 'STUDYID':  study_id,
                 'DOMAIN':   'EG',
@@ -434,19 +514,22 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
                 'EGTESTCD': testcd,
                 'EGTEST':   code_info[1],
                 'EGORRES':  stresc,
-                'EGORRESU':  unit,
+                'EGORRESU': unit,
                 'EGSTRESC': stresc,
                 'EGSTRESN': stresn,
                 'EGSTRESU': unit,
                 'EGSTAT':   '',
-                'EGMETHOD': 'ALGORITHMIC ANALYSIS',
+                'EGMETHOD': 'DERIVED',
+                'EGCSTATE': '',
+                'EGLEAD':   '',
+                'EGPOS':    '',
                 'EGBLFL':   'Y' if is_bl else '',
-                'EGLEAD':   'VIRTUAL LEAD',
+                'VISITDY':  visitdy,
+                'EGNOMDY':  visitdy,
+                'EGDY':     visitdy,
+                'EGDTC':    now,
                 'EGTPTREF': tptref,
                 'EPOCH':    epoch,
-                'EGDTC':    now,
-                'EGDY':     1,
-                'VISITDY':  visitdy,
                 'EGEVAL':   'ALGORITHM',
                 'EGREFID':  fname,
             })
@@ -489,6 +572,74 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  TX — Trial Sets (treatment group definitions)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _build_tx(results: list, study_id: str) -> pd.DataFrame:
+    """Build Trial Sets (TX) domain — one row per treatment parameter per set."""
+    from .normalization import _is_baseline, _is_control
+
+    drugs_seen = set()
+    for r in results:
+        if _is_baseline(r) or _is_control(r):
+            continue
+        fi = r.get('file_info', {})
+        drug_raw = str(fi.get('drug', ''))
+        if drug_raw:
+            drugs_seen.add(_canonical_drug_send(drug_raw))
+
+    rows = []
+    seq = 0
+    for drug in sorted(drugs_seen):
+        seq += 1
+        setcd = drug[:8]
+        rows.append({
+            'STUDYID':  study_id,
+            'DOMAIN':   'TX',
+            'SETCD':    setcd,
+            'SET':      f'{drug} Treatment Group',
+            'TXSEQ':    seq,
+            'TXPARMCD': 'TRT',
+            'TXPARM':   'Investigational Therapy or Treatment',
+            'TXVAL':    drug,
+        })
+
+    return pd.DataFrame(rows)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  DS — Disposition
+# ═══════════════════════════════════════════════════════════════════════
+
+def _build_ds(results: list, study_id: str) -> pd.DataFrame:
+    """Build Disposition (DS) domain — one row per unique subject."""
+    seen = {}
+    rows = []
+    seq_counter = {}
+    now = datetime.now().strftime('%Y-%m-%d')
+
+    for r in results:
+        usubjid = _make_usubjid(study_id, r)
+        if usubjid in seen:
+            continue
+        seen[usubjid] = True
+
+        rows.append({
+            'STUDYID':  study_id,
+            'DOMAIN':   'DS',
+            'USUBJID':  usubjid,
+            'DSSEQ':    _make_seq(seq_counter, 'DS'),
+            'DSDECOD':  'STUDY COMPLETED',
+            'DSCAT':    'DISPOSITION EVENT',
+            'EPOCH':    'TREATMENT',
+            'DSSTDTC':  now,
+            'DSSTDY':   1,
+        })
+
+    return pd.DataFrame(rows)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Define-XML 2.1
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -523,16 +674,18 @@ def _generate_define_xml(study_id: str, datasets: dict, output_dir: Path):
 
     domain_info = {
         'TS':   ('Trial Summary',   'Trial summary parameters and study metadata'),
-        'DM':   ('Demographics',     'One record per microtissue (chip+channel)'),
+        'DM':   ('Demographics',     'One record per microtissue'),
         'EX':   ('Exposure',         'Drug exposure events with concentrations'),
         'EG':   ('ECG Test Results', 'Electrophysiology measurements'),
+        'TX':   ('Trial Sets',       'Treatment group definitions'),
+        'DS':   ('Disposition',      'Subject disposition'),
     }
 
     for domain, df in datasets.items():
         info = domain_info.get(domain, (domain, ''))
         n_rows = len(df)
         n_cols = len(df.columns)
-        struct = 'One record per parameter' if domain == 'TS' else 'One record per test per subject'
+        struct = 'One record per parameter' if domain in ('TS', 'TX') else 'One record per test per subject'
         lines.append(f'      <def:ItemGroupDef OID="IG.{domain}"')
         lines.append(f'                        Name="{domain}"')
         lines.append(f'                        SASDatasetName="{domain}"')
@@ -555,7 +708,7 @@ def _generate_define_xml(study_id: str, datasets: dict, output_dir: Path):
             sas_type = 'Char' if dtype == object else 'Num'
             length = int(df[col].astype(str).str.len().max()) if len(df) > 0 else 8
             length = max(length, 1)
-            label = _VAR_LABELS.get(col, col.replace('_', ' ').title())
+            label = _get_label(domain, col)
             lines.append(f'      <ItemDef OID="IT.{domain}.{col}"')
             lines.append(f'              Name="{col}"')
             lines.append(f'              SASFieldName="{col[:8]}"')
@@ -580,11 +733,7 @@ def _generate_define_xml(study_id: str, datasets: dict, output_dir: Path):
 
 def _write_xpt(df: pd.DataFrame, filepath: Path, dataset_name: str,
                dataset_label: str = ''):
-    """Write a DataFrame to SAS Transport v5 (.xpt) format.
-
-    Attempts pyreadstat first (supports column labels), falls back to
-    xport library, otherwise writes CSV with .xpt extension.
-    """
+    """Write a DataFrame to SAS Transport v5 (.xpt) format."""
     col_map = {}
     used_names = set()
     for col in df.columns:
@@ -606,28 +755,26 @@ def _write_xpt(df: pd.DataFrame, filepath: Path, dataset_name: str,
         else:
             df_sas[col] = pd.to_numeric(df_sas[col], errors='coerce')
 
-    # Build column labels mapping (original col -> label)
-    col_labels = {}
+    # Build column labels for the domain
+    domain_labels = _DOMAIN_VAR_LABELS.get(dataset_name, {})
+    col_labels = []
     for orig_col, sas_col in col_map.items():
-        col_labels[sas_col] = _VAR_LABELS.get(orig_col, orig_col)
+        col_labels.append(domain_labels.get(orig_col, orig_col))
 
     # Try pyreadstat first (best: supports labels)
     try:
         import pyreadstat
-        pyreadstat.write_xport(
-            df_sas, filepath,
-            table_name=dataset_name[:8],
-            column_labels=[col_labels.get(c, c) for c in df_sas.columns],
-        )
-        return
-    except (ImportError, TypeError):
-        # TypeError if column_labels not supported in this version
         try:
-            import pyreadstat
+            pyreadstat.write_xport(
+                df_sas, filepath,
+                table_name=dataset_name[:8],
+                column_labels=col_labels,
+            )
+        except TypeError:
             pyreadstat.write_xport(df_sas, filepath, table_name=dataset_name[:8])
-            return
-        except ImportError:
-            pass
+        return
+    except ImportError:
+        pass
 
     # Fallback: xport library
     try:
@@ -638,17 +785,14 @@ def _write_xpt(df: pd.DataFrame, filepath: Path, dataset_name: str,
     except ImportError:
         pass
 
-    # Final fallback: CSV with warning
+    # Final fallback: CSV
     warnings.warn(
         f"xport and pyreadstat not available. Writing {filepath.name} as CSV. "
         "Install pyreadstat: pip install pyreadstat",
         UserWarning
     )
     with open(filepath, 'w', encoding='utf-8') as f:
-        f.write("# WARNING: This is a CSV fallback (xport/pyreadstat not installed)\n")
-        f.write(f"# Dataset: {dataset_name} - {dataset_label}\n")
-        f.write(f"# Generated: {datetime.now().isoformat()}\n")
-        f.write("# pip install pyreadstat to generate proper SAS Transport v5\n\n")
+        f.write("# WARNING: CSV fallback. pip install pyreadstat\n")
         df_sas.to_csv(f, index=False)
 
 
@@ -694,10 +838,14 @@ def export_send_package(
     dm_df = _build_dm(results, study_id)
     ex_df = _build_ex(results, study_id)
     eg_df = _build_eg(results, study_id)
+    tx_df = _build_tx(results, study_id)
+    ds_df = _build_ds(results, study_id)
 
     datasets = {
         'TS': ts_df,
         'DM': dm_df,
+        'TX': tx_df,
+        'DS': ds_df,
         'EX': ex_df,
         'EG': eg_df,
     }
@@ -709,6 +857,8 @@ def export_send_package(
         'DM': 'Demographics',
         'EX': 'Exposure',
         'EG': 'ECG Test Results',
+        'TX': 'Trial Sets',
+        'DS': 'Disposition',
     }
 
     for domain, df in datasets.items():
@@ -722,7 +872,7 @@ def export_send_package(
     define_path = _generate_define_xml(study_id, datasets, output_dir)
     files.append(define_path)
 
-    # ── Copy XSL stylesheet for Define-XML rendering ──
+    # ── Copy XSL stylesheet ──
     _xsl_src = Path(__file__).parent / 'define2-1-0.xsl'
     if _xsl_src.exists():
         _xsl_dst = output_dir / 'define2-1-0.xsl'
@@ -740,7 +890,7 @@ def export_send_package(
 
     # ── Summary ──
     summary_lines = [
-        f"CDISC SEND Export Package (SENDIG 3.1.1)",
+        f"CDISC SEND Export Package (SENDIG 3.1)",
         f"Study: {study_id}",
         f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"",
@@ -755,11 +905,6 @@ def export_send_package(
         f"",
         f"Files generated: {len(files)}",
         f"Output directory: {output_dir}",
-        f"",
-        f"Next steps:",
-        f"  1. Validate with Pinnacle 21 Community (SEND-IG 3.1.1 FDA config)",
-        f"  2. Review CSV copies in {csv_dir}",
-        f"  3. Submit .xpt files + define.xml to regulatory agency",
     ])
     summary = '\n'.join(summary_lines)
 
