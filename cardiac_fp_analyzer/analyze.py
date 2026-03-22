@@ -60,7 +60,16 @@ def _select_best_channel(df, fs, cfg=None):
                 snr = np.mean(np.abs(filt[bi]))/ns if ns>0 else 0
                 if snr > cs.snr_good: score += 20
                 elif snr > cs.snr_fair: score += 10
-                details[ch] = f'{len(bi)} beats, BP={mbp*1000:.0f}ms, CV={cv*100:.1f}%, score={score}'
+                # Continuous tiebreaker (0–9.99 range, never changes threshold band)
+                # Favours: higher spike amplitude, lower CV, higher SNR
+                spike_amp = np.mean(np.abs(filt[bi]))
+                tb = 0.0
+                tb += min(3.0, snr / 5.0 * 3.0)                 # 0–3 pts from SNR
+                tb += min(3.0, spike_amp / 1e-3 * 0.3)           # 0–3 pts from spike amp
+                tb += max(0.0, 3.0 - cv * 100 / 10.0)            # 0–3 pts from low CV
+                score += round(tb, 2)
+                details[ch] = (f'{len(bi)} beats, BP={mbp*1000:.0f}ms, CV={cv*100:.1f}%, '
+                               f'spike={spike_amp*1000:.1f}mV, SNR={snr:.1f}, score={score:.1f}')
             else:
                 details[ch] = f'{len(bi)} beats (too few)'
             if score > best_score:
