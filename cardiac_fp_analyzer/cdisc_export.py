@@ -299,10 +299,10 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
     params = [
         # Study identification — Should Include = Yes
         ('STITLE',  'Study Title',                               study_title,              ''),
-        ('SSTYP',   'Study Type',                                'IN VITRO',               ''),
+        ('SSTYP',   'Study Type',                                'CARDIOVASCULAR PHARMACOLOGY', ''),
         ('SDESIGN', 'Study Design',                              'PARALLEL',               ''),
         ('SSPONSOR','Sponsoring Organization',                   sponsor or 'NOT PROVIDED',''),
-        ('STCAT',   'Study Category',                            'SAFETY PHARMACOLOGY',    ''),
+        ('STCAT',   'Study Category',                            'SP',                     ''),
         ('STDIR',   'Study Director',                            sponsor or 'NOT PROVIDED',''),
 
         # Species / Strain — Should Include = Yes
@@ -340,7 +340,7 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
         # Regulatory / compliance — Should Include = Yes
         ('GLPFL',   'GLP Flag',                                  'N',                      ''),
         ('GLPTYP',  'Good Laboratory Practice Type',             '',                       'NA'),
-        ('SNDIGVER','SEND Implementation Guide Version',         '3.1.1',                  ''),
+        ('SNDIGVER','SEND Implementation Guide Version',         'SEND IMPLEMENTATION GUIDE VERSION 3.1.1', ''),
         ('SNDCTVER','SEND Controlled Terminology Version',       'SEND Terminology 2025-09-26', ''),
 
         # Test facility — Should Include = Yes
@@ -483,7 +483,7 @@ def _build_ex(results: list, study_id: str) -> pd.DataFrame:
             'EXDOSFRM': 'SOLUTION',
             'EXDOSFRQ': 'ONCE',
             'EXROUTE':  'TOPICAL',
-            'EXLOT':    'LOT001',        # SE2353: must not be null when EXDOSE provided
+            'EXLOT':    'LOT001' if dose_num else '',  # SE2353/SE2352: LOT required when EXDOSE>0, empty when 0
             'EXTRTV':   'CULTURE MEDIUM',# SE0057: expected variable
             'EXSTDTC':  exstdtc,
             'EXSTDY':   1,
@@ -839,7 +839,6 @@ _SE_VAR_LABELS = {
     'ELEMENT':  'Description of Element',
     'SESTDTC':  'Start Date/Time of Element',
     'SEENDTC':  'End Date/Time of Element',
-    'TAETORD':  'Order of Element within Arm',
     'EPOCH':    'Trial Epoch',
 }
 
@@ -865,7 +864,6 @@ def _build_se(results: list, study_id: str) -> pd.DataFrame:
             'ELEMENT':  'Treatment',
             'SESTDTC':  now,
             'SEENDTC':  now,
-            'TAETORD':  1,
             'EPOCH':    'Treatment',
         })
 
@@ -1141,7 +1139,7 @@ def export_send_package(
                'TABRANCH','TATRANS','EPOCH'],
         # SE: SDTM v1.5 section 2.2.8
         'SE': ['STUDYID','DOMAIN','USUBJID','SESEQ','ETCD','ELEMENT',
-               'SESTDTC','SEENDTC','TAETORD','EPOCH'],
+               'SESTDTC','SEENDTC','EPOCH'],
     }
 
     def _order_columns(df, domain):
