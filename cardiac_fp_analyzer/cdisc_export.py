@@ -163,11 +163,11 @@ _DOMAIN_VAR_LABELS = {
 _TEST_CODES = {
     'FPD':      ('EGTEST', 'FPD',                                'ms',    False),
     'FPDCF':    ('EGTEST', 'FPDcF',                              'ms',    False),
-    'BP':       ('EGTEST', 'Beat Period',                         'ms',    False),
+    'BP':       ('EGTEST', 'RR Interval, Single Measurement',      'ms',    False),
     'SPIKEAM':  ('EGTEST', 'Spike Amplitude',                    'uV',    False),
     'RISETM':   ('EGTEST', 'Rise Time',                          'ms',    False),
     'MAXDVDT':  ('EGTEST', 'Maximum dV/dt',                      'mV/ms', False),
-    'INTVL':    ('EGTEST', 'Heart Rate',                         'beats/min', False),
+    'INTVL':    ('EGTEST', 'ECG Mean Heart Rate',                 'beats/min', False),
     'FPDCFPC':  ('EGTEST', 'FPDcF Pct Change',                  '%',     False),
     'BPPCT':    ('EGTEST', 'Beat Period Pct Change',             '%',     False),
     'AMPPCT':   ('EGTEST', 'Amplitude Pct Change',              '%',     False),
@@ -579,6 +579,10 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
                 return
             seen_keys.add(dk)
 
+            # Map internal test codes to NCI CT EGTESTCD where possible
+            _NCI_TESTCD_MAP = {'BP': 'RRSM', 'INTVL': 'EGHRMN'}
+            egtestcd_out = _NCI_TESTCD_MAP.get(testcd, testcd)
+
             # Column order matches SENDIG v3.1.1 section 6.3.17
             # EGDY = 1 for all records (same-day in vitro study, EGDTC == RFSTDTC)
             # SE0057: EGPOS, EGLEAD, EGCSTATE, EGNOMDY must exist (even if empty)
@@ -588,7 +592,7 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
                 'USUBJID':  usubjid,
                 'EGSEQ':    _make_seq(seq_counter, usubjid),
                 'EGREFID':  fname,
-                'EGTESTCD': testcd,
+                'EGTESTCD': egtestcd_out,
                 'EGTEST':   code_info[1],
                 'EGPOS':    '',              # SE0057: expected variable
                 'EGORRES':  stresc,
@@ -597,7 +601,7 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
                 'EGSTRESN': stresn,
                 'EGSTRESU': unit,
                 'EGSTAT':   '',
-                'EGMETHOD': 'DERIVED',
+                'EGMETHOD': '',          # NCI CT has no 'DERIVED'; leave empty for in vitro
                 'EGLEAD':   '',              # SE0057: expected variable
                 'EGCSTATE': '',              # SE0057: expected variable
                 'EGBLFL':   'Y' if is_bl else '',
@@ -691,6 +695,14 @@ def _split_eg_suppeg(eg_df: pd.DataFrame) -> tuple:
         subj_mask = eg_standard['USUBJID'] == subj
         eg_standard.loc[subj_mask, 'EGSEQ'] = range(1, subj_mask.sum() + 1)
 
+    # Build a lookup: (USUBJID, VISITDY) → first EGSEQ in eg_standard
+    # This is the "bridge" linking SUPPEG records to their parent EG record.
+    parent_seq = {}
+    for _, row in eg_standard.iterrows():
+        key = (row['USUBJID'], row.get('VISITDY', 1))
+        if key not in parent_seq:
+            parent_seq[key] = int(row['EGSEQ'])
+
     # Build SUPPEG rows from the extracted EG records
     suppeg_rows = []
     for _, row in eg_supp_rows.iterrows():
@@ -702,12 +714,16 @@ def _split_eg_suppeg(eg_df: pd.DataFrame) -> tuple:
         testcd = row['EGTESTCD']
         code_info = _TEST_CODES.get(testcd, ('EGTEST', testcd, '', False))
 
+        # Find parent EGSEQ for this subject + visit
+        key = (row['USUBJID'], row.get('VISITDY', 1))
+        idvarval = str(parent_seq.get(key, 1))
+
         suppeg_rows.append({
             'STUDYID':  row['STUDYID'],
             'RDOMAIN':  'EG',
             'USUBJID':  row['USUBJID'],
             'IDVAR':    'EGSEQ',
-            'IDVARVAL': '',       # no parent EG record to reference
+            'IDVARVAL': idvarval,
             'QNAM':     testcd,
             'QLABEL':   code_info[1],
             'QVAL':     qval,
