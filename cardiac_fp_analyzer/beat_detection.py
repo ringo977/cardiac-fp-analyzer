@@ -98,9 +98,102 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
 
     best = max(results, key=lambda x: x[2].get('_score', -999))
     bi, bt, info = best
+
+    # ── Bimodal BP correction ──
+    # Detect alternating short/long beat periods (T-wave false positives).
+    # If the short group ≈ half the long group, the short intervals are
+    # T-wave repolarisation peaks mistaken for depolarisation spikes.
+    # Fix: increase min_distance to midpoint between groups and re-detect.
+    bi, bt, info = _fix_bimodal_bp(data, fs, bi, bt, info, threshold_factor, cfg)
+
     info['method'] = f"auto({info.get('_method_name', '?')})"
     for k in list(info.keys()):
         if k.startswith('_'): del info[k]
+    return bi, bt, info
+
+
+def _fix_bimodal_bp(data, fs, bi, bt, info, threshold_factor, cfg=None):
+    """If beat periods show bimodal short/long pattern, re-detect with larger min_distance.
+
+    Uses Otsu-style threshold to find the optimal split that minimises
+    within-group variance.  If the two groups have a ratio ≈ 1.5–2.8×
+    (consistent with spike + T-wave double-counting), the short intervals
+    are T-wave artefacts and we re-detect with a larger min_distance.
+    """
+    if len(bi) < 10:
+        return bi, bt, info
+
+    bp_samples = np.diff(bi)
+    bp_ms = bp_samples / fs * 1000
+
+    # Otsu-style bimodal split: sweep percentiles, minimise total within-group variance
+    best_thresh, best_score = 0, float('inf')
+    for pct in range(15, 85, 3):
+        thresh = np.percentile(bp_ms, pct)
+        lo = bp_ms[bp_ms <= thresh]
+        hi = bp_ms[bp_ms > thresh]
+        if len(lo) < 3 or len(hi) < 3:
+            continue
+        score = np.var(lo) * len(lo) + np.var(hi) * len(hi)
+        if score < best_score:
+            best_score, best_thresh = score, thresh
+
+    short = bp_ms[bp_ms <= best_thresh]
+    long_ = bp_ms[bp_ms > best_thresh]
+
+    if len(short) < 3 or len(long_) < 3:
+        return bi, bt, info
+
+    mean_short = np.mean(short)
+    mean_long = np.mean(long_)
+    ratio = mean_long / mean_short if mean_short > 0 else 0
+
+    # Check separation quality: groups must be well-separated
+    # (gap between groups relative to their spread)
+    combined_std = (np.std(short) + np.std(long_)) / 2
+    gap = mean_long - mean_short
+    separation = gap / combined_std if combined_std > 0 else 0
+
+    # Bimodal pattern: long ≈ 1.5–2.8× short, both groups sizeable, well-separated
+    if (1.4 < ratio < 3.0
+            and min(len(short), len(long_)) > 0.15 * len(bp_ms)
+            and separation > 2.0):
+        # The true beat period is the long one; short ones are T-wave artefacts.
+        # Set min_distance to midpoint so T-wave peaks are suppressed.
+        new_min_dist_ms = (mean_short + mean_long) / 2
+        new_min_dist = int(new_min_dist_ms * fs / 1000)
+
+        method_name = info.get('_method_name', 'prominence')
+        method_map = {
+            'prominence': _detect_prominence,
+            'derivative': _detect_derivative,
+            'peak': _detect_peak,
+        }
+        method_fn = method_map.get(method_name, _detect_prominence)
+        try:
+            if method_name == 'derivative':
+                bi2, bt2, info2 = method_fn(data, fs, new_min_dist, threshold_factor, cfg=cfg)
+            else:
+                bi2, bt2, info2 = method_fn(data, fs, new_min_dist, threshold_factor)
+
+            # Verify improvement: CV should decrease
+            bp2 = np.diff(bi2) / fs if len(bi2) > 1 else np.array([])
+            old_cv = np.std(bp_ms) / np.mean(bp_ms) if np.mean(bp_ms) > 0 else 999
+            new_cv = np.std(bp2 * 1000) / np.mean(bp2 * 1000) if len(bp2) > 1 and np.mean(bp2) > 0 else 999
+
+            if new_cv < old_cv and len(bi2) >= 5:
+                info2['_method_name'] = method_name
+                info2['_score'] = info.get('_score', 0) + 10
+                info2['bimodal_correction'] = (
+                    f'T-wave artefact detected (short={mean_short:.0f}ms, '
+                    f'long={mean_long:.0f}ms, ratio={ratio:.1f}x). '
+                    f'min_distance adjusted to {new_min_dist_ms:.0f}ms. '
+                    f'CV improved {old_cv*100:.1f}% → {new_cv*100:.1f}%'
+                )
+                return bi2, bt2, info2
+        except Exception:
+            pass
+
     return bi, bt, info
 
 

@@ -92,8 +92,10 @@ def full_filter_pipeline(data, fs, cfg=None):
         from .config import FilterConfig
         cfg = FilterConfig()
 
-    y = notch_filter(data, fs, freq=cfg.notch_freq_hz,
-                     n_harmonics=cfg.notch_harmonics, Q=cfg.notch_q)
+    y = np.array(data, dtype=np.float64)
+    if cfg.notch_freq_hz and cfg.notch_freq_hz > 0:
+        y = notch_filter(y, fs, freq=cfg.notch_freq_hz,
+                         n_harmonics=cfg.notch_harmonics, Q=cfg.notch_q)
     y = bandpass_filter(y, fs, lowcut=cfg.bandpass_low_hz,
                         highcut=cfg.bandpass_high_hz, order=cfg.bandpass_order)
     y = smooth_savgol(y, window_length=cfg.savgol_window,

@@ -305,6 +305,35 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
                 morphology_corrs.append(corr)
             qc.per_beat_corr = morphology_corrs
 
+    # ─── Step 3b: Adaptive morphology threshold ───
+    # If the fixed threshold would reject too many beats (>40%), the
+    # signal likely has naturally variable morphology (common in µECG /
+    # MEA recordings where amplitude fluctuates across beats).
+    # Strategy: lower threshold to keep ≈80% of beats, but never below
+    # the marginal floor.  If timing is also consistent (low CV of beat
+    # periods), trust the beats even more and lower further.
+    effective_morph_threshold = morphology_threshold
+    if use_morphology and len(morphology_corrs) >= 5:
+        n_pass = sum(1 for c_ in morphology_corrs if c_ >= morphology_threshold)
+        if n_pass < 0.6 * len(morphology_corrs):
+            # Check if beat timing is consistent (good proxy for real beats)
+            bp_samples = np.diff(beat_indices)
+            bp_cv = np.std(bp_samples) / np.mean(bp_samples) if len(bp_samples) > 1 and np.mean(bp_samples) > 0 else 999
+
+            if bp_cv < 0.20:
+                # Timing is very regular — beats are almost certainly real.
+                # Use 5th percentile (keeps ~95%).
+                adaptive_thresh = np.percentile(morphology_corrs, 5)
+            elif bp_cv < 0.35:
+                # Timing is reasonably regular. Use 15th percentile (~85%).
+                adaptive_thresh = np.percentile(morphology_corrs, 15)
+            else:
+                # Timing is irregular — be more cautious, 30th percentile (~70%)
+                adaptive_thresh = np.percentile(morphology_corrs, 30)
+
+            marginal = getattr(c, 'morphology_marginal', 0.10)
+            effective_morph_threshold = max(adaptive_thresh, marginal)
+
     # ─── Step 4: Accept/Reject decisions ───
     accepted_mask = []
     n_rej_amp = 0
@@ -319,7 +348,7 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
         # Morphology check
         morph_ok = True
         if use_morphology and i < len(morphology_corrs):
-            morph_ok = morphology_corrs[i] >= morphology_threshold
+            morph_ok = morphology_corrs[i] >= effective_morph_threshold
 
         if not amp_ok:
             accepted_mask.append(False)
@@ -367,8 +396,10 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
         qc.notes.append(f'{n_rej_amp} beats rejected for low amplitude '
                         f'(< {amplitude_threshold*100:.0f}% of reference)')
     if n_rej_morph > 0:
-        qc.notes.append(f'{n_rej_morph} beats rejected for abnormal morphology '
-                        f'(corr < {morphology_threshold:.2f})')
+        thresh_note = f'corr < {effective_morph_threshold:.2f}'
+        if effective_morph_threshold != morphology_threshold:
+            thresh_note += f' (adapted from {morphology_threshold:.2f})'
+        qc.notes.append(f'{n_rej_morph} beats rejected for abnormal morphology ({thresh_note})')
 
     return qc, accepted_beat_indices, accepted_beats_data, accepted_beats_time
 

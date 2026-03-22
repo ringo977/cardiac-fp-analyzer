@@ -90,6 +90,9 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
     try:
         metadata, df = load_csv(filepath)
         fs = metadata['sample_rate']
+        # Normalize time to start at 0 (hardware may use pre-trigger negative times)
+        if len(df) > 0 and df['time'].iloc[0] != 0:
+            df['time'] = df['time'] - df['time'].iloc[0]
         if verbose: print(f"  Loaded: {len(df)} samples, Fs={fs} Hz, Duration={len(df)/fs:.1f}s")
 
         file_info = parse_filename(filepath.name)
@@ -115,6 +118,7 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
             if verbose:
                 print(f"  Gain correction: ÷{gain:.0e} → amplitude in V")
 
+        raw_signal = raw.copy()  # keep unfiltered signal for display
         filtered = full_filter_pipeline(raw, fs, cfg=config.filtering)
         if verbose: print(f"  Filtered ({actual_ch})")
 
@@ -149,15 +153,18 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
             for note in qc_report.notes:
                 print(f"    >> {note}")
 
-        # Use cleaned beats for parameter extraction
+        # Use cleaned beats for parameter extraction (FPD, spike amplitude, etc.)
         all_p, summary = extract_all_parameters(bd_clean, btm_clean, bi_clean, fs,
                                                  cfg=rep_cfg)
-        bp = compute_beat_periods(bi_clean, fs)
+
+        # Beat period from ALL detected beats (timing is reliable even for
+        # morphologically marginal beats) — avoids artificial gaps from QC rejection.
+        bp = compute_beat_periods(bi, fs)
 
         if verbose and len(bp) > 0:
             print(f"  BP: {np.mean(bp)*1000:.0f}ms ({60/np.mean(bp):.1f} BPM)")
 
-        ar = analyze_arrhythmia(bi_clean, bp, all_p, summary, fs,
+        ar = analyze_arrhythmia(bi, bp, all_p, summary, fs,
                                cfg=config.arrhythmia, beats_data=bd_clean)
         if verbose:
             print(f"  {ar.classification} (Risk: {ar.risk_score}/100)")
@@ -166,6 +173,7 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
                 'all_params': all_p, 'arrhythmia_report': ar,
                 'beat_indices': bi_clean, 'beat_indices_raw': bi,
                 'beat_periods': bp, 'filtered_signal': filtered,
+                'raw_signal': raw_signal,
                 'time_vector': df['time'].values,
                 'beats_data': bd_clean, 'beats_time': btm_clean,
                 'qc_report': qc_report}
@@ -528,8 +536,10 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
                   f"re-analyzed with {len(baseline_templates)} baseline template(s)")
 
     # Compact memory: replace raw beats_data (~100KB/rec) with
-    # precomputed template (~1KB/rec) for downstream waveform display
+    # precomputed template (~1KB/rec) for downstream waveform display.
+    # Also drop raw_signal (only needed in single-file interactive mode).
     for r in results:
+        r.pop('raw_signal', None)
         bd = r.pop('beats_data', None)
         if bd is not None and len(bd) >= 5 and 'beat_template' not in r:
             tmpl = _compute_template(bd)

@@ -66,6 +66,8 @@ TRANSLATIONS = {
         'drug': 'Farmaco',
         'risk_score': 'Risk Score',
         'filtered_signal': 'Segnale filtrato',
+        'raw_signal': 'Segnale grezzo',
+        'show_raw_signal': 'Mostra segnale grezzo (non filtrato)',
         'beat_markers': 'Battiti',
         'time_s': 'Tempo (s)',
         'time_ms': 'Tempo (ms)',
@@ -158,7 +160,13 @@ TRANSLATIONS = {
         'cfg_method': 'Metodo',
         'cfg_method_help': "'auto' sceglie il metodo migliore automaticamente",
         'cfg_min_distance': 'Distanza min tra battiti (ms)',
+        'cfg_min_distance_help': "In modalità 'auto', la correzione bimodale rileva e corregge automaticamente i falsi positivi da onda T.",
         'cfg_threshold': 'Soglia adattiva (×)',
+        'cfg_qc_section': 'Controllo qualità battiti',
+        'cfg_morph_threshold': 'Soglia morfologica (correlazione)',
+        'cfg_morph_threshold_help': 'Correlazione minima con il template per accettare un battito. Abbassare se troppi battiti vengono scartati (segnali µECG: provare 0.2-0.3).',
+        'cfg_use_morphology': 'Filtro morfologico attivo',
+        'cfg_use_morphology_help': 'Disattivare se il segnale è buono ma il QC scarta troppi battiti.',
         'cfg_fpd': 'FPD / Ripolarizzazione',
         'cfg_fpd_method': 'Metodo FPD',
         'cfg_fpd_method_help': "'tangent' è lo standard in letteratura",
@@ -189,6 +197,16 @@ TRANSLATIONS = {
         'baseline': 'Baseline',
         'inclusion': 'Inclusione',
         'classification': 'Class.',
+        'beat_editor': 'Editor battiti',
+        'beat_editor_help': 'Deseleziona la casella per escludere un battito, riselezionala per reincluderlo. Puoi anche aggiungere battiti mancanti.',
+        'beat_include': 'Incluso',
+        'beats_included': 'Battiti inclusi',
+        'beats_excluded': 'Battiti esclusi',
+        'add_beat_time': 'Aggiungi battito al tempo (s)',
+        'add_beat_btn': 'Aggiungi',
+        'reanalyze_btn': 'Ri-analizza con battiti modificati',
+        'reanalysis_done': 'Ri-analisi completata con {n} battiti',
+        'beats_modified': 'Battiti modificati: {orig} originali → {new} inclusi',
     },
     'en': {
         'app_title': 'Cardiac FP Analyzer',
@@ -213,6 +231,8 @@ TRANSLATIONS = {
         'drug': 'Drug',
         'risk_score': 'Risk Score',
         'filtered_signal': 'Filtered signal',
+        'raw_signal': 'Raw signal',
+        'show_raw_signal': 'Show raw (unfiltered) signal',
         'beat_markers': 'Beats',
         'time_s': 'Time (s)',
         'time_ms': 'Time (ms)',
@@ -305,7 +325,13 @@ TRANSLATIONS = {
         'cfg_method': 'Method',
         'cfg_method_help': "'auto' chooses the best method automatically",
         'cfg_min_distance': 'Min beat distance (ms)',
+        'cfg_min_distance_help': "In 'auto' mode, bimodal correction automatically detects and fixes T-wave false positives.",
         'cfg_threshold': 'Adaptive threshold (×)',
+        'cfg_qc_section': 'Beat quality control',
+        'cfg_morph_threshold': 'Morphology threshold (correlation)',
+        'cfg_morph_threshold_help': 'Minimum correlation with template to accept a beat. Lower if too many beats are rejected (µECG signals: try 0.2-0.3).',
+        'cfg_use_morphology': 'Morphology filter active',
+        'cfg_use_morphology_help': 'Disable if signal is good but QC rejects too many beats.',
         'cfg_fpd': 'FPD / Repolarization',
         'cfg_fpd_method': 'FPD Method',
         'cfg_fpd_method_help': "'tangent' is the literature standard",
@@ -336,6 +362,16 @@ TRANSLATIONS = {
         'baseline': 'Baseline',
         'inclusion': 'Inclusion',
         'classification': 'Class.',
+        'beat_editor': 'Beat editor',
+        'beat_editor_help': 'Uncheck the box to exclude a beat, re-check it to include it again. You can also add missing beats.',
+        'beat_include': 'Included',
+        'beats_included': 'Included beats',
+        'beats_excluded': 'Excluded beats',
+        'add_beat_time': 'Add beat at time (s)',
+        'add_beat_btn': 'Add',
+        'reanalyze_btn': 'Re-analyze with modified beats',
+        'reanalysis_done': 'Re-analysis complete with {n} beats',
+        'beats_modified': 'Beats modified: {orig} original → {new} included',
     }
 }
 
@@ -347,6 +383,54 @@ def T(key, **kwargs):
     if kwargs:
         text = text.format(**kwargs)
     return text
+
+
+def _reanalyze_with_modified_beats(result, new_beat_indices, config):
+    """Re-run analysis pipeline from beat segmentation onwards using modified beat indices.
+
+    This keeps the original filtered signal but recomputes segmentation,
+    QC, parameters, and arrhythmia analysis with the user-edited beats.
+    """
+    filtered = result['filtered_signal']
+    t = result['time_vector']
+    fs = result['metadata']['sample_rate']
+    rep_cfg = config.repolarization
+
+    bi = np.sort(new_beat_indices)
+
+    # Segment beats
+    bd, btm, vi = segment_beats(filtered, t, bi, fs,
+                                 pre_ms=rep_cfg.segment_pre_ms,
+                                 post_ms=max(850, rep_cfg.search_end_ms + 50))
+
+    # QC
+    qc_report, bi_clean, bd_clean, btm_clean = validate_beats(
+        filtered, bi, bd, btm, fs, cfg=config.quality
+    )
+
+    # Parameters
+    all_p, summary = extract_all_parameters(bd_clean, btm_clean, bi_clean, fs,
+                                             cfg=rep_cfg)
+    bp = compute_beat_periods(bi_clean, fs)
+
+    # Arrhythmia
+    ar = analyze_arrhythmia(bi_clean, bp, all_p, summary, fs,
+                            cfg=config.arrhythmia, beats_data=bd_clean)
+
+    # Build updated result (preserving original signal data)
+    updated = dict(result)
+    updated.update({
+        'beat_indices': bi_clean,
+        'beat_indices_raw': bi,
+        'beat_periods': bp,
+        'all_params': all_p,
+        'summary': summary,
+        'arrhythmia_report': ar,
+        'beats_data': bd_clean,
+        'beats_time': btm_clean,
+        'qc_report': qc_report,
+    })
+    return updated
 
 
 def _amplitude_scale(sig):
@@ -382,9 +466,11 @@ def build_config_from_sidebar() -> AnalysisConfig:
                 value=1e4, min_value=1.0, format="%.0e",
                 help=T('cfg_amp_gain_help')
             )
-            config.filtering.notch_freq_hz = st.selectbox(
-                f"{T('cfg_mains_freq')}", [50.0, 60.0], index=0
+            _notch_options = {'50 Hz': 50.0, '60 Hz': 60.0, 'Off': 0.0}
+            _notch_sel = st.selectbox(
+                f"{T('cfg_mains_freq')}", list(_notch_options.keys()), index=0
             )
+            config.filtering.notch_freq_hz = _notch_options[_notch_sel]
             config.filtering.bandpass_low_hz = st.number_input(
                 T('cfg_bandpass_low'), value=0.5, min_value=0.1, max_value=10.0, step=0.1
             )
@@ -399,10 +485,21 @@ def build_config_from_sidebar() -> AnalysisConfig:
                 help=T('cfg_method_help')
             )
             config.beat_detection.min_distance_ms = st.number_input(
-                T('cfg_min_distance'), value=400.0, min_value=100.0, max_value=2000.0
+                T('cfg_min_distance'), value=400.0, min_value=100.0, max_value=2000.0,
+                help=T('cfg_min_distance_help')
             )
             config.beat_detection.threshold_factor = st.number_input(
                 T('cfg_threshold'), value=4.0, min_value=1.0, max_value=10.0, step=0.5
+            )
+            st.caption(f"🔬 {T('cfg_qc_section')}")
+            config.quality.morphology_threshold = st.slider(
+                T('cfg_morph_threshold'), min_value=0.0, max_value=1.0,
+                value=0.4, step=0.05,
+                help=T('cfg_morph_threshold_help')
+            )
+            config.quality.use_morphology = st.checkbox(
+                T('cfg_use_morphology'), value=True,
+                help=T('cfg_use_morphology_help')
             )
 
         # ── FPD ──
@@ -560,31 +657,73 @@ def page_single_file(config: AnalysisConfig):
 
 
 def _plot_signal(result):
-    """Plot filtered signal with beat markers."""
+    """Plot filtered signal with beat markers and interactive beat editor."""
     import plotly.graph_objects as go
 
-    sig_raw = result['filtered_signal']
-    scale, y_label = _amplitude_scale(sig_raw)
-    sig = sig_raw * scale
+    sig_filt = result['filtered_signal']
+    scale, y_label = _amplitude_scale(sig_filt)
+    sig = sig_filt * scale
     t = result['time_vector']
-    bi = result['beat_indices']
     fs = result['metadata']['sample_rate']
 
+    # ── Build unified beat set with inclusion state ──
+    # Merge auto-detected (pre-QC) + manually added beats into one set.
+    # Session state tracks which are excluded.
+    bi_raw = result['beat_indices_raw']
+
+    # Initialize beat editor state on first run or when result changes
+    result_id = id(result['filtered_signal'])  # changes when result changes
+    if (st.session_state.get('_beat_editor_result_id') != result_id
+            or 'beat_all_indices' not in st.session_state):
+        st.session_state['_beat_editor_result_id'] = result_id
+        st.session_state['beat_all_indices'] = sorted(set(bi_raw))
+        st.session_state['beat_excluded'] = set()
+
+    all_bi = sorted(st.session_state['beat_all_indices'])
+    excluded = st.session_state['beat_excluded']
+
+    included_bi = np.array([i for i in all_bi if i not in excluded], dtype=int)
+    excluded_bi = np.array([i for i in all_bi if i in excluded], dtype=int)
+
+    # Toggle for raw signal overlay
+    show_raw = st.checkbox(T('show_raw_signal'), value=False)
+
     fig = go.Figure()
-    # Downsample for display if very long
     step = max(1, len(sig) // 50000)
+
+    # Raw signal (faded, behind filtered)
+    if show_raw and 'raw_signal' in result:
+        raw_sig = result['raw_signal'] * scale
+        fig.add_trace(go.Scatter(
+            x=t[::step], y=raw_sig[::step],
+            mode='lines', name=T('raw_signal'),
+            line=dict(color='#ff7f0e', width=0.6),
+            opacity=0.4
+        ))
+
     fig.add_trace(go.Scatter(
         x=t[::step], y=sig[::step],
         mode='lines', name=T('filtered_signal'),
         line=dict(color='#1f77b4', width=0.8)
     ))
-    # Beat markers
-    if len(bi) > 0:
+
+    # Included beats — red triangles
+    if len(included_bi) > 0:
         fig.add_trace(go.Scatter(
-            x=t[bi], y=sig[bi],
-            mode='markers', name=T('beat_markers'),
-            marker=dict(color='red', size=6, symbol='triangle-down')
+            x=t[included_bi], y=sig[included_bi],
+            mode='markers', name=T('beats_included'),
+            marker=dict(color='red', size=7, symbol='triangle-down')
         ))
+    # Excluded beats — grey triangles
+    if len(excluded_bi) > 0:
+        fig.add_trace(go.Scatter(
+            x=t[excluded_bi], y=sig[excluded_bi],
+            mode='markers', name=T('beats_excluded'),
+            marker=dict(color='#888888', size=7, symbol='triangle-down',
+                        line=dict(width=1, color='white')),
+            opacity=0.5
+        ))
+
     fig.update_layout(
         xaxis_title=T('time_s'), yaxis_title=y_label,
         height=400, margin=dict(t=30, b=40),
@@ -592,14 +731,92 @@ def _plot_signal(result):
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Stats
-    cols = st.columns(4)
+    # Stats (from current included beats)
     bp = result['beat_periods']
+    cols = st.columns(4)
     cols[0].metric(T('n_beats_qc'), f"{len(result['beat_indices'])}")
-    cols[1].metric(T('n_beats_raw'), f"{len(result['beat_indices_raw'])}")
+    cols[1].metric(T('n_beats_raw'), f"{len(all_bi)}")
     if len(bp) > 0:
         cols[2].metric(T('beat_period'), f"{np.mean(bp)*1000:.0f} ms")
         cols[3].metric("BPM", f"{60/np.mean(bp):.1f}")
+
+    # ── Beat editor ──
+    with st.expander(f"✏️ {T('beat_editor')}", expanded=False):
+        st.caption(T('beat_editor_help'))
+
+        # --- Beat table with toggle checkboxes ---
+        beat_df = pd.DataFrame({
+            T('beat_include'): [i not in excluded for i in all_bi],
+            '#': list(range(1, len(all_bi) + 1)),
+            T('time_s'): [f"{t[i]:.3f}" for i in all_bi],
+            '_idx': all_bi,
+        })
+
+        edited = st.data_editor(
+            beat_df[[T('beat_include'), '#', T('time_s')]],
+            hide_index=True,
+            use_container_width=True,
+            height=min(400, 35 * len(all_bi) + 40),
+            column_config={
+                T('beat_include'): st.column_config.CheckboxColumn(
+                    T('beat_include'), default=True, width='small'
+                ),
+                '#': st.column_config.NumberColumn('#', width='small'),
+                T('time_s'): st.column_config.TextColumn(T('time_s'), width='medium'),
+            },
+            key='beat_editor_table'
+        )
+
+        # Sync checkbox changes back to session state
+        new_excluded = set()
+        for row_i, included in enumerate(edited[T('beat_include')]):
+            if not included:
+                new_excluded.add(all_bi[row_i])
+        st.session_state['beat_excluded'] = new_excluded
+
+        st.divider()
+
+        # --- Add new beat ---
+        col_add, col_btn = st.columns([3, 1])
+        with col_add:
+            new_beat_t = st.number_input(
+                T('add_beat_time'), min_value=float(t[0]),
+                max_value=float(t[-1]),
+                value=float(t[len(t)//2]),
+                step=0.001, format="%.3f",
+                key='add_beat_time_input'
+            )
+        with col_btn:
+            st.write("")
+            if st.button(T('add_beat_btn'), key='add_beat_btn'):
+                new_idx = int(np.argmin(np.abs(t - new_beat_t)))
+                if new_idx not in st.session_state['beat_all_indices']:
+                    st.session_state['beat_all_indices'].append(new_idx)
+                    st.session_state['beat_all_indices'].sort()
+                # Make sure it's not excluded
+                st.session_state['beat_excluded'].discard(new_idx)
+                st.rerun()
+
+        # --- Summary & re-analyze ---
+        n_inc = len(all_bi) - len(new_excluded)
+        n_orig = len(bi_raw)
+        has_changes = (set(all_bi) != set(bi_raw)) or (len(new_excluded) > 0)
+
+        if has_changes:
+            st.info(T('beats_modified', orig=n_orig, new=n_inc))
+
+            if st.button(T('reanalyze_btn'), type='primary', key='reanalyze_btn'):
+                final_bi = np.array([i for i in all_bi if i not in new_excluded], dtype=int)
+                config = st.session_state.get('_analysis_config', AnalysisConfig())
+                with st.spinner(T('analyzing')):
+                    updated = _reanalyze_with_modified_beats(result, final_bi, config)
+                st.session_state['single_result'] = updated
+                # Reset editor state so it re-syncs with new result
+                st.session_state.pop('_beat_editor_result_id', None)
+                st.session_state.pop('beat_all_indices', None)
+                st.session_state.pop('beat_excluded', None)
+                st.success(T('reanalysis_done', n=len(updated['beat_indices'])))
+                st.rerun()
 
 
 def _plot_beats(result):
@@ -1413,6 +1630,7 @@ def _download_reports(results, config, data_dir):
 def main():
     # Build config from sidebar
     config = build_config_from_sidebar()
+    st.session_state['_analysis_config'] = config
 
     # Navigation
     st.sidebar.divider()
