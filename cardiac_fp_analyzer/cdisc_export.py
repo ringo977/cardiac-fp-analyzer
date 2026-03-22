@@ -51,9 +51,13 @@ _EG_VAR_LABELS = {
     'EGTEST':   'ECG Test Name',
     'EGORRES':  'Result or Finding in Original Units',
     'EGORRESU': 'Unit of the Original Result',
-    'EGSTRESC': 'Result in Character Format',
-    'EGSTRESN': 'Standardized Result in Numeric Format',
+    'EGSTRESC': 'Character Result/Finding in Std Format',
+    'EGSTRESN': 'Numeric Result/Finding in Standard Units',
     'EGSTRESU': 'Unit of the Standardized Result',
+    'EGPOS':    'ECG Position of Subject',
+    'EGLEAD':   'Lead Used for Measurement',
+    'EGCSTATE': 'Consciousness State',
+    'EGNOMDY':  'Nominal Study Day for Tabulations',
     'EGSTAT':   'Completion Status',
     'EGMETHOD': 'Method of ECG Test',
     'EGBLFL':   'Baseline Flag',
@@ -96,6 +100,8 @@ _EX_VAR_LABELS = {
     'EXDOSFRM': 'Dose Form',
     'EXDOSFRQ': 'Dosing Frequency per Interval',
     'EXROUTE':  'Route of Administration',
+    'EXLOT':    'Lot Number',
+    'EXTRTV':   'Treatment Vehicle',
     'EXSTDTC':  'Start Date/Time of Treatment',
     'EXSTDY':   'Study Day of Start of Treatment',
     'EXTPT':    'Planned Time Point Name',
@@ -124,7 +130,7 @@ _TX_VAR_LABELS = {
     'TXSEQ':    'Sequence Number',
     'TXPARMCD': 'Trial Set Parameter Short Name',
     'TXPARM':   'Trial Set Parameter',
-    'TXVAL':    'Parameter Value',
+    'TXVAL':    'Trial Set Parameter Value',
 }
 
 # DS domain variable labels (SENDIG v3.1.1 section 6.2.1)
@@ -135,8 +141,10 @@ _DS_VAR_LABELS = {
     'DSSEQ':    'Sequence Number',
     'DSTERM':   'Reported Term for the Disposition Event',
     'DSDECOD':  'Standardized Disposition Term',
+    'DSUSCHFL': 'Unscheduled Flag',
     'DSSTDTC':  'Date/Time of Disposition',
     'DSSTDY':   'Study Day of Disposition',
+    'DSNOMDY':  'Nominal Study Day for Tabulations',
 }
 
 # All labels indexed by domain
@@ -287,6 +295,7 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
 
     # (TSPARMCD, TSPARM [exact CDISC CT label], TSVAL, TSVALNF)
     # Labels sourced from SENDIG v3.1.1 section 7.6.2 Trial Summary Codes
+    # ALL SE2xxx-required params must be present even if value is NA.
     params = [
         # Study identification — Should Include = Yes
         ('STITLE',  'Study Title',                               study_title,              ''),
@@ -307,10 +316,15 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
         ('TRTV',    'Treatment Vehicle',                         'CULTURE MEDIUM',         ''),
         ('TRTCAS',  'Primary Treatment CAS Registry Number',     '',                       'NA'),
         ('TRTUNII', 'Primary Treatment Unique Ingredient ID',    '',                       'NA'),
+        ('PCLASS',  'Pharmacological Class of Invest. Therapy',  'ION CHANNEL MODULATORS', ''),
 
         # Subjects / design — Should Include = Yes
         ('SEXPOP',  'Sex of Participants',                       '',                       'NA'),
         ('SPLANSUB','Planned Number of Subjects',                '',                       'NA'),
+
+        # Age (NA for cell lines — SE2201 requires AGE or AGETXT)
+        ('AGETXT',  'Age Text',                                  '',                       'NA'),
+        ('AGEU',    'Age Unit',                                  '',                       'NA'),
 
         # Timing — Should Include = Yes
         ('STSTDTC', 'Study Start Date',                          now,                      ''),
@@ -318,12 +332,16 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
         ('EXPSTDTC','Experimental Start Date',                   now,                      ''),
         ('EXPENDTC','Experimental End Date',                     end_with_time,            ''),
         ('DOSDUR',  'Dosing Duration',                           'P1D',                    ''),
+        ('DOSSTDTC','Start Date/Time of Dose Interval',          now,                      ''),
+        ('DOSENDTC','End Date/Time of Dose Interval',            end_with_time,            ''),
+        ('PDOSFRQ', 'Planned Dosing Frequency per Interval',     'ONCE',                   ''),
         ('TRMSAC',  'Time to Terminal Sacrifice',                'P1D',                    ''),
 
         # Regulatory / compliance — Should Include = Yes
         ('GLPFL',   'GLP Flag',                                  'N',                      ''),
-        ('SNDIGVER','SEND Implementation Guide Version',         'SEND Implementation Guide Version 3.1.1', ''),
-        ('SNDCTVER','SEND Controlled Terminology Version',       'SEND Terminology 2025-09-26',             ''),
+        ('GLPTYP',  'Good Laboratory Practice Type',             '',                       'NA'),
+        ('SNDIGVER','SEND Implementation Guide Version',         '3.1.1',                  ''),
+        ('SNDCTVER','SEND Controlled Terminology Version',       'SEND Terminology 2025-09-26', ''),
 
         # Test facility — Should Include = Yes
         ('TFCNTRY', 'Test Facility Country',                     '',                       'NA'),
@@ -331,8 +349,8 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
         ('TSTFNAM', 'Test Facility Name',                        '',                       'NA'),
         ('SPREFID', "Sponsor's Reference ID",                    '',                       'NA'),
 
-        # Age (NA for cell lines)
-        ('AGEU',    'Age Unit',                                  '',                       'NA'),
+        # Material / production (SE2267 requires STRPSTAT)
+        ('STRPSTAT','Test/Reference Item Production Status',     '',                       'NA'),
     ]
 
     rows = []
@@ -465,11 +483,13 @@ def _build_ex(results: list, study_id: str) -> pd.DataFrame:
             'EXDOSFRM': 'SOLUTION',
             'EXDOSFRQ': 'ONCE',
             'EXROUTE':  'TOPICAL',
+            'EXLOT':    '',              # SE0057: expected variable
+            'EXTRTV':   'CULTURE MEDIUM',# SE0057: expected variable
+            'EXSTDTC':  exstdtc,
+            'EXSTDY':   1,
             'EXTPT':    f'DOSE {dose_idx}',
             'EXTPTNUM': dose_idx,
             'EPOCH':    'TREATMENT',
-            'EXSTDTC':  exstdtc,
-            'EXSTDY':   1,
         })
 
     return pd.DataFrame(rows)
@@ -549,16 +569,18 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
                 return
             seen_keys.add(dk)
 
-            # Column order matches SENDIG 3.1 specification
+            # Column order matches SENDIG v3.1.1 section 6.3.17
             # EGDY = 1 for all records (same-day in vitro study, EGDTC == RFSTDTC)
-            # Removed empty columns: EGCSTATE, EGLEAD, EGPOS, EGNOMDY (SD1149)
+            # SE0057: EGPOS, EGLEAD, EGCSTATE, EGNOMDY must exist (even if empty)
             rows.append({
                 'STUDYID':  study_id,
                 'DOMAIN':   'EG',
                 'USUBJID':  usubjid,
                 'EGSEQ':    _make_seq(seq_counter, usubjid),
+                'EGREFID':  fname,
                 'EGTESTCD': testcd,
                 'EGTEST':   code_info[1],
+                'EGPOS':    '',              # SE0057: expected variable
                 'EGORRES':  stresc,
                 'EGORRESU': unit,
                 'EGSTRESC': stresc,
@@ -566,14 +588,16 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
                 'EGSTRESU': unit,
                 'EGSTAT':   '',
                 'EGMETHOD': 'DERIVED',
+                'EGLEAD':   '',              # SE0057: expected variable
+                'EGCSTATE': '',              # SE0057: expected variable
                 'EGBLFL':   'Y' if is_bl else '',
+                'EGEVAL':   'ALGORITHM',
                 'VISITDY':  visitdy,
-                'EGDY':     1,
                 'EGDTC':    now,
+                'EGDY':     1,
+                'EGNOMDY':  visitdy,         # SE0057: expected variable
                 'EGTPTREF': tptref,
                 'EPOCH':    epoch,
-                'EGEVAL':   'ALGORITHM',
-                'EGREFID':  fname,
             })
 
         # ── Core electrophysiology parameters ──
@@ -682,12 +706,12 @@ def _build_tx(results: list, study_id: str, dm_df: pd.DataFrame = None) -> pd.Da
         sc = drug[:8]
         sd = f'{drug} Treatment Group'
         _add_tx_param(sc, sd, 'TRT',      'Investigational Therapy or Treatment', drug)
-        _add_tx_param(sc, sd, 'TCNTRL',   'Control Type',                         '')
+        # No TCNTRL for treatment groups (SD0002: TXVAL must not be null)
         _add_tx_param(sc, sd, 'SPGRPCD',  'Sponsor-Defined Group Code',           sc)
         _add_tx_param(sc, sd, 'GRPLBL',   'Group Label',                          f'{drug} Treatment')
         _add_tx_param(sc, sd, 'ARMCD',    'Arm Code',                     'TRT')
-        _add_tx_param(sc, sd, 'TRTDOS',   'Dose Level',              'MULTIPLE')
-        _add_tx_param(sc, sd, 'TRTDOSU',  'Dose Units',                           'nmol/L')
+        _add_tx_param(sc, sd, 'TRTDOS',   'Dose Level',              'SEE PROTOCOL')
+        _add_tx_param(sc, sd, 'TRTDOSU',  'Dose Units',                           'SEE PROTOCOL')
         _add_tx_param(sc, sd, 'PLANMSUB', 'Planned Number of Male Subjects',      '0')
         _add_tx_param(sc, sd, 'PLANFSUB', 'Planned Number of Female Subjects',    '0')
 
@@ -722,8 +746,10 @@ def _build_ds(results: list, study_id: str) -> pd.DataFrame:
             'DSSEQ':    _make_seq(seq_counter, 'DS'),
             'DSTERM':   'TERMINAL SACRIFICE',
             'DSDECOD':  'TERMINAL SACRIFICE',
+            'DSUSCHFL': '',              # SE0057: expected variable
             'DSSTDTC':  now,
             'DSSTDY':   1,
+            'DSNOMDY':  1,               # SE0057: expected variable
         })
 
     return pd.DataFrame(rows)
