@@ -47,35 +47,64 @@ def _select_best_channel(df, fs, cfg=None):
             bp = compute_beat_periods(bi, fs)
             score = 0
             if len(bp) > 2:
-                mbp, cv = np.mean(bp), np.std(bp)/np.mean(bp) if np.mean(bp)>0 else 999
-                if cs.bp_ideal_range_s[0] <= mbp <= cs.bp_ideal_range_s[1]: score += 30
-                if cv*100 < cs.cv_excellent: score += 40
-                elif cv*100 < cs.cv_good: score += 30
-                elif cv*100 < cs.cv_fair: score += 15
-                rate = len(bi) / (len(df)/fs)
-                if cs.rate_range_per_s[0] <= rate <= cs.rate_range_per_s[1]: score += 20
+                mbp = np.mean(bp)
+                cv = np.std(bp) / mbp if mbp > 0 else 999
+
+                # ── 1. Beat period in physiological range (0–15 pt) ──
+                if cs.bp_ideal_range_s[0] <= mbp <= cs.bp_ideal_range_s[1]:
+                    score += 15
+
+                # ── 2. Beat rate reasonable (0–10 pt) ──
+                rate = len(bi) / (len(df) / fs)
+                if cs.rate_range_per_s[0] <= rate <= cs.rate_range_per_s[1]:
+                    score += 10
+
+                # ── 3. Template correlation (0–40 pt) — dominant criterion ──
+                # How reproducible are the beat waveforms?
+                from .beat_detection import segment_beats
+                rep_cfg = cfg.repolarization if cfg else None
+                pre_ms = rep_cfg.segment_pre_ms if rep_cfg else 50
+                post_ms = rep_cfg.search_end_ms + 50 if rep_cfg else 900
+                bd, btm, vi = segment_beats(filt, df['time'].values, bi, fs,
+                                            pre_ms=pre_ms, post_ms=post_ms)
+                if len(bd) >= 3:
+                    min_len = min(len(b) for b in bd)
+                    template = np.mean([b[:min_len] for b in bd], axis=0)
+                    corrs = [np.corrcoef(b[:min_len], template)[0, 1]
+                             for b in bd if len(b) >= min_len]
+                    mean_corr = np.nanmean(corrs) if corrs else 0
+                else:
+                    mean_corr = 0
+                # Scale: corr 0.9+ → 40pt, 0.7 → 28pt, 0.4 → 16pt, 0 → 0
+                score += max(0, min(40, round(mean_corr * 44 - 4, 1)))
+
+                # ── 4. Beat-period regularity (0–20 pt) ──
+                # Continuous: CV=0% → 20pt, CV=5% → 19pt, CV=25% → 15pt, CV>50% → 0pt
+                cv_pct = cv * 100
+                score += max(0, round(20 - cv_pct * 0.4, 1))
+
+                # ── 5. Spike amplitude (0–15 pt) ──
+                # Larger spikes = better electrode contact.
+                # Continuous: scale by median beat peak-to-peak
+                ptp_per_beat = [np.ptp(b) for b in bd] if len(bd) > 0 else [0]
+                median_ptp_mV = np.median(ptp_per_beat) * 1000
+                # 0pt at 0mV, 15pt at ≥500mV, linear
+                score += min(15, round(median_ptp_mV / 500 * 15, 1))
+
                 p5, p95 = np.percentile(filt, [5, 95])
                 nm = (filt >= p5) & (filt <= p95)
-                ns = np.std(filt[nm]) if np.sum(nm)>100 else np.std(filt)
-                snr = np.mean(np.abs(filt[bi]))/ns if ns>0 else 0
-                if snr > cs.snr_good: score += 20
-                elif snr > cs.snr_fair: score += 10
-                # Continuous tiebreaker (0–9.99 range, never changes threshold band)
-                # Favours: higher spike amplitude, lower CV, higher SNR
-                spike_amp = np.mean(np.abs(filt[bi]))
-                tb = 0.0
-                tb += min(3.0, snr / 5.0 * 3.0)                 # 0–3 pts from SNR
-                tb += min(3.0, spike_amp / 1e-3 * 0.3)           # 0–3 pts from spike amp
-                tb += max(0.0, 3.0 - cv * 100 / 10.0)            # 0–3 pts from low CV
-                score += round(tb, 2)
-                details[ch] = (f'{len(bi)} beats, BP={mbp*1000:.0f}ms, CV={cv*100:.1f}%, '
-                               f'spike={spike_amp*1000:.1f}mV, SNR={snr:.1f}, score={score:.1f}')
+                ns = np.std(filt[nm]) if np.sum(nm) > 100 else np.std(filt)
+                snr = np.mean(np.abs(filt[bi])) / ns if ns > 0 else 0
+
+                details[ch] = (f'{len(bi)} beats, BP={mbp*1000:.0f}ms, CV={cv_pct:.1f}%, '
+                               f'ptp={median_ptp_mV:.0f}mV, corr={mean_corr:.3f}, '
+                               f'SNR={snr:.1f}, score={score:.1f}')
             else:
                 details[ch] = f'{len(bi)} beats (too few)'
             if score > best_score:
                 best_score, best_ch = score, ch
-        except Exception:
-            details[ch] = 'error'
+        except Exception as e:
+            details[ch] = f'error: {e}'
     return best_ch, details
 
 

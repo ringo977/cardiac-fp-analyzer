@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.5
+**Versione**: 3.6
 **Piattaforma**: Python 3.10+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -196,33 +196,30 @@ Estrae informazioni strutturate dal nome del file. Convenzione: `chipX_chN_farma
 
 **Funzione**: `analyze.py` → `_select_best_channel(df, fs, cfg)`
 
-Il sistema µECG-Pharma registra su due elettrodi (el1, el2). In modalità `auto`, il software esegue una mini-analisi su ciascun elettrodo e assegna un punteggio basato su 4 criteri (massimo 110 punti):
+Il sistema µECG-Pharma registra su due elettrodi (el1, el2). In modalità `auto`, il software esegue una mini-analisi su ciascun elettrodo e assegna un punteggio **continuo** basato su 5 criteri (massimo 100 punti). Lo scoring è progettato per discriminare chiaramente un elettrodo con buon contatto (battiti riproducibili, ampiezza alta) da uno con segnale degradato.
 
-| Criterio | Condizione | Punti |
-|----------|-----------|-------|
-| Beat period fisiologico | 0.3–4.0 s | +30 |
-| Regolarità ritmo (CV BP) | CV < 10% | +40 |
-|  | CV < 20% | +30 |
-|  | CV < 35% | +15 |
-| Beat rate ragionevole | 0.3–3.5 battiti/s | +20 |
-| SNR segnale | SNR > 5 | +20 |
-|  | SNR > 3 | +10 |
+| # | Criterio | Peso | Tipo | Dettaglio |
+|---|----------|------|------|-----------|
+| 1 | Beat period fisiologico | 0–15 pt | Soglia | +15 se il periodo medio è in [0.3, 4.0] s |
+| 2 | Beat rate ragionevole | 0–10 pt | Soglia | +10 se il rate è in [0.3, 3.5] battiti/s |
+| 3 | **Template correlation** | 0–40 pt | **Continuo** | Correlazione media di ogni battito con il template medio. Criterio **dominante**: misura la riproducibilità della forma d'onda. corr=0.9 → 36pt, corr=0.7 → 27pt, corr=0.4 → 14pt. Formula: `min(40, max(0, corr × 44 − 4))` |
+| 4 | Regolarità ritmo (CV%) | 0–20 pt | Continuo | CV=0% → 20pt, CV=10% → 16pt, CV=50% → 0pt. Formula: `max(0, 20 − CV% × 0.4)` |
+| 5 | Ampiezza spike (ptp) | 0–15 pt | Continuo | Mediana del peak-to-peak per battito. 0mV → 0pt, ≥500mV → 15pt. Formula: `min(15, median_ptp_mV / 500 × 15)` |
 
-L'elettrodo con lo score più alto viene selezionato. Se un elettrodo ha meno di 3 battiti rilevati, resta a score 0. Il peso maggiore è sulla regolarità del ritmo (40 pt), poiché un elettrodo con battiti regolari indica un buon contatto elettrico.
+**Criterio dominante — Template correlation (40 pt)**: la correlazione del template è il criterio più pesante perché misura direttamente la qualità del segnale elettrofisiologico. Un elettrodo con buon contatto produce battiti dalla forma riproducibile (corr > 0.85), mentre un elettrodo con contatto degradato o segnale basso produce forme d'onda incoerenti (corr < 0.5). Questo metrica discrimina meglio del SNR, che può essere fuorviante quando sia il segnale sia il rumore sono bassi.
 
-**Modalità disponibili**: `auto` (scoring), `el1`, `el2`, `both` (analizza entrambi gli elettrodi separatamente, v3.5).
+**Esempio di discriminazione**: su `chipA_ch1_baseline`, el1 ha corr=0.37 (segnale basso e incoerente) mentre el2 ha corr=0.88 (battiti chiari e riproducibili). Lo scoring risultante è el1=58.8 vs el2=92.1, con una separazione di oltre 33 punti che elimina ogni ambiguità.
+
+L'elettrodo con lo score più alto viene selezionato. Se un elettrodo ha meno di 3 battiti rilevati, resta a score 0.
+
+**Modalità disponibili**: `auto` (scoring continuo), `el1`, `el2`, `both` (analizza entrambi gli elettrodi separatamente, v3.5).
 
 I parametri di scoring sono configurabili tramite `ChannelSelectionConfig`:
 
 | Parametro | Default | Descrizione |
 |-----------|---------|-------------|
 | `bp_ideal_range_s` | (0.3, 4.0) | Range fisiologico beat period |
-| `cv_excellent` | 10.0 | Soglia CV% per punteggio massimo |
-| `cv_good` | 20.0 | Soglia CV% per punteggio buono |
-| `cv_fair` | 35.0 | Soglia CV% per punteggio sufficiente |
 | `rate_range_per_s` | (0.3, 3.5) | Range beat rate accettabile |
-| `snr_good` | 5.0 | Soglia SNR per punteggio massimo |
-| `snr_fair` | 3.0 | Soglia SNR per punteggio sufficiente |
 
 ---
 
