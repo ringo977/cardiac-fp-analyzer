@@ -49,10 +49,10 @@ _EG_VAR_LABELS = {
     'EGREFID':  'ECG Reference Identifier',
     'EGTESTCD': 'ECG Test Short Name',
     'EGTEST':   'ECG Test Name',
-    'EGORRES':  'Result or Finding in Original Units',
+    'EGORRES':  'Result or Findings as Collected',
     'EGORRESU': 'Unit of the Original Result',
-    'EGSTRESC': 'Character Result/Finding in Std Format',
-    'EGSTRESN': 'Numeric Result/Finding in Standard Units',
+    'EGSTRESC': 'Standardized Result in Character Format',
+    'EGSTRESN': 'Standardized Result in Numeric Format',
     'EGSTRESU': 'Unit of the Standardized Result',
     'EGPOS':    'ECG Position of Subject',
     'EGLEAD':   'Lead Used for Measurement',
@@ -66,7 +66,6 @@ _EG_VAR_LABELS = {
     'EGDTC':    'Date/Time of ECG Collection',
     'EGDY':     'Study Day of ECG Collection',
     'EGTPTREF': 'Time Point Reference',
-    'EPOCH':    'Epoch',
 }
 
 # DM domain variable labels (SENDIG v3.1.1 section 5.1.1 exact)
@@ -98,7 +97,7 @@ _EX_VAR_LABELS = {
     'EXDOSE':   'Dose per Administration',
     'EXDOSU':   'Dose Units',
     'EXDOSFRM': 'Dose Form',
-    'EXDOSFRQ': 'Dosing Frequency per Interval',
+    'EXDOSFRQ': 'Dosing Frequency Per Interval',
     'EXROUTE':  'Route of Administration',
     'EXLOT':    'Lot Number',
     'EXTRTV':   'Treatment Vehicle',
@@ -106,7 +105,6 @@ _EX_VAR_LABELS = {
     'EXSTDY':   'Study Day of Start of Treatment',
     'EXTPT':    'Planned Time Point Name',
     'EXTPTNUM': 'Planned Time Point Number',
-    'EPOCH':    'Epoch',
 }
 
 # TS domain variable labels
@@ -155,6 +153,8 @@ _DOMAIN_VAR_LABELS = {
     'EG': _EG_VAR_LABELS,
     'TX': _TX_VAR_LABELS,
     'DS': _DS_VAR_LABELS,
+    # TE, TA, SE labels are defined near their builder functions
+    # and added dynamically in export_send_package
 }
 
 # SEND-compliant EGTESTCD codes (max 8 chars, uppercase)
@@ -316,7 +316,7 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
         ('TRTV',    'Treatment Vehicle',                         'CULTURE MEDIUM',         ''),
         ('TRTCAS',  'Primary Treatment CAS Registry Number',     '',                       'NA'),
         ('TRTUNII', 'Primary Treatment Unique Ingredient ID',    '',                       'NA'),
-        ('PCLASS',  'Pharmacological Class of Invest. Therapy',  'ION CHANNEL MODULATORS', ''),
+        ('PCLAS',   'Pharmacological Class of Investigational Therapy', 'ION CHANNEL MODULATORS', ''),
 
         # Subjects / design — Should Include = Yes
         ('SEXPOP',  'Sex of Participants',                       '',                       'NA'),
@@ -334,7 +334,7 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
         ('DOSDUR',  'Dosing Duration',                           'P1D',                    ''),
         ('DOSSTDTC','Start Date/Time of Dose Interval',          now,                      ''),
         ('DOSENDTC','End Date/Time of Dose Interval',            end_with_time,            ''),
-        ('PDOSFRQ', 'Planned Dosing Frequency per Interval',     'ONCE',                   ''),
+        ('PDOSFRQ', 'Planned Dosing Frequency Per Interval',     'ONCE',                   ''),
         ('TRMSAC',  'Time to Terminal Sacrifice',                'P1D',                    ''),
 
         # Regulatory / compliance — Should Include = Yes
@@ -347,10 +347,10 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
         ('TFCNTRY', 'Test Facility Country',                     '',                       'NA'),
         ('TSTFLOC', 'Test Facility Location',                    '',                       'NA'),
         ('TSTFNAM', 'Test Facility Name',                        '',                       'NA'),
-        ('SPREFID', "Sponsor's Reference ID",                    '',                       'NA'),
+        ('SPREFID', "Sponsor's Reference Identifier",             '',                       'NA'),
 
         # Material / production (SE2267 requires STRPSTAT)
-        ('STRPSTAT','Test/Reference Item Production Status',     '',                       'NA'),
+        ('STRPSTAT','Storage and Production Status',               '',                       'NA'),
     ]
 
     rows = []
@@ -427,9 +427,9 @@ def _build_dm(results: list, study_id: str) -> pd.DataFrame:
 
 # ═══════════════════════════════════════════════════════════════════════
 #  EX — Exposure (drug treatments)
-#  Variable order per SENDIG 3.1: STUDYID, DOMAIN, USUBJID, EXSEQ,
+#  Variable order per SENDIG 3.1.1: STUDYID, DOMAIN, USUBJID, EXSEQ,
 #    EXTRT, EXDOSE, EXDOSU, EXDOSFRM, EXDOSFRQ, EXROUTE, EXLOT,
-#    EXTRTV, EPOCH, EXSTDTC, EXSTDY
+#    EXTRTV, EXSTDTC, EXSTDY
 # ═══════════════════════════════════════════════════════════════════════
 
 def _build_ex(results: list, study_id: str) -> pd.DataFrame:
@@ -483,13 +483,12 @@ def _build_ex(results: list, study_id: str) -> pd.DataFrame:
             'EXDOSFRM': 'SOLUTION',
             'EXDOSFRQ': 'ONCE',
             'EXROUTE':  'TOPICAL',
-            'EXLOT':    '',              # SE0057: expected variable
+            'EXLOT':    'LOT001',        # SE2353: must not be null when EXDOSE provided
             'EXTRTV':   'CULTURE MEDIUM',# SE0057: expected variable
             'EXSTDTC':  exstdtc,
             'EXSTDY':   1,
             'EXTPT':    f'DOSE {dose_idx}',
             'EXTPTNUM': dose_idx,
-            'EPOCH':    'TREATMENT',
         })
 
     return pd.DataFrame(rows)
@@ -497,10 +496,10 @@ def _build_ex(results: list, study_id: str) -> pd.DataFrame:
 
 # ═══════════════════════════════════════════════════════════════════════
 #  EG — ECG Test Results (the main data domain)
-#  Variable order per SENDIG 3.1: STUDYID, DOMAIN, USUBJID, EGSEQ,
-#    EGTESTCD, EGTEST, EGORRES, EGORRESU, EGSTRESC, EGSTRESN, EGSTRESU,
-#    EGSTAT, EGMETHOD, EGCSTATE, EGLEAD, EGPOS, EGBLFL, VISITDY,
-#    EGNOMDY, EGDY, EGDTC, EGTPTREF, EPOCH, EGEVAL, EGREFID
+#  Variable order per SENDIG 3.1.1: STUDYID, DOMAIN, USUBJID, EGSEQ,
+#    EGTESTCD, EGTEST, EGPOS, EGORRES, EGORRESU, EGSTRESC, EGSTRESN,
+#    EGSTRESU, EGSTAT, EGMETHOD, EGLEAD, EGCSTATE, EGBLFL, EGEVAL,
+#    VISITDY, EGDTC, EGDY, EGNOMDY, EGTPTREF, EGREFID
 # ═══════════════════════════════════════════════════════════════════════
 
 def _build_eg(results: list, study_id: str) -> pd.DataFrame:
@@ -530,7 +529,7 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
         fname = r.get('metadata', {}).get('filename', '')
 
         tptref = 'BASELINE' if is_bl else f"{drug} {conc}".strip()
-        epoch = 'BASELINE' if is_bl else 'TREATMENT'
+        # epoch info retained in EGTPTREF (baseline vs treatment)
 
         # Assign unique VISITDY per subject-concentration to avoid duplicates
         conc_key = (usubjid, tptref)
@@ -597,7 +596,6 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
                 'EGDY':     1,
                 'EGNOMDY':  visitdy,         # SE0057: expected variable
                 'EGTPTREF': tptref,
-                'EPOCH':    epoch,
             })
 
         # ── Core electrophysiology parameters ──
@@ -756,6 +754,125 @@ def _build_ds(results: list, study_id: str) -> pd.DataFrame:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  TE — Trial Elements (study design building blocks)
+#  SENDIG v3.1.1 section 7.2.1 (p.180)
+# ═══════════════════════════════════════════════════════════════════════
+
+_TE_VAR_LABELS = {
+    'STUDYID':  'Study Identifier',
+    'DOMAIN':   'Domain Abbreviation',
+    'ETCD':     'Element Code',
+    'ELEMENT':  'Description of Element',
+    'TESTRL':   'Rule for Start of Element',
+    'TEENRL':   'Rule for End of Element',
+    'TEDUR':    'Planned Duration of Element',
+}
+
+def _build_te(study_id: str) -> pd.DataFrame:
+    """Build Trial Elements (TE) domain — one row per planned element."""
+    rows = [
+        {
+            'STUDYID': study_id, 'DOMAIN': 'TE',
+            'ETCD': 'TRT01', 'ELEMENT': 'Treatment',
+            'TESTRL': 'Informed consent',
+            'TEENRL': 'End of observation period',
+            'TEDUR':  'P1D',
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  TA — Trial Arms (planned path through the study)
+#  SENDIG v3.1.1 section 7.3.1 (p.182)
+# ═══════════════════════════════════════════════════════════════════════
+
+_TA_VAR_LABELS = {
+    'STUDYID':  'Study Identifier',
+    'DOMAIN':   'Domain Abbreviation',
+    'ARMCD':    'Planned Arm Code',
+    'ARM':      'Description of Planned Arm',
+    'TAETORD':  'Order of Element within Arm',
+    'ETCD':     'Element Code',
+    'ELEMENT':  'Description of Element',
+    'TABRANCH': 'Branch',
+    'EPOCH':    'Trial Epoch',
+}
+
+def _build_ta(study_id: str, dm_df: pd.DataFrame = None) -> pd.DataFrame:
+    """Build Trial Arms (TA) domain — one row per element per arm."""
+    # Collect unique ARMCDs from DM
+    arms = []
+    if dm_df is not None and not dm_df.empty:
+        for _, row in dm_df[['ARMCD', 'ARM']].drop_duplicates().iterrows():
+            arms.append((row['ARMCD'], row['ARM']))
+    if not arms:
+        arms = [('CTRL', 'Control'), ('TRT', 'Treatment')]
+
+    rows = []
+    for armcd, arm in arms:
+        rows.append({
+            'STUDYID':  study_id,
+            'DOMAIN':   'TA',
+            'ARMCD':    armcd,
+            'ARM':      arm,
+            'TAETORD':  1,
+            'ETCD':     'TRT01',
+            'ELEMENT':  'Treatment',
+            'TABRANCH': '',
+            'EPOCH':    'Treatment',
+        })
+    return pd.DataFrame(rows)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  SE — Subject Elements (actual path through the study per subject)
+#  SDTM v1.5 section 2.2.8 (p.21)
+# ═══════════════════════════════════════════════════════════════════════
+
+_SE_VAR_LABELS = {
+    'STUDYID':  'Study Identifier',
+    'DOMAIN':   'Domain Abbreviation',
+    'USUBJID':  'Unique Subject Identifier',
+    'SESEQ':    'Sequence Number',
+    'ETCD':     'Element Code',
+    'ELEMENT':  'Description of Element',
+    'SESTDTC':  'Start Date/Time of Element',
+    'SEENDTC':  'End Date/Time of Element',
+    'TAETORD':  'Order of Element within Arm',
+    'EPOCH':    'Trial Epoch',
+}
+
+def _build_se(results: list, study_id: str) -> pd.DataFrame:
+    """Build Subject Elements (SE) domain — one row per element per subject."""
+    now = datetime.now().strftime('%Y-%m-%d')
+    rows = []
+    seen = set()
+    seq_counter = {}
+
+    for r in results:
+        usubjid = _make_usubjid(study_id, r)
+        if usubjid in seen:
+            continue
+        seen.add(usubjid)
+
+        rows.append({
+            'STUDYID':  study_id,
+            'DOMAIN':   'SE',
+            'USUBJID':  usubjid,
+            'SESEQ':    _make_seq(seq_counter, usubjid),
+            'ETCD':     'TRT01',
+            'ELEMENT':  'Treatment',
+            'SESTDTC':  now,
+            'SEENDTC':  now,
+            'TAETORD':  1,
+            'EPOCH':    'Treatment',
+        })
+
+    return pd.DataFrame(rows)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Define-XML 2.1
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -789,8 +906,11 @@ def _generate_define_xml(study_id: str, datasets: dict, output_dir: Path):
     ]
 
     domain_info = {
-        'TS':   ('Trial Summary',   'Trial summary parameters and study metadata'),
+        'TS':   ('Trial Summary',    'Trial summary parameters and study metadata'),
         'DM':   ('Demographics',     'One record per microtissue'),
+        'SE':   ('Subject Elements', 'Actual element for each subject'),
+        'TA':   ('Trial Arms',       'Planned element sequence per arm'),
+        'TE':   ('Trial Elements',   'Planned element definitions'),
         'EX':   ('Exposure',         'Drug exposure events with concentrations'),
         'EG':   ('ECG Test Results', 'Electrophysiology measurements'),
         'TX':   ('Trial Sets',       'Treatment group definitions'),
@@ -956,6 +1076,14 @@ def export_send_package(
     eg_df = _build_eg(results, study_id)
     tx_df = _build_tx(results, study_id, dm_df=dm_df)
     ds_df = _build_ds(results, study_id)
+    te_df = _build_te(study_id)
+    ta_df = _build_ta(study_id, dm_df=dm_df)
+    se_df = _build_se(results, study_id)
+
+    # Register TE/TA/SE variable labels
+    _DOMAIN_VAR_LABELS['TE'] = _TE_VAR_LABELS
+    _DOMAIN_VAR_LABELS['TA'] = _TA_VAR_LABELS
+    _DOMAIN_VAR_LABELS['SE'] = _SE_VAR_LABELS
 
     # ── Ensure every DM subject has at least one EGBLFL='Y' row (SE2319) ──
     if not eg_df.empty and not dm_df.empty:
@@ -973,7 +1101,6 @@ def export_send_package(
     # ── Enforce SENDIG v3.1.1 column order (SD1079) ──
     # Variable order from SENDIG v3.1.1 domain model tables (authoritative).
     # Only variables we use are listed; order matches spec exactly.
-    # Non-spec variables (EPOCH) are appended at end.
     _SENDIG_COL_ORDER = {
         # TS: Section 7.6.1 (p.210)
         'TS': ['STUDYID','DOMAIN','TSSEQ','TSGRPID','TSPARMCD','TSPARM',
@@ -982,15 +1109,14 @@ def export_send_package(
         'DM': ['STUDYID','DOMAIN','USUBJID','SUBJID','RFSTDTC','RFENDTC',
                'SITEID','BRTHDTC','AGE','AGETXT','AGEU','SEX','SPECIES',
                'STRAIN','SBSTRAIN','ARMCD','ARM','SETCD'],
-        # EX: Section 6.1.1 (p.57-59) — EPOCH not in spec, appended
+        # EX: Section 6.1.1 (p.57-59)
         'EX': ['STUDYID','DOMAIN','USUBJID','POOLID','FOCID','EXSEQ',
                'EXTRT','EXDOSE','EXDOSTXT','EXDOSU','EXDOSFRM','EXDOSFRQ',
                'EXROUTE','EXLOT','EXLOC','EXMETHOD','EXTRTV',
                'EXVAMT','EXVAMTU','EXADJ',
                'EXSTDTC','EXENDTC','EXSTDY','EXENDY','EXDUR',
-               'EXTPT','EXTPTNUM','EXELTM','EXTPTREF','EXRFTDTC',
-               'EPOCH'],
-        # EG: Section 6.3.17 (p.160-162) — EPOCH not in spec, appended
+               'EXTPT','EXTPTNUM','EXELTM','EXTPTREF','EXRFTDTC'],
+        # EG: Section 6.3.17 (p.160-162)
         'EG': ['STUDYID','DOMAIN','USUBJID','EGSEQ',
                'EGGRPID','EGREFID','EGSPID',
                'EGTESTCD','EGTEST','EGCAT','EGPOS',
@@ -1001,14 +1127,21 @@ def export_send_package(
                'VISITDY','EGDTC','EGENDTC','EGDY','EGENDY',
                'EGNOMDY','EGNOMLBL',
                'EGTPT','EGTPTNUM','EGELTM','EGTPTREF','EGRFTDTC',
-               'EGEVLINT','EGSTINT','EGENINT',
-               'EPOCH'],
+               'EGEVLINT','EGSTINT','EGENINT'],
         # TX: Section 7.4.1 (p.185)
         'TX': ['STUDYID','DOMAIN','SETCD','SET','TXSEQ','TXPARMCD',
                'TXPARM','TXVAL'],
         # DS: Section 6.2.1 (p.64-65) — no DSCAT or EPOCH in spec
         'DS': ['STUDYID','DOMAIN','USUBJID','DSSEQ','DSTERM','DSDECOD',
                'DSUSCHFL','VISITDY','DSSTDTC','DSSTDY','DSNOMDY','DSNOMLBL'],
+        # TE: Section 7.2.1 (p.180)
+        'TE': ['STUDYID','DOMAIN','ETCD','ELEMENT','TESTRL','TEENRL','TEDUR'],
+        # TA: Section 7.3.1 (p.182)
+        'TA': ['STUDYID','DOMAIN','ARMCD','ARM','TAETORD','ETCD','ELEMENT',
+               'TABRANCH','TATRANS','EPOCH'],
+        # SE: SDTM v1.5 section 2.2.8
+        'SE': ['STUDYID','DOMAIN','USUBJID','SESEQ','ETCD','ELEMENT',
+               'SESTDTC','SEENDTC','TAETORD','EPOCH'],
     }
 
     def _order_columns(df, domain):
@@ -1028,10 +1161,16 @@ def export_send_package(
     ts_df = _order_columns(ts_df, 'TS')
     tx_df = _order_columns(tx_df, 'TX')
     ds_df = _order_columns(ds_df, 'DS')
+    te_df = _order_columns(te_df, 'TE')
+    ta_df = _order_columns(ta_df, 'TA')
+    se_df = _order_columns(se_df, 'SE')
 
     datasets = {
         'TS': ts_df,
         'DM': dm_df,
+        'SE': se_df,
+        'TA': ta_df,
+        'TE': te_df,
         'TX': tx_df,
         'DS': ds_df,
         'EX': ex_df,
@@ -1043,10 +1182,13 @@ def export_send_package(
     labels = {
         'TS': 'Trial Summary',
         'DM': 'Demographics',
-        'EX': 'Exposure',
-        'EG': 'ECG Test Results',
+        'SE': 'Subject Elements',
+        'TA': 'Trial Arms',
+        'TE': 'Trial Elements',
         'TX': 'Trial Sets',
         'DS': 'Disposition',
+        'EX': 'Exposure',
+        'EG': 'ECG Test Results',
     }
 
     for domain, df in datasets.items():
