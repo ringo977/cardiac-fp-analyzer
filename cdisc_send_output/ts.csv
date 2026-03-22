@@ -1,0 +1,31 @@
+STUDYID,DOMAIN,TSSEQ,TSGRPID,TSPARMCD,TSPARM,TSVAL,TSVALNF
+CIPA001,TS,1,,STITLE,Study Title,CiPA In Vitro Cardiac Safety - hiPSC-CM Field Potential,
+CIPA001,TS,2,,SSTYP,Study Type,IN VITRO,
+CIPA001,TS,3,,SDESIGN,Study Design,PARALLEL,
+CIPA001,TS,4,,SSPONSOR,Sponsoring Organization,NOT PROVIDED,
+CIPA001,TS,5,,STCAT,Study Category,SAFETY PHARMACOLOGY,
+CIPA001,TS,6,,STDIR,Study Director,NOT PROVIDED,
+CIPA001,TS,7,,SPECIES,Species,HUMAN,
+CIPA001,TS,8,,STRAIN,Strain/Substrain,HIPSC-CM,
+CIPA001,TS,9,,SPLRNAM,Test Subject Supplier,,NA
+CIPA001,TS,10,,ROUTE,Route of Administration,TOPICAL,
+CIPA001,TS,11,,TRT,Investigational Therapy or Treatment,MULTIPLE DRUGS,
+CIPA001,TS,12,,TRTV,Treatment Vehicle,CULTURE MEDIUM,
+CIPA001,TS,13,,TRTCAS,Primary Treatment CAS Registry Number,,NA
+CIPA001,TS,14,,TRTUNII,Primary Treatment Unique Ingredient ID,,NA
+CIPA001,TS,15,,SEXPOP,Sex of Participants,,NA
+CIPA001,TS,16,,SPLANSUB,Planned Number of Subjects,,NA
+CIPA001,TS,17,,STSTDTC,Study Start Date,2026-03-22,
+CIPA001,TS,18,,STENDTC,Study End Date,2026-03-22T23:59,
+CIPA001,TS,19,,EXPSTDTC,Experimental Start Date,2026-03-22,
+CIPA001,TS,20,,EXPENDTC,Experimental End Date,2026-03-22T23:59,
+CIPA001,TS,21,,DOSDUR,Dosing Duration,P1D,
+CIPA001,TS,22,,TRMSAC,Time to Terminal Sacrifice,P1D,
+CIPA001,TS,23,,GLPFL,GLP Flag,N,
+CIPA001,TS,24,,SNDIGVER,SEND Implementation Guide Version,SEND Implementation Guide Version 3.1.1,
+CIPA001,TS,25,,SNDCTVER,SEND Controlled Terminology Version,SEND Terminology 2025-09-26,
+CIPA001,TS,26,,TFCNTRY,Test Facility Country,,NA
+CIPA001,TS,27,,TSTFLOC,Test Facility Location,,NA
+CIPA001,TS,28,,TSTFNAM,Test Facility Name,,NA
+CIPA001,TS,29,,SPREFID,Sponsor's Reference ID,,NA
+CIPA001,TS,30,,AGEU,Age Unit,,NA

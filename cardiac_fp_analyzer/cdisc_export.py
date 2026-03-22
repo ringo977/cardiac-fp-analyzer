@@ -2,7 +2,7 @@
 cdisc_export.py — CDISC SEND export for regulatory submission.
 
 Generates SAS Transport v5 (.xpt) files following the SEND
-Implementation Guide (SENDIG v3.1) for nonclinical electrophysiology data.
+Implementation Guide (SENDIG v3.1.1) for nonclinical electrophysiology data.
 
 Domains generated:
   - TS  (Trial Summary)        : study-level metadata
@@ -17,7 +17,7 @@ Also generates:
   - define2-1-0.xsl   : Pinnacle 21 official stylesheet for define.xml rendering
 
 Reference standards:
-  - SENDIG v3.1 (CDISC / FDA)
+  - SENDIG v3.1.1 (CDISC / FDA)
   - NCI Controlled Terminology (2025-09-26)
   - CiPA framework (Blinova et al. 2017)
   - FDA Technical Conformance Guide
@@ -40,32 +40,32 @@ warnings.filterwarnings('ignore')
 # ── SEND Controlled Terminology (NCI CT 2025-09-26) ─────────────────
 # Variable labels MUST match SENDIG 3.1 specification exactly.
 
-# EG domain variable labels (SENDIG 3.1 exact)
+# EG domain variable labels (SENDIG v3.1.1 section 6.3.17 exact)
 _EG_VAR_LABELS = {
     'STUDYID':  'Study Identifier',
     'DOMAIN':   'Domain Abbreviation',
     'USUBJID':  'Unique Subject Identifier',
     'EGSEQ':    'Sequence Number',
-    'EGTESTCD': 'ECG Test or Examination Short Name',
-    'EGTEST':   'ECG Test or Examination Name',
+    'EGREFID':  'ECG Reference Identifier',
+    'EGTESTCD': 'ECG Test Short Name',
+    'EGTEST':   'ECG Test Name',
     'EGORRES':  'Result or Finding in Original Units',
-    'EGORRESU':  'Original Units',
-    'EGSTRESC': 'Character Result/Finding in Std Format',
-    'EGSTRESN': 'Numeric Result/Finding in Standard Units',
-    'EGSTRESU': 'Standard Units',
+    'EGORRESU': 'Unit of the Original Result',
+    'EGSTRESC': 'Result in Character Format',
+    'EGSTRESN': 'Standardized Result in Numeric Format',
+    'EGSTRESU': 'Unit of the Standardized Result',
     'EGSTAT':   'Completion Status',
-    'EGMETHOD': 'Method of Test or Examination',
+    'EGMETHOD': 'Method of ECG Test',
     'EGBLFL':   'Baseline Flag',
-    'VISITDY':  'Planned Study Day of Visit',
-    'EGDY':     'Study Day of ECG',
-    'EGDTC':    'Date/Time of ECG',
+    'EGEVAL':   'Evaluator',
+    'VISITDY':  'Planned Study Day of Collection',
+    'EGDTC':    'Date/Time of ECG Collection',
+    'EGDY':     'Study Day of ECG Collection',
     'EGTPTREF': 'Time Point Reference',
     'EPOCH':    'Epoch',
-    'EGEVAL':   'Evaluator',
-    'EGREFID':  'Reference ID',
 }
 
-# DM domain variable labels (SENDIG 3.1 exact)
+# DM domain variable labels (SENDIG v3.1.1 section 5.1.1 exact)
 _DM_VAR_LABELS = {
     'STUDYID':  'Study Identifier',
     'DOMAIN':   'Domain Abbreviation',
@@ -76,7 +76,6 @@ _DM_VAR_LABELS = {
     'SEX':      'Sex',
     'SPECIES':  'Species',
     'STRAIN':   'Strain/Substrain',
-    'SITEID':   'Study Site Identifier',
     'ARMCD':    'Planned Arm Code',
     'ARM':      'Description of Planned Arm',
     'SETCD':    'Set Code',
@@ -85,23 +84,23 @@ _DM_VAR_LABELS = {
     'AGEU':     'Age Unit',
 }
 
-# EX domain variable labels (SENDIG 3.1 exact)
+# EX domain variable labels (SENDIG v3.1.1 section 6.1.1 exact)
 _EX_VAR_LABELS = {
     'STUDYID':  'Study Identifier',
     'DOMAIN':   'Domain Abbreviation',
     'USUBJID':  'Unique Subject Identifier',
     'EXSEQ':    'Sequence Number',
     'EXTRT':    'Name of Actual Treatment',
-    'EXDOSE':   'Dose Level',
+    'EXDOSE':   'Dose per Administration',
     'EXDOSU':   'Dose Units',
     'EXDOSFRM': 'Dose Form',
     'EXDOSFRQ': 'Dosing Frequency per Interval',
     'EXROUTE':  'Route of Administration',
+    'EXSTDTC':  'Start Date/Time of Treatment',
+    'EXSTDY':   'Study Day of Start of Treatment',
     'EXTPT':    'Planned Time Point Name',
     'EXTPTNUM': 'Planned Time Point Number',
     'EPOCH':    'Epoch',
-    'EXSTDTC':  'Start Date/Time of Treatment',
-    'EXSTDY':   'Study Day of Start of Treatment',
 }
 
 # TS domain variable labels
@@ -128,7 +127,7 @@ _TX_VAR_LABELS = {
     'TXVAL':    'Parameter Value',
 }
 
-# DS domain variable labels
+# DS domain variable labels (SENDIG v3.1.1 section 6.2.1)
 _DS_VAR_LABELS = {
     'STUDYID':  'Study Identifier',
     'DOMAIN':   'Domain Abbreviation',
@@ -136,10 +135,8 @@ _DS_VAR_LABELS = {
     'DSSEQ':    'Sequence Number',
     'DSTERM':   'Reported Term for the Disposition Event',
     'DSDECOD':  'Standardized Disposition Term',
-    'DSCAT':    'Category for Disposition Event',
-    'EPOCH':    'Epoch',
-    'DSSTDTC':  'Start Date/Time of Disposition Event',
-    'DSSTDY':   'Study Day of Start of Disposition',
+    'DSSTDTC':  'Date/Time of Disposition',
+    'DSSTDY':   'Study Day of Disposition',
 }
 
 # All labels indexed by domain
@@ -289,59 +286,52 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
     end_with_time = f"{end}T23:59" if 'T' not in end else end
 
     # (TSPARMCD, TSPARM [exact CDISC CT label], TSVAL, TSVALNF)
-    # Labels sourced from NCI Thesaurus C66738 (SEND CT 2025-09-26)
+    # Labels sourced from SENDIG v3.1.1 section 7.6.2 Trial Summary Codes
     params = [
-        # Study identification
-        ('STSTDTC', 'Study Start Date',                          now,                      ''),
+        # Study identification — Should Include = Yes
         ('STITLE',  'Study Title',                               study_title,              ''),
-        ('SDESIGN', 'Study Design',                              'PARALLEL',               ''),
-        ('SSPONSOR','Clinical Study Sponsor',                    sponsor or 'NOT PROVIDED',''),
-
-        # Species / Strain
-        ('SPECIES', 'Species',                                   'HUMAN',                  ''),
-        ('STRAIN',  'Strain/Substrain',                          'HIPSC-CM',               ''),
         ('SSTYP',   'Study Type',                                'IN VITRO',               ''),
-
-        # Route and treatment
-        ('ROUTE',   'Route of Administration',                   'TOPICAL',                ''),
-        ('TRT',     'Investigational Therapy or Treatment',      'MULTIPLE DRUGS',         ''),
-        ('TRTV',    'Treatment Vehicle',                         'CULTURE MEDIUM',         ''),
-        ('TRTCAS',  'CAS Registry Number',                       '',                       'NA'),
-        ('TRTUNII', 'UNII Code',                                 '',                       'NA'),
-        ('PCLASS',  'Pharmacological Class of Investigational Therapy', 'ION CHANNEL MODULATORS', ''),
-
-        # Subjects / design
-        ('SEXPOP',  'Sex of Participants',                       '',                       'NA'),
+        ('SDESIGN', 'Study Design',                              'PARALLEL',               ''),
+        ('SSPONSOR','Sponsoring Organization',                   sponsor or 'NOT PROVIDED',''),
         ('STCAT',   'Study Category',                            'SAFETY PHARMACOLOGY',    ''),
         ('STDIR',   'Study Director',                            sponsor or 'NOT PROVIDED',''),
 
-        # Timing
-        ('DOSDUR',  'Duration of Dosing',                        'P1D',                    ''),
-        ('DOSSTDTC','Date of First Dose',                        now,                      ''),
-        ('DOSENDTC','Date of Last Dose',                         end_with_time,            ''),
-        ('PDOSFRQ', 'Dosing Frequency per Interval',             'ONCE',                   ''),
-        ('EXPSTDTC','Planned Start Date of Treatment',           now,                      ''),
-        ('EXPENDTC','Planned End Date of Treatment',             end_with_time,            ''),
-        ('STENDTC', 'Study Completion Date',                     end_with_time,            ''),
+        # Species / Strain — Should Include = Yes
+        ('SPECIES', 'Species',                                   'HUMAN',                  ''),
+        ('STRAIN',  'Strain/Substrain',                          'HIPSC-CM',               ''),
+        ('SPLRNAM', 'Test Subject Supplier',                     '',                       'NA'),
 
-        # Regulatory / compliance
-        ('GLPFL',   'GLP Study Indicator',                       'N',                      ''),
-        ('GLPTYP',  'Type of GLP',                               '',                       'NA'),
-        ('SNDIGVER','Version of SENDIG',                         '3.1',                    ''),
-        ('SNDCTVER','Version of SEND CT',                        '2025-09-26',             ''),
+        # Route and treatment — Should Include = Yes
+        ('ROUTE',   'Route of Administration',                   'TOPICAL',                ''),
+        ('TRT',     'Investigational Therapy or Treatment',      'MULTIPLE DRUGS',         ''),
+        ('TRTV',    'Treatment Vehicle',                         'CULTURE MEDIUM',         ''),
+        ('TRTCAS',  'Primary Treatment CAS Registry Number',     '',                       'NA'),
+        ('TRTUNII', 'Primary Treatment Unique Ingredient ID',    '',                       'NA'),
 
-        # Test facility
+        # Subjects / design — Should Include = Yes
+        ('SEXPOP',  'Sex of Participants',                       '',                       'NA'),
+        ('SPLANSUB','Planned Number of Subjects',                '',                       'NA'),
+
+        # Timing — Should Include = Yes
+        ('STSTDTC', 'Study Start Date',                          now,                      ''),
+        ('STENDTC', 'Study End Date',                            end_with_time,            ''),
+        ('EXPSTDTC','Experimental Start Date',                   now,                      ''),
+        ('EXPENDTC','Experimental End Date',                     end_with_time,            ''),
+        ('DOSDUR',  'Dosing Duration',                           'P1D',                    ''),
+        ('TRMSAC',  'Time to Terminal Sacrifice',                'P1D',                    ''),
+
+        # Regulatory / compliance — Should Include = Yes
+        ('GLPFL',   'GLP Flag',                                  'N',                      ''),
+        ('SNDIGVER','SEND Implementation Guide Version',         'SEND Implementation Guide Version 3.1.1', ''),
+        ('SNDCTVER','SEND Controlled Terminology Version',       'SEND Terminology 2025-09-26',             ''),
+
+        # Test facility — Should Include = Yes
         ('TFCNTRY', 'Test Facility Country',                     '',                       'NA'),
         ('TSTFLOC', 'Test Facility Location',                    '',                       'NA'),
         ('TSTFNAM', 'Test Facility Name',                        '',                       'NA'),
-        ('SPLRNAM', 'Test Material Supplier',                    '',                       'NA'),
-        ('SPREFID', 'Supplier Test Report ID',                   '',                       'NA'),
-        ('SPLANSUB','Planned Number of Subjects per Sex per Group','',                       'NA'),
-        ('STRPSTAT','Test Material Production Status',           '',                       'NA'),
-        ('TRMSAC',  'Reason for Termination of Study',           '',                       'NA'),
+        ('SPREFID', "Sponsor's Reference ID",                    '',                       'NA'),
 
         # Age (NA for cell lines)
-        ('AGE',     'Age',                                       '',                       'NA'),
         ('AGEU',    'Age Unit',                                  '',                       'NA'),
     ]
 
@@ -681,7 +671,7 @@ def _build_tx(results: list, study_id: str, dm_df: pd.DataFrame = None) -> pd.Da
         _add_tx_param(sc, sd, 'TCNTRL',   'Control Type',                         'VEHICLE')
         _add_tx_param(sc, sd, 'SPGRPCD',  'Sponsor-Defined Group Code',           'CTRL')
         _add_tx_param(sc, sd, 'GRPLBL',   'Group Label',                          'Vehicle Control')
-        _add_tx_param(sc, sd, 'ARMCD',    'Planned Arm Code for Trial Set',                     'CTRL')
+        _add_tx_param(sc, sd, 'ARMCD',    'Arm Code',                     'CTRL')
         _add_tx_param(sc, sd, 'TRTDOS',   'Dose Level',              '0')
         _add_tx_param(sc, sd, 'TRTDOSU',  'Dose Units',                           'nmol/L')
         _add_tx_param(sc, sd, 'PLANMSUB', 'Planned Number of Male Subjects',      '0')
@@ -695,7 +685,7 @@ def _build_tx(results: list, study_id: str, dm_df: pd.DataFrame = None) -> pd.Da
         _add_tx_param(sc, sd, 'TCNTRL',   'Control Type',                         '')
         _add_tx_param(sc, sd, 'SPGRPCD',  'Sponsor-Defined Group Code',           sc)
         _add_tx_param(sc, sd, 'GRPLBL',   'Group Label',                          f'{drug} Treatment')
-        _add_tx_param(sc, sd, 'ARMCD',    'Planned Arm Code for Trial Set',                     'TRT')
+        _add_tx_param(sc, sd, 'ARMCD',    'Arm Code',                     'TRT')
         _add_tx_param(sc, sd, 'TRTDOS',   'Dose Level',              'MULTIPLE')
         _add_tx_param(sc, sd, 'TRTDOSU',  'Dose Units',                           'nmol/L')
         _add_tx_param(sc, sd, 'PLANMSUB', 'Planned Number of Male Subjects',      '0')
@@ -732,8 +722,6 @@ def _build_ds(results: list, study_id: str) -> pd.DataFrame:
             'DSSEQ':    _make_seq(seq_counter, 'DS'),
             'DSTERM':   'TERMINAL SACRIFICE',
             'DSDECOD':  'TERMINAL SACRIFICE',
-            'DSCAT':    'DISPOSITION EVENT',
-            'EPOCH':    'TREATMENT',
             'DSSTDTC':  now,
             'DSSTDY':   1,
         })
@@ -771,7 +759,7 @@ def _generate_define_xml(study_id: str, datasets: dict, output_dir: Path):
         f'    <MetaDataVersion OID="MDV.{study_id}"',
         f'                     Name="SEND {study_id}"',
         f'                     def:StandardName="SENDIG"',
-        f'                     def:StandardVersion="3.1">',
+        f'                     def:StandardVersion="3.1.1">',
     ]
 
     domain_info = {
@@ -794,7 +782,7 @@ def _generate_define_xml(study_id: str, datasets: dict, output_dir: Path):
         lines.append(f'                        def:Label="{info[0]}"')
         lines.append(f'                        def:Structure="{struct}"')
         lines.append(f'                        Purpose="Tabulation"')
-        lines.append(f'                        def:StandardOID="STD.SENDIG.3.1">')
+        lines.append(f'                        def:StandardOID="STD.SENDIG.3.1.1">')
         lines.append(f'        <!-- {info[1]} ({n_rows} records, {n_cols} variables) -->')
 
         for col in df.columns:
@@ -943,22 +931,58 @@ def export_send_package(
     tx_df = _build_tx(results, study_id, dm_df=dm_df)
     ds_df = _build_ds(results, study_id)
 
-    # ── Enforce SENDIG 3.1 column order (SD1079) ──
+    # ── Ensure every DM subject has at least one EGBLFL='Y' row (SE2319) ──
+    if not eg_df.empty and not dm_df.empty:
+        dm_subjects = set(dm_df['USUBJID'].unique())
+        eg_bl_subjects = set(
+            eg_df.loc[eg_df['EGBLFL'] == 'Y', 'USUBJID'].unique()
+        )
+        missing_bl = dm_subjects - eg_bl_subjects
+        for subj in missing_bl:
+            subj_rows = eg_df[eg_df['USUBJID'] == subj]
+            if not subj_rows.empty:
+                first_idx = subj_rows.index[0]
+                eg_df.loc[first_idx, 'EGBLFL'] = 'Y'
+
+    # ── Enforce SENDIG v3.1.1 column order (SD1079) ──
+    # Variable order from SENDIG v3.1.1 domain model tables (authoritative).
+    # Only variables we use are listed; order matches spec exactly.
+    # Non-spec variables (EPOCH) are appended at end.
     _SENDIG_COL_ORDER = {
-        'TS': ['STUDYID','DOMAIN','TSSEQ','TSGRPID','TSPARMCD','TSPARM','TSVAL','TSVALNF'],
+        # TS: Section 7.6.1 (p.210)
+        'TS': ['STUDYID','DOMAIN','TSSEQ','TSGRPID','TSPARMCD','TSPARM',
+               'TSVAL','TSVALNF'],
+        # DM: Section 5.1.1 (p.45-46)
         'DM': ['STUDYID','DOMAIN','USUBJID','SUBJID','RFSTDTC','RFENDTC',
-               'SITEID','AGE','AGETXT','AGEU','SEX','SPECIES','STRAIN',
-               'ARMCD','ARM','SETCD'],
-        'EX': ['STUDYID','DOMAIN','USUBJID','EXSEQ','EXTRT','EXDOSE',
-               'EXDOSU','EXDOSFRM','EXDOSFRQ','EXROUTE','EXTPT','EXTPTNUM',
-               'EPOCH','EXSTDTC','EXSTDY'],
-        'EG': ['STUDYID','DOMAIN','USUBJID','EGSEQ','EGTESTCD','EGTEST',
+               'SITEID','BRTHDTC','AGE','AGETXT','AGEU','SEX','SPECIES',
+               'STRAIN','SBSTRAIN','ARMCD','ARM','SETCD'],
+        # EX: Section 6.1.1 (p.57-59) — EPOCH not in spec, appended
+        'EX': ['STUDYID','DOMAIN','USUBJID','POOLID','FOCID','EXSEQ',
+               'EXTRT','EXDOSE','EXDOSTXT','EXDOSU','EXDOSFRM','EXDOSFRQ',
+               'EXROUTE','EXLOT','EXLOC','EXMETHOD','EXTRTV',
+               'EXVAMT','EXVAMTU','EXADJ',
+               'EXSTDTC','EXENDTC','EXSTDY','EXENDY','EXDUR',
+               'EXTPT','EXTPTNUM','EXELTM','EXTPTREF','EXRFTDTC',
+               'EPOCH'],
+        # EG: Section 6.3.17 (p.160-162) — EPOCH not in spec, appended
+        'EG': ['STUDYID','DOMAIN','USUBJID','EGSEQ',
+               'EGGRPID','EGREFID','EGSPID',
+               'EGTESTCD','EGTEST','EGCAT','EGPOS',
                'EGORRES','EGORRESU','EGSTRESC','EGSTRESN','EGSTRESU',
-               'EGSTAT','EGMETHOD','EGBLFL','VISITDY','EGDY','EGDTC',
-               'EGTPTREF','EPOCH','EGEVAL','EGREFID'],
-        'TX': ['STUDYID','DOMAIN','SETCD','SET','TXSEQ','TXPARMCD','TXPARM','TXVAL'],
+               'EGSTAT','EGREASND','EGXFN','EGNAM','EGMETHOD',
+               'EGLEAD','EGCSTATE','EGBLFL','EGDRVFL','EGEVAL',
+               'EGEXCLFL','EGREASEX','EGUSCHFL',
+               'VISITDY','EGDTC','EGENDTC','EGDY','EGENDY',
+               'EGNOMDY','EGNOMLBL',
+               'EGTPT','EGTPTNUM','EGELTM','EGTPTREF','EGRFTDTC',
+               'EGEVLINT','EGSTINT','EGENINT',
+               'EPOCH'],
+        # TX: Section 7.4.1 (p.185)
+        'TX': ['STUDYID','DOMAIN','SETCD','SET','TXSEQ','TXPARMCD',
+               'TXPARM','TXVAL'],
+        # DS: Section 6.2.1 (p.64-65) — no DSCAT or EPOCH in spec
         'DS': ['STUDYID','DOMAIN','USUBJID','DSSEQ','DSTERM','DSDECOD',
-               'DSCAT','EPOCH','DSSTDTC','DSSTDY'],
+               'DSUSCHFL','VISITDY','DSSTDTC','DSSTDY','DSNOMDY','DSNOMLBL'],
     }
 
     def _order_columns(df, domain):
@@ -1028,7 +1052,7 @@ def export_send_package(
 
     # ── Summary ──
     summary_lines = [
-        f"CDISC SEND Export Package (SENDIG 3.1)",
+        f"CDISC SEND Export Package (SENDIG 3.1.1)",
         f"Study: {study_id}",
         f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"",
