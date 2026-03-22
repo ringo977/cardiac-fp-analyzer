@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.3
+**Versione**: 3.4
 **Piattaforma**: Python 3.10+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -198,7 +198,7 @@ Il segnale FP grezzo contiene rumore da diverse sorgenti: interferenza di rete (
 
 #### Pipeline di filtraggio
 
-1. **Filtro notch** a 50 Hz + armoniche (100, 150 Hz): rimuove l'interferenza di rete. Q=30 per bande strette che non distorcono il segnale cardiaco. Configurabile per 60 Hz (USA).
+1. **Filtro notch** a 50 Hz + armoniche (100, 150 Hz): rimuove l'interferenza di rete. Q=30 per bande strette che non distorcono il segnale cardiaco. Configurabile per 60 Hz (USA) o disattivabile completamente (opzione "Off").
 
 2. **Filtro passa-banda Butterworth** (0.5–500 Hz, ordine 4): rimuove sia il drift DC (< 0.5 Hz) sia il rumore ad alta frequenza (> 500 Hz). La banda 0.5–500 Hz preserva interamente la morfologia del FP cardiaco.
 
@@ -206,7 +206,7 @@ Il segnale FP grezzo contiene rumore da diverse sorgenti: interferenza di rete (
 
 | Parametro | Default | Descrizione |
 |-----------|---------|-------------|
-| `notch_freq_hz` | 50.0 | Frequenza di rete |
+| `notch_freq_hz` | 50.0 | Frequenza di rete (0 = disattivato) |
 | `notch_harmonics` | 3 | N. armoniche da rimuovere |
 | `notch_q` | 30.0 | Fattore Q (selettività) |
 | `bandpass_low_hz` | 0.5 | Taglio basso passa-banda |
@@ -232,6 +232,14 @@ Il rilevamento dei battiti identifica il picco di depolarizzazione (spike) di ci
 **`peak`**: Rilevamento semplice basato sull'ampiezza assoluta. Metodo di fallback.
 
 **`auto`** (default): Esegue tutti e tre i metodi, poi seleziona quello con il punteggio di plausibilità fisiologica più alto. Il punteggio valuta: periodo medio dei battiti (ideale 0.4–3.0 s), CV del periodo (< 15% = eccellente), rate di battito (0.3–3.5 Hz), numero di battiti rilevati.
+
+#### Correzione bimodale automatica (v3.4)
+
+In modalità `auto`, dopo la selezione del metodo migliore, il sistema analizza la distribuzione dei beat period per rilevare un pattern bimodale. Questo pattern si verifica quando il detector conta sia lo spike di depolarizzazione Na+ sia l'onda T di ripolarizzazione come battiti separati, producendo periodi alternati corti (~400 ms) e lunghi (~800 ms).
+
+L'algoritmo utilizza una soglia di tipo Otsu (minimizzazione della varianza intra-gruppo) per separare i due cluster. Se il rapporto tra i gruppi è nell'intervallo 1.4–3.0× e la separazione è sufficiente (gap > 2σ), il sistema aumenta automaticamente `min_distance_ms` al punto medio tra i gruppi e ripete il detection. La correzione viene applicata solo se il CV migliora.
+
+Esempio: su un segnale con BP reale di ~800 ms, il detector iniziale trova 321 "battiti" con periodi alternati 420/780 ms. La correzione bimodale porta `min_distance` a ~600 ms, risultando in 219 battiti reali con CV=14%.
 
 #### Retry automatico
 
@@ -338,7 +346,21 @@ Ogni battito viene valutato su due criteri:
 
 1. **Ampiezza**: Il battito viene rifiutato se la sua ampiezza è < 25% dell'ampiezza di riferimento (mediana del 50% superiore dei battiti). Questo elimina battiti mancati, artefatti deboli, e battiti con coupling.
 
-2. **Morfologia**: Correlazione di Pearson con il template. Rifiutato se < 0.40 (o forzatamente se < 0.20). Questo elimina battiti con morfologia aberrante (artefatti, ectopie marcate).
+2. **Morfologia**: Correlazione di Pearson con il template. Soglia nominale: 0.40 (configurabile). Questo elimina battiti con morfologia aberrante (artefatti, ectopie marcate).
+
+#### Soglia morfologica adattiva (v3.4)
+
+Se la soglia morfologica fissa rigetta più del 40% dei battiti, il sistema abbassa automaticamente la soglia in base alla regolarità del timing (CV dei beat period):
+
+- **CV < 20%** (timing molto regolare): i battiti sono quasi certamente reali nonostante la bassa correlazione. Si usa il 5° percentile delle correlazioni (conserva ~95% dei battiti).
+- **CV 20-35%** (timing ragionevolmente regolare): 15° percentile (~85% conservati).
+- **CV > 35%** (timing irregolare): 30° percentile (~70% conservati).
+
+La soglia non scende mai sotto 0.10 (floor di sicurezza). Questa logica è importante per i segnali µECG/MEA dove l'ampiezza dei battiti varia naturalmente tra cicli, risultando in correlazioni con il template relativamente basse (mediana ~0.3-0.4) anche quando il segnale è di buona qualità.
+
+#### Beat period vs. parametri (v3.4)
+
+Il beat period (BP) viene calcolato su **tutti** i battiti rilevati (post-correzione bimodale), non solo su quelli accettati dal QC morfologico. Il rationale: anche un battito con morfologia aberrante ha un timing corretto, e rimuoverlo crea un gap artificiale (BP raddoppiato). I parametri di ripolarizzazione (FPD, ampiezza spike) vengono invece estratti solo dai battiti QC-accettati, poiché richiedono una morfologia affidabile.
 
 #### Grading della registrazione
 
@@ -776,15 +798,37 @@ L'applicazione si apre nel browser alla porta 8501.
 
 L'interfaccia è organizzata in tre pagine, selezionabili dal menu laterale.
 
-**1. Analisi Singolo File** — Caricamento di un singolo file CSV per analisi immediata. Mostra: il tracciato del segnale con beat detection sovrapposta, l'overlay dei battiti segmentati, la tabella dei parametri estratti (BP, FPDcF, ampiezza, durata spike) con statistiche, il report aritmico completo (rischio, classificazione, metriche residuali, incidenza EAD).
+**1. Analisi Singolo File** — Caricamento di un singolo file CSV per analisi immediata. Mostra: il tracciato del segnale filtrato con beat markers sovrapposti (con opzione di overlay del segnale grezzo non filtrato per verifica), l'overlay dei battiti segmentati, la tabella dei parametri estratti (BP, FPDcF, ampiezza, durata spike) con statistiche, il report aritmico completo (rischio, classificazione, metriche residuali, incidenza EAD). Include un editor interattivo dei battiti (v3.4) per aggiungere/rimuovere manualmente i marker e ri-analizzare in tempo reale.
 
 **2. Analisi Batch + Risk Map** — Tre modalità di caricamento: selezione cartella tramite dialog nativo del sistema operativo (tkinter `filedialog.askdirectory`), upload multiplo di file CSV, oppure upload di archivio ZIP. Dopo il caricamento, la pipeline `batch_analyze()` processa tutte le registrazioni. I risultati sono presentati su tre tab: la risk map CiPA interattiva (Plotly), con zone colorate LOW/INTERMEDIATE/HIGH e scatter per farmaco; il riepilogo tabellare con QC, inclusione, normalizzazione e classificazione per ogni registrazione; la vista dettagliata di ogni singola registrazione. È possibile specificare opzionalmente il ground truth dei farmaci per colorare i marker sulla risk map. Nella sezione download: report Excel, report PDF, configurazione JSON, e pacchetto CDISC SEND.
 
 **3. Confronto Farmaci** — Dashboard comparativa disponibile dopo l'analisi batch. Permette di selezionare un sottoinsieme di farmaci e visualizzare: curve dose-response (ΔFPDcF% per concentrazione crescente), barre metriche aritmiche (morphology instability, EAD%, STV FPDcF, spectral change), overlay dei template waveform rappresentativi per confronto morfologico diretto.
 
+### Editor interattivo dei battiti (v3.4)
+
+Nella pagina Single File, il tab "Segnale" include un expander "Editor battiti" che permette l'editing manuale dei beat markers:
+
+- **Tabella con checkbox**: ogni battito rilevato ha una casella "Incluso". Deselezionare per escluderlo dall'analisi (sul grafico diventa grigio). Riselezionare per reincluderlo (torna rosso).
+- **Aggiungi battito**: inserire il tempo in secondi dove il detector ha mancato un battito. Il sistema trova l'indice campione più vicino.
+- **Ri-analizza**: dopo le modifiche, il pulsante "Ri-analizza con battiti modificati" riesegue la pipeline dalla segmentazione in poi (QC, parametri, aritmia) senza ricaricare il file.
+
+I risultati aggiornati sostituiscono quelli originali e tutti i tab si aggiornano di conseguenza.
+
+### Visualizzazione segnale grezzo (v3.4)
+
+Un checkbox "Mostra segnale grezzo (non filtrato)" permette di sovrapporre il segnale originale (arancione, semitrasparente) al segnale filtrato (blu) per verificare visivamente l'effetto dei filtri.
+
 ### Pannello di configurazione
 
-Il sidebar contiene tutti i parametri dell'`AnalysisConfig`, organizzati in sezioni espandibili: pre-processing (filtri, gain amplificatore), beat detection (altezza minima, distanza, prominenza), parametri FPD (finestre di ricerca, soglie di confidenza), QC (soglie di qualità), aritmie (soglie instabilità, EAD, STV), classificazione (pesi dell'indice proaritmico). I parametri possono essere importati/esportati come file JSON.
+Il sidebar contiene tutti i parametri dell'`AnalysisConfig`, organizzati in sezioni espandibili: pre-processing (filtri con opzione di disattivazione notch, gain amplificatore), beat detection (metodo, distanza minima, soglia adattiva, soglia morfologica, toggle filtro morfologico), parametri FPD (finestre di ricerca, soglie di confidenza), aritmie (soglie EAD, modalità risk score manual/data-driven), criteri di inclusione, normalizzazione. I parametri possono essere importati/esportati come file JSON.
+
+### Internazionalizzazione (v3.4)
+
+L'interfaccia è disponibile in italiano e inglese. Il selettore di lingua si trova in fondo alla sidebar. Tutte le stringhe dell'interfaccia (>150 chiavi) sono tradotte tramite un dizionario `TRANSLATIONS` con funzione `T(key)`.
+
+### Normalizzazione temporale (v3.4)
+
+Il vettore temporale viene normalizzato per partire sempre da 0 secondi. L'hardware MCS può includere un pre-trigger con tempi negativi (il trigger di acquisizione corrisponde a t=0 nel file originale), ma nella visualizzazione il tempo parte da 0 per maggiore intuitività.
 
 ### Requisiti aggiuntivi
 
