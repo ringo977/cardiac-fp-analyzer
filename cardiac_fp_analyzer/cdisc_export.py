@@ -171,15 +171,26 @@ _TEST_CODES = {
     'FPDCFPC':  ('EGTEST', 'FPDcF Pct Change',                  '%',     False),
     'BPPCT':    ('EGTEST', 'Beat Period Pct Change',             '%',     False),
     'AMPPCT':   ('EGTEST', 'Amplitude Pct Change',              '%',     False),
-    'TDPSCR':   ('EGTEST', 'TdP Risk Score',                    'SCORE', True),
+    'TDPSCR':   ('EGTEST', 'TdP Risk Score',                    '',      True),
     'QCGRADE':  ('EGTEST', 'QC Grade',                          None,    True),
-    'FPDCONF':  ('EGTEST', 'FPD Confidence',                    'SCORE', True),
-    'RSKSCR':   ('EGTEST', 'Arrhythmia Risk Score',             'SCORE', True),
-    'MORPHIN':  ('EGTEST', 'Morphology Instability',            'SCORE', True),
+    'FPDCONF':  ('EGTEST', 'FPD Confidence',                    '',      True),
+    'RSKSCR':   ('EGTEST', 'Arrhythmia Risk Score',             '',      True),
+    'MORPHIN':  ('EGTEST', 'Morphology Instability',            '',      True),
     'EADPCT':   ('EGTEST', 'EAD Incidence',                     '%',     False),
     'STVFPDC':  ('EGTEST', 'STV of FPDcF',                      'ms',    False),
-    'SPECCHG':  ('EGTEST', 'Spectral Change',                   'SCORE', True),
-    'PROAIDX':  ('EGTEST', 'Proarrhythmic Index',               'SCORE', True),
+    'SPECCHG':  ('EGTEST', 'Spectral Change',                   '',      True),
+    'PROAIDX':  ('EGTEST', 'Proarrhythmic Index',               '',      True),
+}
+
+# Test codes that go to SUPPEG (supplemental qualifiers) instead of EG.
+# These are derived scores, quality metrics, and percent-change endpoints
+# that are not primary electrophysiology measurements.
+_SUPPEG_CODES = {
+    'FPDCFPC', 'BPPCT', 'AMPPCT',      # percent-change endpoints
+    'TDPSCR', 'RSKSCR', 'FPDCONF',      # risk scores
+    'MORPHIN', 'SPECCHG', 'PROAIDX',    # instability/quality indices
+    'EADPCT',                             # incidence percentage
+    'QCGRADE',                            # quality grade (character)
 }
 
 # Drug name normalization for SEND
@@ -307,7 +318,7 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
 
         # Species / Strain — Should Include = Yes
         ('SPECIES', 'Species',                                   'HUMAN',                  ''),
-        ('STRAIN',  'Strain/Substrain',                          'HIPSC-CM',               ''),
+        ('STRAIN',  'Strain/Substrain',                          '',                       'NA'),
         ('SPLRNAM', 'Test Subject Supplier',                     '',                       'NA'),
 
         # Route and treatment — Should Include = Yes
@@ -409,7 +420,7 @@ def _build_dm(results: list, study_id: str) -> pd.DataFrame:
             'RFENDTC':  now,
             'SEX':      'U',
             'SPECIES':  'HUMAN',
-            'STRAIN':   'HIPSC-CM',
+            'STRAIN':   '',
             'ARMCD':    armcd,
             'ARM':      arm,
             'SETCD':    setcd,
@@ -633,6 +644,79 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
             _add_row('STVFPDC', rd.get('poincare_stv_fpdc_ms'))
 
     return pd.DataFrame(rows)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  SUPPEG — Supplemental Qualifiers for ECG (non-standard test results)
+#  Contains derived scores, quality metrics, and percent-change endpoints
+#  that are not primary electrophysiology measurements.
+#  Structure per SENDIG v3.1.1 section 8.3 (Supplemental Qualifiers)
+# ═══════════════════════════════════════════════════════════════════════
+
+_SUPPEG_VAR_LABELS = {
+    'STUDYID':  'Study Identifier',
+    'RDOMAIN':  'Related Domain Abbreviation',
+    'USUBJID':  'Unique Subject Identifier',
+    'IDVAR':    'Identifying Variable',
+    'IDVARVAL': 'Identifying Variable Value',
+    'QNAM':     'Qualifier Variable Name',
+    'QLABEL':   'Qualifier Variable Label',
+    'QVAL':     'Data Value',
+    'QORIG':    'Origin',
+    'QEVAL':    'Evaluator',
+}
+
+
+def _split_eg_suppeg(eg_df: pd.DataFrame) -> tuple:
+    """Split EG DataFrame into (eg_standard, suppeg).
+
+    Records whose EGTESTCD is in _SUPPEG_CODES are removed from EG and
+    converted into SUPPEG (Supplemental Qualifiers) format.
+    Returns (eg_filtered, suppeg_df).
+    """
+    if eg_df.empty:
+        return eg_df, pd.DataFrame()
+
+    # Separate standard EG rows from supplemental rows
+    mask_supp = eg_df['EGTESTCD'].isin(_SUPPEG_CODES)
+    eg_standard = eg_df[~mask_supp].copy()
+    eg_supp_rows = eg_df[mask_supp].copy()
+
+    if eg_supp_rows.empty:
+        return eg_standard, pd.DataFrame()
+
+    # Re-sequence EG after removing SUPPEG rows
+    # (EGSEQ must be contiguous per subject)
+    for subj in eg_standard['USUBJID'].unique():
+        subj_mask = eg_standard['USUBJID'] == subj
+        eg_standard.loc[subj_mask, 'EGSEQ'] = range(1, subj_mask.sum() + 1)
+
+    # Build SUPPEG rows from the extracted EG records
+    suppeg_rows = []
+    for _, row in eg_supp_rows.iterrows():
+        # QVAL = the result value (EGORRES)
+        qval = str(row.get('EGORRES', ''))
+        if not qval or qval == 'nan':
+            continue
+
+        testcd = row['EGTESTCD']
+        code_info = _TEST_CODES.get(testcd, ('EGTEST', testcd, '', False))
+
+        suppeg_rows.append({
+            'STUDYID':  row['STUDYID'],
+            'RDOMAIN':  'EG',
+            'USUBJID':  row['USUBJID'],
+            'IDVAR':    'EGSEQ',
+            'IDVARVAL': '',       # no parent EG record to reference
+            'QNAM':     testcd,
+            'QLABEL':   code_info[1],
+            'QVAL':     qval,
+            'QORIG':    'DERIVED',
+            'QEVAL':    'ALGORITHM',
+        })
+
+    suppeg_df = pd.DataFrame(suppeg_rows)
+    return eg_standard, suppeg_df
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -910,7 +994,8 @@ def _generate_define_xml(study_id: str, datasets: dict, output_dir: Path):
         'TA':   ('Trial Arms',       'Planned element sequence per arm'),
         'TE':   ('Trial Elements',   'Planned element definitions'),
         'EX':   ('Exposure',         'Drug exposure events with concentrations'),
-        'EG':   ('ECG Test Results', 'Electrophysiology measurements'),
+        'EG':   ('ECG Test Results', 'Primary electrophysiology measurements'),
+        'SUPPEG': ('Supplemental Qualifiers for EG', 'Derived scores and non-standard endpoints'),
         'TX':   ('Trial Sets',       'Treatment group definitions'),
         'DS':   ('Disposition',      'Subject disposition'),
     }
@@ -1078,10 +1163,14 @@ def export_send_package(
     ta_df = _build_ta(study_id, dm_df=dm_df)
     se_df = _build_se(results, study_id)
 
-    # Register TE/TA/SE variable labels
+    # Split EG into standard (eg.xpt) and supplemental (suppeg.xpt)
+    eg_df, suppeg_df = _split_eg_suppeg(eg_df)
+
+    # Register TE/TA/SE/SUPPEG variable labels
     _DOMAIN_VAR_LABELS['TE'] = _TE_VAR_LABELS
     _DOMAIN_VAR_LABELS['TA'] = _TA_VAR_LABELS
     _DOMAIN_VAR_LABELS['SE'] = _SE_VAR_LABELS
+    _DOMAIN_VAR_LABELS['SUPPEG'] = _SUPPEG_VAR_LABELS
 
     # ── Ensure every DM subject has at least one EGBLFL='Y' row (SE2319) ──
     if not eg_df.empty and not dm_df.empty:
@@ -1140,6 +1229,9 @@ def export_send_package(
         # SE: SDTM v1.5 section 2.2.8
         'SE': ['STUDYID','DOMAIN','USUBJID','SESEQ','ETCD','ELEMENT',
                'SESTDTC','SEENDTC','EPOCH'],
+        # SUPPEG: Section 8.3 (Supplemental Qualifiers)
+        'SUPPEG': ['STUDYID','RDOMAIN','USUBJID','IDVAR','IDVARVAL',
+                   'QNAM','QLABEL','QVAL','QORIG','QEVAL'],
     }
 
     def _order_columns(df, domain):
@@ -1156,6 +1248,7 @@ def export_send_package(
     dm_df = _order_columns(dm_df, 'DM')
     ex_df = _order_columns(ex_df, 'EX')
     eg_df = _order_columns(eg_df, 'EG')
+    suppeg_df = _order_columns(suppeg_df, 'SUPPEG')
     ts_df = _order_columns(ts_df, 'TS')
     tx_df = _order_columns(tx_df, 'TX')
     ds_df = _order_columns(ds_df, 'DS')
@@ -1173,6 +1266,7 @@ def export_send_package(
         'DS': ds_df,
         'EX': ex_df,
         'EG': eg_df,
+        'SUPPEG': suppeg_df,
     }
 
     # ── Write XPT files ──
@@ -1187,6 +1281,7 @@ def export_send_package(
         'DS': 'Disposition',
         'EX': 'Exposure',
         'EG': 'ECG Test Results',
+        'SUPPEG': 'Supplemental Qualifiers for EG',
     }
 
     for domain, df in datasets.items():
