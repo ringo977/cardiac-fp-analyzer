@@ -408,9 +408,42 @@ L'implementazione è a due passaggi: nella prima pass si analizzano tutti i file
 
 **Poincaré STV**: Variabilità a breve termine di FPD e FPDcF, calcolata dal diagramma di Poincaré.
 
-#### Risk score (0–100)
+#### Risk score (0–100) — incidence-based scoring
 
-Punteggio composito che combina la severità e il tipo di flag rilevate, con penalità crescenti per: irregolarità RR, battiti prematuri, EAD, prolungamento FPD, cessazione.
+Il risk score è un punteggio composito basato su metriche normalizzate per incidenza, non su conteggi assoluti di eventi. Questo è conforme alla letteratura (Thomsen 2004, Hondeghem 2001, Blinova 2017): tutte le metriche sono rate-based o per-beat, quindi una registrazione di 30 secondi con 2 battiti prematuri su 15 (13%) riceve correttamente un punteggio più alto di una registrazione di 5 minuti con 2 prematuri su 150 (1.3%).
+
+Le 6 componenti del risk score:
+
+1. **Irregolarità ritmica** (0–25 punti): basata sul CV del beat period. CV < 10% = 0 punti. CV = 40% = 25 punti. Scala lineare nell'intervallo [10%, 40%].
+
+2. **Incidenza battiti anomali** (0–15 punti): percentuale di battiti prematuri + ritardati rispetto al totale. 10% di battiti anomali = 15 punti (massimo). La metrica è intrinsecamente normalizzata per la durata della registrazione.
+
+3. **Morphology instability** (0–20 punti): punteggio 0–1 dal residuo, normalizzato per l'ampiezza del template. Mappatura lineare: instabilità 0.5 = 10 punti, 1.0 = 20 punti. Con baseline-relative analysis (v3.3), questa metrica è discriminatoria tra farmaci positivi e negativi.
+
+4. **EAD incidence** (0–25 punti): percentuale di battiti con eventi EAD-like. 10% di battiti con EAD = 25 punti (massimo). Non dipende dal numero assoluto di EAD ma dalla loro frequenza relativa.
+
+5. **Poincaré STV** (0–10 punti): variabilità a breve termine di FPDcF in ms. STV ≤ 5 ms = 0 punti. STV = 20 ms = 10 punti. La STV è per definizione una metrica beat-to-beat (mean|x_{i+1} - x_i| / √2), indipendente dalla durata.
+
+6. **Cessazione** (0 o 15 punti): presenza di pause > 3× il periodo medio. Binario.
+
+Il punteggio massimo è 100 (cap). Le registrazioni baseline ricevono sempre risk_score = 0 con classificazione "Baseline (reference)", poiché il risk score è definito come rischio proaritmico indotto dal farmaco e non ha significato senza trattamento.
+
+#### Classificazione
+
+La classificazione testuale è anch'essa basata su metriche di incidenza. La gerarchia, dalla più grave alla meno grave:
+
+1. Fibrillation-like / Chaotic Rhythm — cessazione + CV > 40%
+2. EAD with Triggered Activity — EAD incidence > 20% dei battiti
+3. Proarrhythmic (EAD-prone) — EAD > 5% + CV > 15%
+4. Morphologically Unstable + Irregular — instabilità > 0.6 + CV > 15%
+5. Intermittent Cessation — pause rilevate
+6. Highly Irregular Rhythm — CV > 30%
+7. Morphologically Unstable — instabilità > 0.6
+8. Frequent Premature Beats — prematuri > 10% dei battiti
+9. Irregular Rhythm — CV > 15%
+10. Tachycardia / Bradycardia — BP < 300 ms o > 2500 ms
+11. Borderline / Mild Abnormalities — warning flag presenti
+12. Normal Sinus Rhythm — nessuna anomalia
 
 | Config | Default | Descrizione |
 |--------|---------|-------------|

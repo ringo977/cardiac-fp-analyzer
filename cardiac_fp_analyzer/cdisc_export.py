@@ -277,7 +277,7 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
         # ── Core electrophysiology parameters ──
         _add_row('FPD',      s.get('fpd_ms_mean'))
         _add_row('FPDCF',    s.get('fpdc_ms_mean'))
-        _add_row('BP',       s.get('rr_interval_ms_mean'))
+        _add_row('BP',       s.get('beat_period_ms_mean'))
         _add_row('SPIKEAMP', s.get('spike_amplitude_mV_mean'))
         _add_row('RISETIME', s.get('rise_time_ms_mean'))
         _add_row('MAXDVDT',  s.get('max_dvdt_mean'))
@@ -332,9 +332,9 @@ def _build_risk(results: list, study_id: str) -> pd.DataFrame:
             'RISKSEQ': len(rows) + 1,
             'MAXFPDCF': x,
             'PROARIDX': y,
-            'MAXSPEC': m.max_spectral_change,
-            'MAXMORPH': m.max_morphology_instability,
-            'MAXEAD': m.max_ead_incidence_pct,
+            'MAXSPEC': m.max_spectral_change if not np.isnan(m.max_spectral_change) else 0.0,
+            'MAXMORPH': m.max_morphology_instability if not np.isnan(m.max_morphology_instability) else 0.0,
+            'MAXEAD': m.max_ead_incidence_pct if not np.isnan(m.max_ead_incidence_pct) else 0.0,
             'HASCESS': 'Y' if m.has_cessation else 'N',
             'NCONC': m.n_concentrations,
             'RISKZONE': 'HIGH' if y >= 40 else ('INTERMEDIATE' if y >= 20 else 'LOW'),
@@ -449,12 +449,16 @@ def _write_xpt(df: pd.DataFrame, filepath: Path, dataset_name: str,
 
     # Truncate column names to 8 chars (SAS requirement)
     col_map = {}
+    used_names = set()
     for col in df.columns:
         short = col[:8].upper()
-        # Handle duplicates
-        if short in col_map.values():
-            short = short[:6] + str(len(col_map))
+        # Handle duplicates with O(1) lookup
+        counter = 0
+        while short in used_names:
+            short = col[:6].upper() + str(counter)
+            counter += 1
         col_map[col] = short
+        used_names.add(short)
 
     df_sas = df.rename(columns=col_map).copy()
 
@@ -463,7 +467,8 @@ def _write_xpt(df: pd.DataFrame, filepath: Path, dataset_name: str,
     for col in df_sas.columns:
         if df_sas[col].dtype == object:
             df_sas[col] = (df_sas[col].fillna('').astype(str).str[:200]
-                           .apply(lambda x: x.encode('latin-1', errors='replace').decode('latin-1')))
+                           .str.encode('latin-1', errors='replace')
+                           .str.decode('latin-1'))
         else:
             df_sas[col] = pd.to_numeric(df_sas[col], errors='coerce')
 

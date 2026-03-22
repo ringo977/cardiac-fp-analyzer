@@ -91,7 +91,7 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
             info['_score'] = score
             info['_method_name'] = name
             results.append((bi, bt, info))
-        except: continue
+        except Exception: continue
 
     if not results:
         return np.array([], dtype=int), np.array([]), {'method': 'auto', 'n_beats': 0, 'polarity': 'unknown'}

@@ -326,6 +326,13 @@ def generate_risk_map(
     xs = np.array(xs)
     ys = np.array(ys)
 
+    if len(xs) == 0:
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.text(0.5, 0.5, 'No drug data available', transform=ax.transAxes,
+                ha='center', va='center', fontsize=14, color='#6c757d')
+        ax.set_title(title)
+        return fig
+
     # ── Figure ──
     fig, ax = plt.subplots(figsize=figsize)
 

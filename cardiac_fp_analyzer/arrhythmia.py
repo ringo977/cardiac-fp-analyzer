@@ -42,18 +42,69 @@ class ArrhythmiaReport:
         self.residual_details = {}
 
     def add_flag(self, flag_type, severity, description):
+        """Record a diagnostic flag. Risk score is computed separately
+        at the end via compute_risk_score() using incidence-based metrics,
+        not accumulated per-flag (Blinova 2017, Hondeghem 2001)."""
         self.flags.append({'type': flag_type, 'severity': severity,
                            'description': description})
-        if severity == 'critical':
-            self.risk_score = min(100, self.risk_score + 30)
-        elif severity == 'warning':
-            self.risk_score = min(100, self.risk_score + 15)
-        else:
-            self.risk_score = min(100, self.risk_score + 5)
 
     def add_event(self, beat_number, event_type, details=''):
         self.events.append({'beat': beat_number, 'type': event_type,
                             'details': details})
+
+    def compute_risk_score(self):
+        """Compute risk score (0-100) from incidence-normalised metrics.
+
+        Literature basis:
+          - CV of beat period (Thomsen 2004): beat-to-beat variability
+          - EAD incidence % (Visone 2023): fraction of beats with EADs
+          - Morphology instability (Visone 2023): 0-1, normalised by
+            template amplitude
+          - Poincaré STV (Hondeghem 2001): ms, inherently per-beat
+          - Cessation: binary flag with confidence
+
+        All metrics are rate-based or normalised, so a 30-second
+        recording with 2/15 premature beats (13%) correctly scores
+        higher than a 5-minute recording with 2/150 (1.3%).
+        """
+        d = self.details
+        n_beats = d.get('n_beats', 0)
+        if n_beats < 3:
+            self.risk_score = 0
+            return
+
+        score = 0.0
+
+        # 1. Rhythm irregularity: CV of beat period (0-100)
+        #    CV < 10% = normal, 15% = warning, 30% = critical, >40% = max
+        cv_bp = d.get('cv_bp_pct', 0)
+        if cv_bp > 10:
+            score += min(25, (cv_bp - 10) / 30 * 25)  # 10→0, 40→25
+
+        # 2. Premature/delayed beat incidence (0-100)
+        n_prem = d.get('n_premature', 0)
+        n_del = d.get('n_delayed', 0)
+        prem_pct = (n_prem + n_del) / n_beats * 100
+        score += min(15, prem_pct * 1.5)  # 10% → 15
+
+        # 3. Morphology instability (0-1 → 0-20)
+        morph = d.get('morphology_instability', 0)
+        score += morph * 20  # 0.5 → 10, 1.0 → 20
+
+        # 4. EAD incidence (% of beats → 0-25)
+        ead_pct = d.get('ead_incidence_pct', 0)
+        score += min(25, ead_pct * 2.5)  # 10% → 25
+
+        # 5. Poincaré STV of FPDcF (ms → 0-10)
+        stv = d.get('poincare_stv_fpdc_ms', 0)
+        if not np.isnan(stv) and stv > 5:
+            score += min(10, (stv - 5) / 15 * 10)  # 5→0, 20→10
+
+        # 6. Cessation / pauses (binary, high impact)
+        if d.get('has_pauses', False):
+            score += 15
+
+        self.risk_score = int(min(100, round(score)))
 
     def summary_text(self):
         lines = [f"Classification: {self.classification}",
@@ -409,6 +460,9 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs,
             n_del += 1
             report.add_event(i + 1, 'delayed_beat', f'BP={bp:.0f}ms')
 
+    report.details['n_premature'] = n_prem
+    report.details['n_delayed'] = n_del
+
     if n_prem > 0:
         pct = n_prem / len(bp_ms) * 100
         report.add_flag('premature_beats',
@@ -422,6 +476,7 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs,
 
     # Pauses / cessation
     pauses = bp_ms[bp_ms > mean_bp * cfg.cessation_factor]
+    report.details['has_pauses'] = len(pauses) > 0
     if len(pauses) > 0:
         report.add_flag('beat_cessation', 'critical',
                         f'{len(pauses)} pause(s), '
@@ -512,24 +567,25 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs,
 
     # ── Combine EAD counts from both approaches ──
     n_ead_total = max(n_ead_stat, n_ead_resid)
+    ead_pct = report.details.get('ead_incidence_pct', 0)
     if n_ead_total > 0:
         source = 'residual' if n_ead_resid >= n_ead_stat else 'statistical'
         report.add_flag('ead_events',
-                        'critical' if n_ead_total > cfg.ead_critical_count
-                        else 'warning',
-                        f'{n_ead_total} EAD-like event(s) [{source}]')
+                        'critical' if ead_pct > 10 else 'warning',
+                        f'{n_ead_total} EAD-like event(s) '
+                        f'({ead_pct:.1f}% of beats) [{source}]')
     report.details['n_ead_total'] = n_ead_total
 
-    # ── Classification ─────────────────────────────────────────────────
+    # ── Classification (based on incidence, not absolute counts) ──────
 
-    crit = [f for f in report.flags if f['severity'] == 'critical']
     morph_inst = report.details.get('morphology_instability', 0)
+    prem_pct = (n_prem / len(bp_ms) * 100) if len(bp_ms) > 0 else 0
 
     if len(pauses) > 0 and cv_bp > cfg.fibrillation_cv:
         report.classification = 'Fibrillation-like / Chaotic Rhythm'
-    elif n_ead_total > cfg.ead_critical_count:
+    elif ead_pct > 20:
         report.classification = 'EAD with Triggered Activity'
-    elif n_ead_total > 0 and crit:
+    elif ead_pct > 5 and cv_bp > cfg.rr_irregularity_cv:
         report.classification = 'Proarrhythmic (EAD-prone)'
     elif morph_inst > 0.6 and cv_bp > cfg.rr_irregularity_cv:
         report.classification = 'Morphologically Unstable + Irregular'
@@ -539,7 +595,7 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs,
         report.classification = 'Highly Irregular Rhythm'
     elif morph_inst > 0.6:
         report.classification = 'Morphologically Unstable'
-    elif n_prem > cfg.premature_count_threshold:
+    elif prem_pct > 10:
         report.classification = 'Frequent Premature Beats'
     elif cv_bp > cfg.rr_irregularity_cv:
         report.classification = 'Irregular Rhythm'
@@ -549,5 +605,8 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs,
         report.classification = 'Bradycardia'
     elif [f for f in report.flags if f['severity'] == 'warning']:
         report.classification = 'Borderline / Mild Abnormalities'
+
+    # ── Compute risk score from incidence-based metrics ──
+    report.compute_risk_score()
 
     return report

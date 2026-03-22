@@ -8,11 +8,30 @@ Provides:
   - Savitzky-Golay smoothing for gentle noise reduction
 
 All parameters are configurable via FilterConfig (see config.py).
+Filter coefficients are cached per (fs, parameters) to avoid
+redundant recomputation across files with the same sample rate.
 """
 
 import numpy as np
+from functools import lru_cache
 from scipy import signal
 
+
+# ── Cached coefficient computation ──────────────────────────────────
+
+@lru_cache(maxsize=16)
+def _notch_coeffs(freq, Q, fs):
+    """Compute and cache notch filter coefficients."""
+    return signal.iirnotch(freq, Q, fs)
+
+
+@lru_cache(maxsize=8)
+def _butter_coeffs(order, low, high, btype):
+    """Compute and cache Butterworth filter coefficients."""
+    return signal.butter(order, [low, high] if btype == 'band' else low, btype=btype)
+
+
+# ── Filter functions ────────────────────────────────────────────────
 
 def notch_filter(data, fs, freq=50.0, n_harmonics=3, Q=30):
     """Remove powerline interference at `freq` Hz and its harmonics."""
@@ -20,7 +39,7 @@ def notch_filter(data, fs, freq=50.0, n_harmonics=3, Q=30):
     for i in range(1, n_harmonics + 1):
         f_notch = freq * i
         if f_notch >= fs / 2: break
-        b, a = signal.iirnotch(f_notch, Q, fs)
+        b, a = _notch_coeffs(f_notch, Q, fs)
         y = signal.filtfilt(b, a, y)
     return y
 
@@ -30,21 +49,21 @@ def bandpass_filter(data, fs, lowcut=0.5, highcut=500.0, order=4):
     nyq = 0.5 * fs
     low = max(lowcut / nyq, 1e-5)
     high = min(highcut / nyq, 0.9999)
-    b, a = signal.butter(order, [low, high], btype='band')
+    b, a = _butter_coeffs(order, low, high, 'band')
     return signal.filtfilt(b, a, data)
 
 
 def highpass_filter(data, fs, cutoff=0.5, order=4):
     """Remove baseline drift with a high-pass Butterworth filter."""
     nyq = 0.5 * fs
-    b, a = signal.butter(order, cutoff / nyq, btype='high')
+    b, a = _butter_coeffs(order, cutoff / nyq, 0.0, 'high')
     return signal.filtfilt(b, a, data)
 
 
 def lowpass_filter(data, fs, cutoff=200.0, order=4):
     """Low-pass Butterworth filter for gentle smoothing."""
     nyq = 0.5 * fs
-    b, a = signal.butter(order, cutoff / nyq, btype='low')
+    b, a = _butter_coeffs(order, cutoff / nyq, 0.0, 'low')
     return signal.filtfilt(b, a, data)
 
 

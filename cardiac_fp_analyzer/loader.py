@@ -75,7 +75,8 @@ def load_csv(filepath):
 
     if metadata['sample_rate'] is None and len(df) > 1:
         dt = df['time'].iloc[1] - df['time'].iloc[0]
-        metadata['sample_rate'] = round(1.0 / dt, 1)
+        if dt > 0:
+            metadata['sample_rate'] = round(1.0 / dt, 1)
 
     return metadata, df
 

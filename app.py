@@ -434,22 +434,49 @@ def page_batch_analysis(config: AnalysisConfig):
 
     elif upload_mode == "Seleziona cartella":
         if st.button("📂 Apri selezione cartella", type="primary", use_container_width=True):
-            import subprocess
-            # Launch native macOS / tkinter folder picker via subprocess
-            # (tkinter from Streamlit's thread can hang on macOS)
-            script = (
-                "import tkinter as tk; "
-                "root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True); "
-                "from tkinter import filedialog; "
-                "path = filedialog.askdirectory(title='Seleziona cartella dati CSV'); "
-                "print(path)"
-            )
+            import subprocess, platform
+            chosen = None
             try:
-                proc = subprocess.run(
-                    [sys.executable, "-c", script],
-                    capture_output=True, text=True, timeout=120
-                )
-                chosen = proc.stdout.strip()
+                os_name = platform.system()
+                if os_name == 'Darwin':
+                    # macOS: native AppleScript dialog (no Python icon)
+                    proc = subprocess.run(
+                        ['osascript', '-e',
+                         'POSIX path of (choose folder with prompt '
+                         '"Seleziona cartella dati CSV")'],
+                        capture_output=True, text=True, timeout=120
+                    )
+                    chosen = proc.stdout.strip().rstrip('/')
+                elif os_name == 'Linux':
+                    # Linux: try zenity (GNOME), then kdialog (KDE)
+                    for cmd in [
+                        ['zenity', '--file-selection', '--directory',
+                         '--title=Seleziona cartella dati CSV'],
+                        ['kdialog', '--getexistingdirectory', '.'],
+                    ]:
+                        try:
+                            proc = subprocess.run(
+                                cmd, capture_output=True, text=True, timeout=120
+                            )
+                            if proc.returncode == 0:
+                                chosen = proc.stdout.strip()
+                                break
+                        except FileNotFoundError:
+                            continue
+                elif os_name == 'Windows':
+                    # Windows: PowerShell native folder dialog
+                    ps_script = (
+                        'Add-Type -AssemblyName System.Windows.Forms; '
+                        '$f = New-Object System.Windows.Forms.FolderBrowserDialog; '
+                        '$f.Description = "Seleziona cartella dati CSV"; '
+                        'if ($f.ShowDialog() -eq "OK") { $f.SelectedPath }'
+                    )
+                    proc = subprocess.run(
+                        ['powershell', '-Command', ps_script],
+                        capture_output=True, text=True, timeout=120
+                    )
+                    chosen = proc.stdout.strip()
+
                 if chosen and Path(chosen).is_dir():
                     st.session_state['batch_local_path'] = chosen
                 elif not chosen:
@@ -665,13 +692,13 @@ def _show_batch_summary(results):
             'Baseline': '✓' if _is_baseline(r) else '',
             'QC': qc.grade if qc else '',
             'Inclusione': '✓' if inc.get('passed', True) else '✗',
-            'BP (ms)': f"{s.get('rr_interval_ms_mean', np.nan):.0f}",
+            'BP (ms)': f"{s.get('beat_period_ms_mean', np.nan):.0f}",
             'FPDcF (ms)': f"{s.get('fpdc_ms_mean', np.nan):.0f}",
             'Conf FPD': f"{s.get('fpd_confidence', np.nan):.2f}",
             'ΔFPDcF%': f"{norm.get('pct_fpdc_change', np.nan):.1f}" if norm.get('has_baseline') else '—',
             'TdP Score': norm.get('tdp_score', '—'),
-            'Risk': ar.risk_score if ar else '',
-            'Class.': ar.classification[:20] if ar else '',
+            'Risk': ar.risk_score if ar and not _is_baseline(r) else '—',
+            'Class.': ar.classification[:20] if ar and not _is_baseline(r) else '—',
         })
 
     df = pd.DataFrame(rows)
@@ -680,14 +707,13 @@ def _show_batch_summary(results):
 
 
 def _show_batch_details(results):
-    """Show details for selected file."""
+    """Show details for selected file — signal, beats, params, arrhythmia."""
     filenames = [r.get('metadata', {}).get('filename', f'file_{i}') for i, r in enumerate(results)]
     selected = st.selectbox("Seleziona registrazione", filenames)
 
     idx = filenames.index(selected)
     result = results[idx]
 
-    # Re-use single file display components
     fi = result['file_info']
     summary = result['summary']
     qc = result['qc_report']
@@ -700,8 +726,43 @@ def _show_batch_details(results):
     cols[3].metric("FPDcF (ms)", f"{summary.get('fpdc_ms_mean', 0):.0f}")
     cols[4].metric("Risk Score", f"{ar.risk_score}/100" if ar else '?')
 
-    if ar:
-        _show_arrhythmia(result)
+    tab_sig, tab_params, tab_arr = st.tabs([
+        "📈 Segnale", "📋 Parametri", "⚠️ Aritmie"
+    ])
+
+    with tab_sig:
+        # Signal plot (if filtered_signal available)
+        if 'filtered_signal' in result and 'time_vector' in result:
+            _plot_signal(result)
+        else:
+            st.info("Segnale filtrato non disponibile in modalità batch.")
+
+        # Beat overlay (using beat_template if beats_data was freed)
+        tmpl = result.get('beat_template')
+        if tmpl is not None and 'beats_data' not in result:
+            import plotly.graph_objects as go
+            fs = result['metadata']['sample_rate']
+            fig = go.Figure()
+            t_ms = np.arange(len(tmpl)) / fs * 1000
+            fig.add_trace(go.Scatter(
+                x=t_ms, y=tmpl,
+                mode='lines', name='Template',
+                line=dict(color='#dc3545', width=2.5)
+            ))
+            fig.update_layout(
+                xaxis_title="Tempo (ms)", yaxis_title="Ampiezza",
+                height=350, margin=dict(t=30, b=40)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        elif 'beats_data' in result:
+            _plot_beats(result)
+
+    with tab_params:
+        _show_params_table(result)
+
+    with tab_arr:
+        if ar:
+            _show_arrhythmia(result)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -776,7 +837,15 @@ def _plot_dose_response(drug_data, selected_drugs):
                 points.append((conc, pct))
 
         if points:
-            points.sort(key=lambda x: x[0])
+            import re as _re_sort
+            def _conc_sort_key(item):
+                """Sort concentrations numerically when possible."""
+                c = str(item[0])
+                try:
+                    return float(_re_sort.sub(r'[^\d.]', '', c.split()[0]))
+                except (ValueError, IndexError):
+                    return float('inf')
+            points.sort(key=_conc_sort_key)
             labels, values = zip(*points)
             fig.add_trace(go.Scatter(
                 x=list(range(len(values))), y=list(values),
@@ -863,6 +932,10 @@ def _plot_waveform_comparison(drug_data, selected_drugs):
         # Pick one representative recording (highest concentration with good data)
         best_rec = None
         for r in sorted(recs, key=lambda r: r.get('summary', {}).get('fpdc_ms_mean', 0), reverse=True):
+            # Accept either raw beats_data or precomputed template
+            if r.get('beat_template') is not None:
+                best_rec = r
+                break
             bd = r.get('beats_data')
             if bd and len(bd) >= 5:
                 best_rec = r
@@ -871,9 +944,12 @@ def _plot_waveform_comparison(drug_data, selected_drugs):
         if best_rec is None:
             continue
 
-        bd = best_rec['beats_data']
         fs = best_rec['metadata']['sample_rate']
-        tmpl = _compute_template(bd)
+        # Use precomputed template if available, else compute from beats_data
+        tmpl = best_rec.get('beat_template')
+        if tmpl is None:
+            bd = best_rec.get('beats_data')
+            tmpl = _compute_template(bd) if bd else None
         if tmpl is not None:
             t_ms = np.arange(len(tmpl)) / fs * 1000
             fig.add_trace(go.Scatter(

@@ -211,6 +211,10 @@ def morphology_correlation(beat_data, template):
     b = beat_data[:n]
     t = template[:n]
 
+    # Guard against NaN propagation
+    if np.any(np.isnan(b)) or np.any(np.isnan(t)):
+        return 0.0
+
     # Pearson correlation
     b_c = b - np.mean(b)
     t_c = t - np.mean(t)

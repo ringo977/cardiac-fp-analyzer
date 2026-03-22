@@ -80,33 +80,38 @@ def generate_excel_report(results_list, output_path):
             ws.set_column(c, c, min(max(len(str(col)), 10), 25))
 
         # Conditional formatting for Risk Score
-        risk_col = list(df_s.columns).index('Risk Score')
-        for i in range(len(df_s)):
-            risk = df_s.iloc[i]['Risk Score']
-            fmt = ok if risk < 20 else warn if risk < 50 else crit
-            ws.write(i+1, risk_col, risk, fmt)
+        if 'Risk Score' in df_s.columns:
+            risk_col = list(df_s.columns).index('Risk Score')
+            for i in range(len(df_s)):
+                risk = df_s.iloc[i]['Risk Score']
+                if isinstance(risk, (int, float)) and not (isinstance(risk, float) and np.isnan(risk)):
+                    fmt = ok if risk < 20 else warn if risk < 50 else crit
+                    ws.write(i+1, risk_col, risk, fmt)
 
         # Conditional formatting for TdP Score
-        tdp_col = list(df_s.columns).index('TdP Score')
-        for i in range(len(df_s)):
-            val = df_s.iloc[i]['TdP Score']
-            if val == '' or (isinstance(val, float) and np.isnan(val)):
-                continue
-            val = int(val) if not isinstance(val, str) else 0
-            if val >= 3:
-                fmt = tdp_crit
-            elif val >= 2:
-                fmt = tdp_warn
-            elif val >= 1:
-                fmt = tdp_warn
-            elif val <= -1:
-                fmt = tdp_short
-            else:
-                fmt = tdp_ok
-            ws.write(i+1, tdp_col, val, fmt)
+        if 'TdP Score' in df_s.columns:
+            tdp_col = list(df_s.columns).index('TdP Score')
+            for i in range(len(df_s)):
+                val = df_s.iloc[i]['TdP Score']
+                if val == '' or (isinstance(val, float) and np.isnan(val)):
+                    continue
+                val = int(val) if not isinstance(val, str) else 0
+                if val >= 3:
+                    fmt = tdp_crit
+                elif val >= 2:
+                    fmt = tdp_warn
+                elif val >= 1:
+                    fmt = tdp_warn
+                elif val <= -1:
+                    fmt = tdp_short
+                else:
+                    fmt = tdp_ok
+                ws.write(i+1, tdp_col, val, fmt)
 
         # Conditional formatting for threshold flags
         for col_name in ['>LOW (10%)', '>MID (15%)', '>HIGH (20%)']:
+            if col_name not in df_s.columns:
+                continue
             col_idx = list(df_s.columns).index(col_name)
             for i in range(len(df_s)):
                 val = df_s.iloc[i][col_name]
@@ -114,19 +119,20 @@ def generate_excel_report(results_list, output_path):
                 ws.write(i+1, col_idx, val, fmt)
 
         # Conditional formatting for %FPDcF Change
-        fpdc_chg_col = list(df_s.columns).index('%FPDcF Change')
-        for i in range(len(df_s)):
-            val = df_s.iloc[i]['%FPDcF Change']
-            if isinstance(val, (int, float)) and not np.isnan(val):
-                if val >= 20:
-                    fmt = tdp_crit
-                elif val >= 10:
-                    fmt = tdp_warn
-                elif val <= -10:
-                    fmt = tdp_short
-                else:
-                    fmt = pct_fmt
-                ws.write(i+1, fpdc_chg_col, val, fmt)
+        if '%FPDcF Change' in df_s.columns:
+            fpdc_chg_col = list(df_s.columns).index('%FPDcF Change')
+            for i in range(len(df_s)):
+                val = df_s.iloc[i]['%FPDcF Change']
+                if isinstance(val, (int, float)) and not np.isnan(val):
+                    if val >= 20:
+                        fmt = tdp_crit
+                    elif val >= 10:
+                        fmt = tdp_warn
+                    elif val <= -10:
+                        fmt = tdp_short
+                    else:
+                        fmt = pct_fmt
+                    ws.write(i+1, fpdc_chg_col, val, fmt)
 
         # ─── Normalization sheet (only drug recordings with baseline) ───
         nrows = []

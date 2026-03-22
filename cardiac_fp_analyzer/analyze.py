@@ -65,7 +65,7 @@ def _select_best_channel(df, fs, cfg=None):
                 details[ch] = f'{len(bi)} beats (too few)'
             if score > best_score:
                 best_score, best_ch = score, ch
-        except:
+        except Exception:
             details[ch] = 'error'
     return best_ch, details
 
@@ -383,7 +383,7 @@ def _apply_inclusion_criteria(results, verbose=True, cfg=None):
 
 
 def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
-                  config=None,
+                  config=None, n_workers=1,
                   # Legacy parameters (ignored when config is provided)
                   inclusion_cv=25.0, fpdc_range=(100, 1200),
                   min_fpd_confidence=0.68):
@@ -430,11 +430,47 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
     config.to_json(str(output_dir / 'analysis_config.json'))
 
     results, errors = [], []
-    for i, f in enumerate(csv_files):
-        print(f"\n[{i+1}/{len(csv_files)}] {f.name}")
-        r = analyze_single_file(f, channel=channel, verbose=verbose, config=config)
-        if r: results.append(r)
-        else: errors.append(str(f))
+
+    if n_workers > 1 and len(csv_files) > 1:
+        # Parallel pass 1: each file is independent
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        import multiprocessing as _mp
+        n_workers = min(n_workers, len(csv_files), _mp.cpu_count() or 4)
+        if verbose:
+            print(f"  Parallel processing: {n_workers} workers")
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = {executor.submit(analyze_single_file, f,
+                       channel=channel, verbose=False, config=config): f
+                       for f in csv_files}
+            for i, future in enumerate(as_completed(futures)):
+                f = futures[future]
+                if verbose:
+                    print(f"\n[{i+1}/{len(csv_files)}] {f.name}")
+                try:
+                    r = future.result()
+                    if r: results.append(r)
+                    else: errors.append(str(f))
+                except Exception as e:
+                    errors.append(f"{f}: {e}")
+    else:
+        for i, f in enumerate(csv_files):
+            print(f"\n[{i+1}/{len(csv_files)}] {f.name}")
+            r = analyze_single_file(f, channel=channel, verbose=verbose, config=config)
+            if r: results.append(r)
+            else: errors.append(str(f))
+
+    # ─── Baseline risk reset ───
+    # Baselines are reference recordings (no drug applied). The arrhythmia
+    # risk score measures drug-induced proarrhythmic risk, so it's not
+    # meaningful for baselines. We keep the flags (useful for QC) but
+    # reset risk_score and classification.
+    from .normalization import _is_baseline
+    for r in results:
+        if _is_baseline(r):
+            ar = r.get('arrhythmia_report')
+            if ar is not None:
+                ar.risk_score = 0
+                ar.classification = 'Baseline (reference)'
 
     # ─── Inclusion criteria ───
     results = _apply_inclusion_criteria(results, verbose=verbose, cfg=config.inclusion)
@@ -490,6 +526,16 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
         if verbose:
             print(f"  Baseline-relative residual analysis: {n_reanalyzed} drug recordings "
                   f"re-analyzed with {len(baseline_templates)} baseline template(s)")
+
+    # Compact memory: replace raw beats_data (~100KB/rec) with
+    # precomputed template (~1KB/rec) for downstream waveform display
+    for r in results:
+        bd = r.pop('beats_data', None)
+        if bd is not None and len(bd) >= 5 and 'beat_template' not in r:
+            tmpl = _compute_template(bd)
+            if tmpl is not None:
+                r['beat_template'] = tmpl
+    del baseline_templates
 
     # ─── Baseline normalization ───
     from .normalization import normalize_all_results
