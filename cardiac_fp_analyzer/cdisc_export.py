@@ -294,7 +294,7 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
     end_with_time = f"{end}T23:59" if 'T' not in end else end
 
     # (TSPARMCD, TSPARM [exact CDISC CT label], TSVAL, TSVALNF)
-    # Labels sourced from SENDIG v3.1.1 section 7.6.2 Trial Summary Codes
+    # Labels sourced from NCI CDISC SEND Terminology (SEND Terminology 2025-09-26)
     # ALL SE2xxx-required params must be present even if value is NA.
     params = [
         # Study identification — Should Include = Yes
@@ -316,7 +316,7 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
         ('TRTV',    'Treatment Vehicle',                         'CULTURE MEDIUM',         ''),
         ('TRTCAS',  'Primary Treatment CAS Registry Number',     '',                       'NA'),
         ('TRTUNII', 'Primary Treatment Unique Ingredient ID',    '',                       'NA'),
-        ('PCLAS',   'Pharmacological Class of Investigational Therapy', 'ION CHANNEL MODULATORS', ''),
+        ('PCLASS',  'Pharmacologic Class',                          'ION CHANNEL MODULATORS', ''),
 
         # Subjects / design — Should Include = Yes
         ('SEXPOP',  'Sex of Participants',                       '',                       'NA'),
@@ -334,7 +334,7 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
         ('DOSDUR',  'Dosing Duration',                           'P1D',                    ''),
         ('DOSSTDTC','Start Date/Time of Dose Interval',          now,                      ''),
         ('DOSENDTC','End Date/Time of Dose Interval',            end_with_time,            ''),
-        ('PDOSFRQ', 'Planned Dosing Frequency Per Interval',     'ONCE',                   ''),
+        ('PDOSFRQ', 'Planned Dose Frequency',                     'ONCE',                   ''),
         ('TRMSAC',  'Time to Terminal Sacrifice',                'P1D',                    ''),
 
         # Regulatory / compliance — Should Include = Yes
@@ -347,10 +347,10 @@ def _build_ts(study_id: str, study_title: str, n_results: int,
         ('TFCNTRY', 'Test Facility Country',                     '',                       'NA'),
         ('TSTFLOC', 'Test Facility Location',                    '',                       'NA'),
         ('TSTFNAM', 'Test Facility Name',                        '',                       'NA'),
-        ('SPREFID', "Sponsor's Reference Identifier",             '',                       'NA'),
+        ('SPREFID', "Sponsor's Study Reference ID",               '',                       'NA'),
 
         # Material / production (SE2267 requires STRPSTAT)
-        ('STRPSTAT','Storage and Production Status',               '',                       'NA'),
+        ('STRPSTAT','Study Report Status',                          '',                       'NA'),
     ]
 
     rows = []
