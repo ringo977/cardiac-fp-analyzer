@@ -19,8 +19,11 @@ FPD measurement strategy (inspired by Visone et al., Tox Sci 2023):
 All parameters are configurable via RepolarizationConfig (see config.py).
 """
 
+import logging
 import numpy as np
 from scipy import signal as sig
+
+logger = logging.getLogger(__name__)
 
 
 def _get_repol_cfg(cfg):
@@ -226,8 +229,8 @@ def _consensus_fpd(seg_det, best_pk, best_sign, fs, search_start, spike_idx, cfg
                                      search_start, spike_idx, cfg=temp_cfg)
             if fpd is not None and fpd > 0:
                 results[method] = fpd
-        except Exception:
-            pass
+        except (ValueError, IndexError, RuntimeError) as e:
+            logger.debug("FPD method %s failed: %s", method, e)
 
     if not results:
         return None, {'methods_tried': methods, 'methods_ok': 0}
@@ -321,7 +324,8 @@ def _find_repolarization_on_template(template, fs, pre_ms=50, cfg=None):
     try:
         b, a = sig.butter(rc.repol_filter_order, cutoff / nyq, btype='low')
         seg_smooth = sig.filtfilt(b, a, segment)
-    except Exception:
+    except (ValueError, np.linalg.LinAlgError) as e:
+        logger.debug("Template repol filter failed (cutoff=%.1f Hz): %s", cutoff, e)
         seg_smooth = segment
 
     # LINEAR detrend (preserves repolarization bump)
@@ -434,7 +438,8 @@ def _find_repolarization_per_beat(data, t, spike_idx, fs,
         try:
             b, a = sig.butter(rc.repol_filter_order, cutoff / nyq, btype='low')
             seg_smooth = sig.filtfilt(b, a, segment)
-        except Exception:
+        except (ValueError, np.linalg.LinAlgError) as e:
+            logger.debug("Per-beat repol filter failed (cutoff=%.1f Hz): %s", cutoff, e)
             seg_smooth = segment
     else:
         seg_smooth = segment

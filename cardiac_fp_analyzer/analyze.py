@@ -6,7 +6,7 @@ Usage:
   python analyze.py /path/to/data/folder [--channel auto] [--output /path/to/output]
 """
 
-import sys, argparse, warnings, traceback
+import sys, argparse, logging, traceback
 from pathlib import Path
 from datetime import datetime
 import numpy as np
@@ -21,7 +21,7 @@ from cardiac_fp_analyzer.arrhythmia import analyze_arrhythmia
 from cardiac_fp_analyzer.quality_control import validate_beats, estimate_global_snr
 from cardiac_fp_analyzer.report import generate_excel_report, generate_pdf_report
 
-warnings.filterwarnings('ignore', category=RuntimeWarning)
+logger = logging.getLogger(__name__)
 
 
 def _select_best_channel(df, fs, cfg=None):
@@ -103,7 +103,8 @@ def _select_best_channel(df, fs, cfg=None):
                 details[ch] = f'{len(bi)} beats (too few)'
             if score > best_score:
                 best_score, best_ch = score, ch
-        except Exception as e:
+        except (ValueError, IndexError, RuntimeError) as e:
+            logger.debug("Channel %s scoring failed: %s", ch, e)
             details[ch] = f'error: {e}'
     return best_ch, details
 
@@ -255,8 +256,10 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
 
         return result
     except Exception as e:
-        print(f"  ERROR: {e}")
-        if verbose: traceback.print_exc()
+        logger.error("Analysis failed for %s: %s", filepath, e, exc_info=True)
+        if verbose:
+            print(f"  ERROR: {e}")
+            traceback.print_exc()
         return None
 
 
@@ -513,6 +516,7 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
                     if r: results.append(r)
                     else: errors.append(f"{f}{ch_tag}")
                 except Exception as e:
+                    logger.warning("Batch item failed %s%s: %s", f, ch_tag, e)
                     errors.append(f"{f}{ch_tag}: {e}")
     else:
         total = len(csv_files) * len(channels_to_run)
@@ -623,6 +627,13 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
 
 def main():
     from .config import AnalysisConfig
+
+    # Configure logging for CLI use
+    logging.basicConfig(
+        format='%(asctime)s %(name)s %(levelname)s: %(message)s',
+        datefmt='%H:%M:%S',
+        level=logging.INFO,
+    )
 
     parser = argparse.ArgumentParser(description='Cardiac FP Analyzer for hiPSC-CM µECG')
     parser.add_argument('data_dir')

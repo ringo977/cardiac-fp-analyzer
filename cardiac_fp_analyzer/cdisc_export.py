@@ -27,6 +27,7 @@ Usage:
     export_send_package(results, output_dir, study_id='STUDY001')
 """
 
+import logging
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -34,7 +35,7 @@ from datetime import datetime
 from typing import List, Dict, Optional
 import io, warnings, shutil, re
 
-warnings.filterwarnings('ignore')
+logger = logging.getLogger(__name__)
 
 
 # ── SEND Controlled Terminology (NCI CT 2025-09-26) ─────────────────

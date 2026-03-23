@@ -17,4 +17,13 @@ Modules:
   analyze         — Main pipeline orchestrator (single file + batch)
 """
 
-__version__ = '3.0.0'
+__version__ = '3.1.0'
+
+# ── Package-level logger ──
+# Usage in submodules:  import logging; logger = logging.getLogger(__name__)
+# The NullHandler prevents "No handler found" warnings when the library
+# is used without explicit logging configuration (e.g. as an import).
+# Users/apps can configure logging via logging.basicConfig() or by
+# attaching handlers to the 'cardiac_fp_analyzer' logger.
+import logging as _logging
+_logging.getLogger(__name__).addHandler(_logging.NullHandler())

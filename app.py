@@ -6,6 +6,7 @@ Launch:
     streamlit run app.py
 """
 
+import logging
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -13,7 +14,20 @@ import tempfile, shutil, io, zipfile, traceback, warnings
 from pathlib import Path
 from datetime import datetime
 
-warnings.filterwarnings('ignore')
+# Suppress noisy third-party warnings in the GUI (streamlit, matplotlib).
+# Pipeline warnings from cardiac_fp_analyzer are handled by logging.
+warnings.filterwarnings('ignore', module='streamlit')
+warnings.filterwarnings('ignore', module='matplotlib')
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+
+# Configure logging for the GUI — INFO level by default,
+# DEBUG available via ?debug=1 query param (handled below).
+logging.basicConfig(
+    format='%(asctime)s %(name)s %(levelname)s: %(message)s',
+    datefmt='%H:%M:%S',
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
 # ── Must be first Streamlit call ──
 st.set_page_config(

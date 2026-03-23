@@ -17,8 +17,11 @@ Both approaches contribute to a single ArrhythmiaReport with a 0–100
 risk score.
 """
 
+import logging
 import numpy as np
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 # ── Module-level constants (legacy, kept for backward compat) ──
 TACHYCARDIA_BP_MS = 300
@@ -185,8 +188,8 @@ class ArrhythmiaReport:
             # Map probability to 0-100 score
             self.risk_score = int(min(100, max(0, round(prob * 100))))
 
-        except Exception:
-            # Any error → fallback to manual
+        except (ValueError, KeyError, IndexError, TypeError) as e:
+            logger.debug("Logistic risk score failed, using manual fallback: %s", e)
             self._compute_risk_score_manual(d, n_beats)
 
     def summary_text(self):

@@ -8,8 +8,11 @@ Multi-strategy approach:
   4. Auto-selection of best method
 """
 
+import logging
 import numpy as np
 from scipy import signal as sig
+
+logger = logging.getLogger(__name__)
 
 
 def _get_bd_cfg(cfg=None):
@@ -91,7 +94,9 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
             info['_score'] = score
             info['_method_name'] = name
             results.append((bi, bt, info))
-        except Exception: continue
+        except (ValueError, IndexError, RuntimeError) as e:
+            logger.debug("Beat detection method %s failed: %s", name, e)
+            continue
 
     if not results:
         return np.array([], dtype=int), np.array([]), {'method': 'auto', 'n_beats': 0, 'polarity': 'unknown'}
@@ -191,8 +196,8 @@ def _fix_bimodal_bp(data, fs, bi, bt, info, threshold_factor, cfg=None):
                     f'CV improved {old_cv*100:.1f}% → {new_cv*100:.1f}%'
                 )
                 return bi2, bt2, info2
-        except Exception:
-            pass
+        except (ValueError, IndexError, RuntimeError) as e:
+            logger.debug("Bimodal correction failed: %s", e)
 
     return bi, bt, info
 
