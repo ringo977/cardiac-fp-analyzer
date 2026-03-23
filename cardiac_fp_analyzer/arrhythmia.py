@@ -205,7 +205,7 @@ class ArrhythmiaReport:
 #   RESIDUAL ANALYSIS  (paper approach)
 # ═══════════════════════════════════════════════════════════════════════
 
-def _compute_template(beats_data, max_beats=50):
+def compute_template(beats_data, max_beats=50):
     """Robust median template from up to *max_beats* beats."""
     if not beats_data or len(beats_data) == 0:
         return None
@@ -219,6 +219,9 @@ def _compute_template(beats_data, max_beats=50):
         return None
     aligned = np.array([b[:min_len] for b in sel])
     return np.median(aligned, axis=0)
+
+# Back-compat alias
+_compute_template = compute_template
 
 
 def _compute_residuals(beats_data, template):
@@ -416,7 +419,7 @@ def analyze_residual(beats_data, fs, all_params, cfg=None,
         template = baseline_template
         result['baseline_relative'] = True
     else:
-        template = _compute_template(beats_data)
+        template = compute_template(beats_data)
     if template is None:
         return result
     result['template'] = template

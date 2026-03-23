@@ -61,7 +61,7 @@ def _get_base_key(result):
     return f"{exp}/{chip_ch}"
 
 
-def _get_group_key(result):
+def get_group_key(result):
     """
     Extract the grouping key (experiment + chip + chamber + electrode) from a result.
     E.g. chipA_ch1_terfe_300nM analyzed on el1 → group = "EXP 5/chipA_ch1/el1"
@@ -75,8 +75,11 @@ def _get_group_key(result):
         return f"{base}/{electrode}"
     return base
 
+# Back-compat alias for internal callers
+_get_group_key = get_group_key
 
-def _is_baseline(result):
+
+def is_baseline(result):
     """Check if a result is a baseline recording."""
     fi = result.get('file_info', {})
     drug = str(fi.get('drug', '') or '').lower()
@@ -84,6 +87,9 @@ def _is_baseline(result):
 
     return ('baseline' in drug or 'basline' in drug or
             'baseline' in fname or 'basline' in fname)
+
+# Back-compat alias for internal callers
+_is_baseline = is_baseline
 
 
 def _is_control(result):
