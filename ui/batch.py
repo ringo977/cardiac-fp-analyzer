@@ -20,7 +20,7 @@ from cardiac_fp_analyzer.normalization import is_baseline
 
 from ui.i18n import T
 from ui.helpers import amplitude_scale
-from ui.single_file import _plot_signal, _plot_beats, _show_params_table, _show_arrhythmia
+from ui.display import plot_signal, plot_beats, show_params_table, show_arrhythmia
 from ui.reports import download_reports
 
 
@@ -381,7 +381,7 @@ def _show_batch_details(results):
     with tab_sig:
         # Signal plot (if filtered_signal available)
         if 'filtered_signal' in result and 'time_vector' in result:
-            _plot_signal(result)
+            plot_signal(result)
         else:
             st.info(T('signal_not_available'))
 
@@ -403,11 +403,11 @@ def _show_batch_details(results):
             )
             st.plotly_chart(fig, use_container_width=True)
         elif 'beats_data' in result:
-            _plot_beats(result)
+            plot_beats(result)
 
     with tab_params:
-        _show_params_table(result)
+        show_params_table(result)
 
     with tab_arr:
         if ar:
-            _show_arrhythmia(result)
+            show_arrhythmia(result)

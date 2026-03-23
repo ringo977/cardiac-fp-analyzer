@@ -127,4 +127,4 @@ Il modulo QC valida ogni battito rilevato:
 
 ## Licenza
 
-Uso interno / da definire.
+MIT License — vedi `pyproject.toml` per i dettagli.

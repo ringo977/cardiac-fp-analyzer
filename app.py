@@ -45,8 +45,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Ensure project root is on sys.path ──
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# ── Ensure project root is on sys.path (for development without pip install) ──
+_project_root = str(Path(__file__).resolve().parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 # ── UI module imports ──
 from ui.i18n import T

@@ -11,7 +11,10 @@ from pathlib import Path
 from datetime import datetime
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Ensure parent package is importable during development (without pip install)
+_project_root = str(Path(__file__).resolve().parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 from cardiac_fp_analyzer.loader import load_csv, parse_filename
 from cardiac_fp_analyzer.filtering import full_filter_pipeline
