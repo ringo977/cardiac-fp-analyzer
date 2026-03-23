@@ -50,17 +50,16 @@ def _select_best_channel(df, fs, cfg=None):
                 mbp = np.mean(bp)
                 cv = np.std(bp) / mbp if mbp > 0 else 999
 
-                # ── 1. Beat period in physiological range (0–15 pt) ──
+                # ── 1. Beat period in physiological range ──
                 if cs.bp_ideal_range_s[0] <= mbp <= cs.bp_ideal_range_s[1]:
-                    score += 15
+                    score += cs.w_bp_range
 
-                # ── 2. Beat rate reasonable (0–10 pt) ──
+                # ── 2. Beat rate reasonable ──
                 rate = len(bi) / (len(df) / fs)
                 if cs.rate_range_per_s[0] <= rate <= cs.rate_range_per_s[1]:
-                    score += 10
+                    score += cs.w_rate_ok
 
-                # ── 3. Template correlation (0–40 pt) — dominant criterion ──
-                # How reproducible are the beat waveforms?
+                # ── 3. Template correlation — dominant criterion ──
                 from .beat_detection import segment_beats
                 rep_cfg = cfg.repolarization if cfg else None
                 pre_ms = rep_cfg.segment_pre_ms if rep_cfg else 50
@@ -75,21 +74,18 @@ def _select_best_channel(df, fs, cfg=None):
                     mean_corr = np.nanmean(corrs) if corrs else 0
                 else:
                     mean_corr = 0
-                # Scale: corr 0.9+ → 40pt, 0.7 → 28pt, 0.4 → 16pt, 0 → 0
-                score += max(0, min(40, round(mean_corr * 44 - 4, 1)))
+                score += max(0, min(cs.w_corr_max,
+                                    round(mean_corr * cs.w_corr_scale - cs.w_corr_offset, 1)))
 
-                # ── 4. Beat-period regularity (0–20 pt) ──
-                # Continuous: CV=0% → 20pt, CV=5% → 19pt, CV=25% → 15pt, CV>50% → 0pt
+                # ── 4. Beat-period regularity ──
                 cv_pct = cv * 100
-                score += max(0, round(20 - cv_pct * 0.4, 1))
+                score += max(0, round(cs.w_regularity_max - cv_pct * cs.w_regularity_slope, 1))
 
-                # ── 5. Spike amplitude (0–15 pt) ──
-                # Larger spikes = better electrode contact.
-                # Continuous: scale by median beat peak-to-peak
+                # ── 5. Spike amplitude ──
                 ptp_per_beat = [np.ptp(b) for b in bd] if len(bd) > 0 else [0]
                 median_ptp_mV = np.median(ptp_per_beat) * 1000
-                # 0pt at 0mV, 15pt at ≥500mV, linear
-                score += min(15, round(median_ptp_mV / 500 * 15, 1))
+                score += min(cs.w_amplitude_max,
+                             round(median_ptp_mV / cs.w_amplitude_ref_mV * cs.w_amplitude_max, 1))
 
                 p5, p95 = np.percentile(filt, [5, 95])
                 nm = (filt >= p5) & (filt <= p95)

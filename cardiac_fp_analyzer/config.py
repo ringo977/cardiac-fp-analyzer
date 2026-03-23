@@ -72,12 +72,23 @@ class BeatDetectionConfig:
     retry_min_distance_ms: float = 300.0
     retry_threshold_factor: float = 3.0
 
-    # Physiological plausibility scoring
+    # Physiological plausibility scoring (thresholds)
     bp_ideal_range_s: Tuple[float, float] = (0.4, 3.0)
     bp_extended_range_s: Tuple[float, float] = (0.3, 5.0)
     cv_good: float = 0.15        # CV < 15% → good score
     cv_fair: float = 0.30        # CV < 30% → fair
     cv_marginal: float = 0.50    # CV < 50% → marginal
+
+    # Auto-method scoring weights (points awarded per criterion)
+    score_bp_ideal: float = 30.0       # beat period in ideal range
+    score_bp_extended: float = 15.0    # beat period in extended range
+    score_cv_good: float = 30.0        # CV below cv_good
+    score_cv_fair: float = 20.0        # CV below cv_fair
+    score_cv_marginal: float = 10.0    # CV below cv_marginal
+    score_rate_ok: float = 20.0        # beat count in plausible range
+    score_rate_low: float = 10.0       # >3 beats but outside plausible range
+    score_rate_excess: float = -20.0   # too many beats (likely noise)
+    score_too_few: float = -10.0       # <3 beats
 
     # Derivative method
     deriv_smooth_ms: float = 2.0       # smoothing window for derivative (ms)
@@ -382,6 +393,17 @@ class ChannelSelectionConfig:
     rate_range_per_s: Tuple[float, float] = (0.3, 3.5)
     snr_good: float = 5.0        # +20
     snr_fair: float = 3.0        # +10
+
+    # Scoring weights (points awarded per criterion)
+    w_bp_range: float = 15.0         # beat period in ideal range
+    w_rate_ok: float = 10.0          # beat rate in plausible range
+    w_corr_max: float = 40.0         # max points for template correlation
+    w_corr_scale: float = 44.0       # linear scaling: score = corr * scale - offset
+    w_corr_offset: float = 4.0       # offset for correlation scoring
+    w_regularity_max: float = 20.0   # max points for beat-period regularity
+    w_regularity_slope: float = 0.4  # points lost per 1% CV
+    w_amplitude_max: float = 15.0    # max points for spike amplitude
+    w_amplitude_ref_mV: float = 500.0  # amplitude (mV) for max points
 
 
 # ═════════════════════════════════════════════════════════════════════════

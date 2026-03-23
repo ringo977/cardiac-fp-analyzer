@@ -80,17 +80,22 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
             if len(bp) > 2:
                 mean_bp = np.mean(bp)
                 cv_bp = np.std(bp) / mean_bp if mean_bp > 0 else 999
-                if c.bp_ideal_range_s[0] <= mean_bp <= c.bp_ideal_range_s[1]: score += 30
-                elif c.bp_extended_range_s[0] <= mean_bp <= c.bp_extended_range_s[1]: score += 15
-                if cv_bp < c.cv_good: score += 30
-                elif cv_bp < c.cv_fair: score += 20
-                elif cv_bp < c.cv_marginal: score += 10
+                if c.bp_ideal_range_s[0] <= mean_bp <= c.bp_ideal_range_s[1]:
+                    score += c.score_bp_ideal
+                elif c.bp_extended_range_s[0] <= mean_bp <= c.bp_extended_range_s[1]:
+                    score += c.score_bp_extended
+                if cv_bp < c.cv_good: score += c.score_cv_good
+                elif cv_bp < c.cv_fair: score += c.score_cv_fair
+                elif cv_bp < c.cv_marginal: score += c.score_cv_marginal
                 duration_s = len(data) / fs
-                if duration_s/3 <= len(bi) <= duration_s/0.3: score += 20
-                elif len(bi) > 3: score += 10
-                if len(bi) > duration_s/0.3: score -= 20
+                if duration_s/3 <= len(bi) <= duration_s/0.3:
+                    score += c.score_rate_ok
+                elif len(bi) > 3:
+                    score += c.score_rate_low
+                if len(bi) > duration_s/0.3:
+                    score += c.score_rate_excess
             else:
-                score = -10
+                score = c.score_too_few
             info['_score'] = score
             info['_method_name'] = name
             results.append((bi, bt, info))
