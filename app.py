@@ -423,9 +423,12 @@ def _reanalyze_with_modified_beats(result, new_beat_indices, config):
                                  pre_ms=rep_cfg.segment_pre_ms,
                                  post_ms=max(850, rep_cfg.search_end_ms + 50))
 
+    # Use only successfully segmented beats (edge-truncated beats removed)
+    bi_seg = bi[np.array(vi)] if len(vi) > 0 else bi[:0]
+
     # QC
     qc_report, bi_clean, bd_clean, btm_clean = validate_beats(
-        filtered, bi, bd, btm, fs, cfg=config.quality
+        filtered, bi_seg, bd, btm, fs, cfg=config.quality
     )
 
     # Parameters

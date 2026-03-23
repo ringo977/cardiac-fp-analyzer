@@ -268,6 +268,13 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
         amplitude_threshold = c.amplitude_reject_fraction
         use_morphology = c.use_morphology
 
+    # Alignment guard: beat_indices must match segmented data arrays.
+    # Callers must pass only successfully-segmented beat indices.
+    assert len(beat_indices) == len(beats_data) == len(beats_time), (
+        f"validate_beats alignment error: beat_indices={len(beat_indices)}, "
+        f"beats_data={len(beats_data)}, beats_time={len(beats_time)}"
+    )
+
     qc = QualityReport()
     qc.n_beats_input = len(beat_indices)
 
@@ -295,8 +302,8 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
 
     if use_morphology and len(beats_data) >= 5:
         # Build template from highest-amplitude beats (most likely real)
-        bd_amps = amplitudes[:len(beats_data)] if len(amplitudes) >= len(beats_data) else amplitudes
-        template = compute_beat_template(beats_data, amplitudes=bd_amps, max_beats=c.morphology_max_beats)
+        # amplitudes and beats_data are guaranteed same length by alignment assert above
+        template = compute_beat_template(beats_data, amplitudes=amplitudes, max_beats=c.morphology_max_beats)
 
         if template is not None:
             morphology_corrs = []
@@ -379,15 +386,15 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
     qc.grade = _assign_grade(qc, cfg=c)
 
     # ─── Step 6: Build accepted outputs ───
-    accepted_beat_indices = beat_indices[np.array(accepted_mask)]
+    mask_arr = np.array(accepted_mask)
+    accepted_beat_indices = beat_indices[mask_arr]
+    accepted_beats_data = [bd for bd, a in zip(beats_data, accepted_mask) if a]
+    accepted_beats_time = [bt for bt, a in zip(beats_time, accepted_mask) if a]
 
-    # For beats_data/beats_time, align mask to segmented beats
-    accepted_beats_data = []
-    accepted_beats_time = []
-    for i in range(min(len(beats_data), len(accepted_mask))):
-        if accepted_mask[i]:
-            accepted_beats_data.append(beats_data[i])
-            accepted_beats_time.append(beats_time[i])
+    assert len(accepted_beat_indices) == len(accepted_beats_data) == len(accepted_beats_time), (
+        f"validate_beats output alignment error: indices={len(accepted_beat_indices)}, "
+        f"data={len(accepted_beats_data)}, time={len(accepted_beats_time)}"
+    )
 
     # Add notes
     if qc.rejection_rate > c.rejection_high_note:

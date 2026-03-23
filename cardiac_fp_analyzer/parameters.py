@@ -562,6 +562,13 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
     """
     rc = _get_repol_cfg(cfg)
     from .beat_detection import compute_beat_periods
+
+    # Alignment guard: beats_data, beats_time and beat_indices must be in sync
+    assert len(beats_data) == len(beats_time) == len(beat_indices), (
+        f"Parameter extraction alignment error: beats_data={len(beats_data)}, "
+        f"beats_time={len(beats_time)}, beat_indices={len(beat_indices)}"
+    )
+
     beat_periods = compute_beat_periods(beat_indices, fs)
 
     # ─── Template averaging for FPD reference ───

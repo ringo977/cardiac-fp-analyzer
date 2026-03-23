@@ -178,9 +178,17 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
                                      pre_ms=rep_cfg.segment_pre_ms,
                                      post_ms=max(850, rep_cfg.search_end_ms + 50))
 
+        # Use only successfully segmented beats (edge-truncated beats removed).
+        # vi contains indices into bi of beats that fit the pre/post window.
+        bi_seg = bi[np.array(vi)] if len(vi) > 0 else bi[:0]
+        assert len(bi_seg) == len(bd) == len(btm), (
+            f"Segmentation alignment error: bi_seg={len(bi_seg)}, "
+            f"beats_data={len(bd)}, beats_time={len(btm)}"
+        )
+
         # ─── Quality Control: validate beats ───
         qc_report, bi_clean, bd_clean, btm_clean = validate_beats(
-            filtered, bi, bd, btm, fs, cfg=config.quality
+            filtered, bi_seg, bd, btm, fs, cfg=config.quality
         )
         if verbose:
             n_rej = qc_report.n_beats_input - qc_report.n_beats_accepted
