@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cardiac-fp-analyzer"
-version = "3.1.0"
+version = "3.2.0"
 description = "Field Potential analysis pipeline for hiPSC-CM micro-ECG recordings"
 readme = "README.md"
 license = "MIT"
@@ -39,6 +39,7 @@ dependencies = [
 # GUI (Streamlit app)
 gui = [
     "streamlit>=1.24,<2.0",
+    "plotly>=5.0,<6.0",
 ]
 # Excel/PDF reports
 reports = [
@@ -67,7 +68,7 @@ Repository = "https://github.com/ringo977/cardiac-fp-analyzer"
 cardiac-fp = "cardiac_fp_analyzer.analyze:main"
 
 [tool.setuptools.packages.find]
-include = ["cardiac_fp_analyzer*"]
+include = ["cardiac_fp_analyzer*", "ui*"]
 
 # ── Ruff (linting + formatting) ──
 [tool.ruff]

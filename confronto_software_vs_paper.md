@@ -3,7 +3,7 @@
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset**: 169 file CSV (EXP 5, 7, 8, 9) — stessi dati usati nel paper
 **Data analisi**: 21 Marzo 2026
-**Versione**: v3.0 — con cessation detection, consensus FPD, smart classification
+**Versione**: v3.2.0 — con cessation detection, consensus FPD, smart classification, UI modulare, logging strutturato, pesi configurabili
 
 ---
 
@@ -23,7 +23,7 @@
 | Normalizzazione | % change vs baseline, soglie 10/15/20% | % change vs baseline, soglie 10/15/20% + **smart cessation** | v3: override intelligente per waveform destruction |
 | Spectral analysis | — | **Welch PSD, entropia, armoniche, KL divergenza** | v3: analisi nel dominio della frequenza |
 | TdP scoring | Score -1 a 3 (Ando et al. 2017) | Score -1 a 3 (adattato) + cessation override | Identico schema + cessation → score 3 |
-| Output | GUI MATLAB | Excel + PDF + batch CLI | Automatico per 169 file |
+| Output | GUI MATLAB | Excel + PDF + batch CLI + **GUI Streamlit modulare** | Automatico per 169 file + web UI |
 
 ---
 

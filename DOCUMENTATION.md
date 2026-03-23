@@ -1,7 +1,7 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.6
-**Piattaforma**: Python 3.10+
+**Versione**: 3.2.0
+**Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
 **Accuratezza**: 6/7 sul set di validazione CiPA
@@ -31,6 +31,8 @@
 7. [Validazione](#7-validazione)
 8. [Interfaccia grafica (Streamlit)](#8-interfaccia-grafica-streamlit)
 9. [Export CDISC SEND](#9-export-cdisc-send)
+10. [Logging e diagnostica](#10-logging-e-diagnostica)
+11. [Changelog](#11-changelog)
 
 ---
 
@@ -46,16 +48,28 @@ Il software analizza ogni registrazione attraverso una pipeline a 12 stadi, ragg
 
 ## 2. Installazione e utilizzo
 
-### Dipendenze
+### Installazione
 
-```
-numpy, scipy, pandas, matplotlib, openpyxl
+```bash
+# Con pyproject.toml (raccomandato)
+pip install .                        # Solo core (numpy, pandas, scipy, matplotlib)
+pip install ".[gui]"                 # Core + Streamlit + Plotly
+pip install ".[reports]"             # Core + xlsxwriter
+pip install ".[cdisc]"              # Core + pyreadstat
+pip install ".[all]"                 # Tutto
+pip install ".[dev]"                 # Tutto + pytest + ruff
+
+# Legacy (requirements.txt)
+pip install -r requirements.txt
 ```
 
 ### Utilizzo da linea di comando
 
 ```bash
-# Analisi batch di una cartella
+# Dopo installazione (entry point CLI)
+cardiac-fp /path/to/data/ --channel auto -o results/
+
+# Senza installazione
 python -m cardiac_fp_analyzer.analyze /path/to/data/
 
 # Con selezione elettrodo manuale
@@ -813,6 +827,19 @@ config = AnalysisConfig.from_json('my_config.json')
 | `peak_method` | Usa il metodo peak per FPD (più semplice) |
 | `no_filters` | Disabilita i filtri (per debug) |
 
+### Pesi di scoring configurabili (v3.2)
+
+I pesi numerici usati per lo scoring automatico nella beat detection e nella channel selection sono ora campi delle rispettive dataclass (`BeatDetectionConfig`, `ChannelSelectionConfig`) anziché costanti hard-coded nel codice. Questo permette di tunarli via JSON senza modificare il sorgente:
+
+```python
+config = AnalysisConfig()
+config.beat_detection.score_bp_ideal = 30       # punti per BP nel range ideale
+config.beat_detection.score_bp_extended = 15    # punti per BP nel range esteso
+config.channel_selection.w_bp_range = 15        # peso per BP nel range fisiologico
+config.channel_selection.w_corr_max = 30        # peso max per correlazione media
+config.to_json('custom_weights.json')
+```
+
 ### Parametro amplifier_gain
 
 Il sistema µECG-Pharma Digilent registra con un guadagno di 10⁴. Per ottenere i valori reali in Volt, il segnale viene diviso per il guadagno:
@@ -897,12 +924,31 @@ Mexiletine è l'unico farmaco misclassificato. Questo è coerente con il framewo
 
 ## 8. Interfaccia grafica (Streamlit)
 
-Il software include un'interfaccia web costruita con Streamlit (`app.py`), che espone tutte le funzionalità della pipeline senza richiedere interazione da riga di comando.
+Il software include un'interfaccia web costruita con Streamlit, che espone tutte le funzionalità della pipeline senza richiedere interazione da riga di comando.
+
+### Architettura UI (v3.2)
+
+A partire dalla v3.2, l'interfaccia è organizzata in un pacchetto `ui/` con moduli dedicati. Il file `app.py` (~90 righe) funge da entry point e router, delegando la logica ai moduli:
+
+```
+app.py                      # Setup logging/warnings, st.set_page_config, router
+ui/
+├── __init__.py             # Package marker
+├── i18n.py                 # Dizionario TRANSLATIONS (IT/EN, >150 chiavi) + T()
+├── helpers.py              # reanalyze_with_modified_beats(), amplitude_scale()
+├── config_sidebar.py       # build_config_from_sidebar() → AnalysisConfig
+├── single_file.py          # Pagina analisi singolo file + editor battiti + export
+├── batch.py                # Pagina batch + risk map + summary + dettagli
+├── drug_comparison.py      # Dashboard dose-response, metriche, waveform overlay
+└── reports.py              # Widget download Excel/PDF/Config JSON/CDISC SEND
+```
+
+Le funzioni helper del core precedentemente importate come private (`_compute_template`, `_is_baseline`, `_get_group_key`) sono ora esposte come API pubblica (`compute_template`, `is_baseline`, `get_group_key`), con alias di retrocompatibilità mantenuti.
 
 ### Avvio
 
 ```bash
-pip install streamlit plotly
+pip install ".[gui]"    # installa streamlit + plotly
 streamlit run app.py
 ```
 
@@ -965,10 +1011,10 @@ Il vettore temporale viene normalizzato per partire sempre da 0 secondi. L'hardw
 
 ### Requisiti aggiuntivi
 
-```
-streamlit>=1.28
-plotly>=5.0
-xlsxwriter  # per export Excel
+```bash
+pip install ".[gui,reports]"
+# oppure manualmente:
+#   streamlit>=1.24  plotly>=5.0  xlsxwriter>=3.0
 ```
 
 ---
@@ -1027,3 +1073,46 @@ I campi obbligatori CDISC (STUDYID, DOMAIN, USUBJID, --SEQ) sono sempre popolati
 ### Limitazioni note
 
 I nomi delle variabili sono limitati a 8 caratteri (requisito SAS Transport v5). I valori stringa sono limitati a 200 caratteri e codificati in latin-1 (caratteri non-ASCII vengono sostituiti). Il dominio RISK è un'estensione custom non presente nello standard SENDIG ufficiale — necessita di una Reviewer's Guide che ne giustifichi l'inclusione.
+
+---
+
+## 10. Logging e diagnostica (v3.2)
+
+Il package utilizza logging strutturato Python anziché la soppressione blanket dei warning:
+
+```python
+# A livello package (__init__.py)
+import logging
+logging.getLogger('cardiac_fp_analyzer').addHandler(logging.NullHandler())
+```
+
+Ogni modulo usa `logger = logging.getLogger(__name__)`. I blocchi `except` specificano i tipi di eccezione attesi (`ValueError`, `IndexError`, `RuntimeError`, `np.linalg.LinAlgError`) e loggano i dettagli a livello `DEBUG`. Per abilitare il logging diagnostico:
+
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG, format='%(name)s %(levelname)s: %(message)s')
+```
+
+Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il parametro `?debug=1` nell'URL può attivare il livello `DEBUG`.
+
+---
+
+## 11. Changelog
+
+### v3.2.0 (Marzo 2026)
+
+- **UI modulare**: `app.py` (1968 righe) spezzato in `ui/` package con 7 moduli (i18n, helpers, config_sidebar, single_file, batch, drug_comparison, reports). Il router `app.py` è ora ~90 righe.
+- **Beat alignment fix**: corretto bug critico di disallineamento tra `beat_indices` e `beats_data`/`beats_time` causato dal mancato passaggio dell'array `valid` da `segment_beats()` a `validate_beats()`. Aggiunto assert di allineamento in `analyze.py`, `quality_control.py`, `parameters.py`.
+- **Packaging**: aggiunto `pyproject.toml` con gruppi di dipendenze opzionali (`[gui]`, `[reports]`, `[cdisc]`, `[all]`, `[dev]`), entry point CLI `cardiac-fp`, configurazione ruff + pytest.
+- **Logging strutturato**: `NullHandler` a livello package, `logger = logging.getLogger(__name__)` per modulo, blocchi `except` con tipi specifici + `logger.debug`. Rimossa soppressione blanket `warnings.filterwarnings('ignore')`.
+- **Pesi configurabili**: scoring weights di beat detection (`score_bp_ideal`, `score_cv_good`, ecc.) e channel selection (`w_bp_range`, `w_corr_max`, `w_amplitude_max`, ecc.) spostati in campi delle dataclass `BeatDetectionConfig` e `ChannelSelectionConfig`, serializzabili via JSON.
+- **API pubblica**: `arrhythmia.compute_template`, `normalization.is_baseline`, `normalization.get_group_key` ora pubbliche (alias `_compute_template`, `_is_baseline`, `_get_group_key` mantenuti per retrocompatibilità).
+- **Plotly** aggiunto alle dipendenze `[gui]`.
+
+### v3.1.0 (Marzo 2026)
+
+- Configurazione centralizzata `AnalysisConfig` con preset e JSON I/O.
+- Export CDISC SEND (TS, DM, EX, EG, RISK + define.xml), validato Pinnacle 21.
+- Risk map CiPA interattiva con zone colorate e ground truth.
+- Analisi spettrale (PSD Welch, entropia, KL divergenza).
+- Cessation detector a 5 componenti.
