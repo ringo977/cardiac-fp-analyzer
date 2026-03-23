@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cardiac-fp-analyzer"
+version = "3.0.0"
+description = "Field Potential analysis pipeline for hiPSC-CM micro-ECG recordings"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    { name = "Marco Rasponi", email = "marco.rasponi@gmail.com" },
+]
+keywords = [
+    "electrophysiology", "hiPSC-CM", "cardiomyocyte", "field-potential",
+    "MEA", "CiPA", "cardiac-safety", "CDISC", "SEND",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "numpy>=1.22,<2.0",
+    "pandas>=1.4,<3.0",
+    "scipy>=1.8,<2.0",
+    "matplotlib>=3.5,<4.0",
+]
+
+[project.optional-dependencies]
+# GUI (Streamlit app)
+gui = [
+    "streamlit>=1.24,<2.0",
+]
+# Excel/PDF reports
+reports = [
+    "xlsxwriter>=3.0,<4.0",
+]
+# CDISC SEND export (.xpt files)
+cdisc = [
+    "pyreadstat>=1.2,<2.0",
+]
+# Everything
+all = [
+    "cardiac-fp-analyzer[gui,reports,cdisc]",
+]
+# Development / testing
+dev = [
+    "cardiac-fp-analyzer[all]",
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+]
+
+[project.urls]
+Repository = "https://github.com/ringo977/cardiac-fp-analyzer"
+
+[project.scripts]
+cardiac-fp = "cardiac_fp_analyzer.analyze:main"
+
+[tool.setuptools.packages.find]
+include = ["cardiac_fp_analyzer*"]
+
+# ── Ruff (linting + formatting) ──
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+src = ["cardiac_fp_analyzer"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = [
+    "E501",   # line too long — handled by formatter where possible
+    "E741",   # ambiguous variable names (l, O, I) — common in scientific code
+    "B028",   # no stacklevel in warnings — not critical
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["cardiac_fp_analyzer"]
+
+# ── Pytest ──
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"

@@ -25,3 +25,9 @@ SIGNAL IMAGES/
 
 # Large local datasets (keep repo code-only)
 µECG-Pharma Calibration - EXCEL DATA/
+
+# CDISC SEND export output
+cdisc_send_output/
+
+# Git bundles (transfer artifacts)
+*.bundle
