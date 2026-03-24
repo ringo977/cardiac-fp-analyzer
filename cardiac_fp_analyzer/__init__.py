@@ -17,7 +17,7 @@ Modules:
   analyze         — Main pipeline orchestrator (single file + batch)
 """
 
-__version__ = '3.2.0'
+__version__ = '3.2.1'
 
 # ── Package-level logger ──
 # Usage in submodules:  import logging; logger = logging.getLogger(__name__)

@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.2.0
+**Versione**: 3.2.1
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1098,6 +1098,16 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.2.1 (Marzo 2026)
+
+- **Refactoring core**: `analyze.py` (690→442 righe) spezzato in `channel_selection.py`, `inclusion.py`; `parameters.py` (671→293 righe) spezzato in `repolarization.py`.
+- **Fix denominatore re-analisi residua**: nella seconda passata batch (baseline-relative), `beat_periods` veniva preso dal result dict (calcolato da tutti i beat raw) anziché ricalcolato dai `beat_indices` cleaned. Quando il QC scarta molti beat, questo causava mismatch tra `n_beats` e denominatori CV/incidenze in `analyze_arrhythmia()`. Fix: `bp = compute_beat_periods(bi, fs)` nella re-analysis loop.
+- **Hardening eccezioni**: rimossi tutti i `except Exception` (7 occorrenze UI + 2 core) e sostituiti con tipi specifici (`OSError`, `ValueError`, `KeyError`, ecc.).
+- **Rimosso `sys.path.insert`**: eliminato hack legacy da `app.py` e `analyze.py`; pyproject.toml gestisce gli import.
+- **Warning mirati**: rimossa soppressione blanket `DeprecationWarning`; filtri solo per streamlit, matplotlib, plotly.
+- **Documentazione**: sezione "Divergenza Denominatore QC" aggiunta a `confronto_software_vs_paper.md` e `comparison_with_paper.md`.
+- **Test**: 35 test totali; aggiunti test per nuovi moduli (channel_selection, inclusion, repolarization) e regressione denominatore.
 
 ### v3.2.0 (Marzo 2026)
 

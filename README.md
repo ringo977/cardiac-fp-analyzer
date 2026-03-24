@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer
 
-**Versione**: 3.2.0
+**Versione**: 3.2.1
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
@@ -119,6 +119,15 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.2.1 (Marzo 2026)
+- **Refactoring core**: `analyze.py` (690→442 righe) spezzato in `channel_selection.py`, `inclusion.py`; `parameters.py` (671→293 righe) spezzato in `repolarization.py`
+- **Fix denominatore re-analisi residua**: `beat_periods` ricalcolato dagli indici cleaned (non raw) nella seconda passata batch, evitando mismatch n_beats/CV
+- **Hardening eccezioni**: zero `except Exception` in tutto il codebase — ogni catch è ora specifico
+- **Rimosso `sys.path.insert`**: pyproject.toml gestisce tutti gli import; rimosso hack legacy da `app.py` e `analyze.py`
+- **Warning mirati**: rimossa soppressione blanket `DeprecationWarning`; filtri solo per streamlit, matplotlib, plotly
+- **Documentazione QC**: documentata divergenza denominatore QC vs paper nei file di confronto
+- **Test**: 35 test (smoke, config, beat alignment, denominatore consistency)
 
 ### v3.2.0 (Marzo 2026)
 - **UI modulare**: `app.py` (1968→90 righe) spezzato in 7 moduli sotto `ui/`

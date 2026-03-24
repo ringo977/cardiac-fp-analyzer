@@ -3,7 +3,7 @@
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset**: 169 file CSV (EXP 5, 7, 8, 9) — stessi dati usati nel paper
 **Data analisi**: 21 Marzo 2026
-**Versione**: v3.2.0 — con cessation detection, consensus FPD, smart classification, UI modulare, logging strutturato, pesi configurabili
+**Versione**: v3.2.1 — con cessation detection, consensus FPD, smart classification, UI modulare, logging strutturato, pesi configurabili, refactoring core, fix denominatore re-analisi
 
 ---
 
