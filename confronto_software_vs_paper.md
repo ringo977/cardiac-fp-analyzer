@@ -164,7 +164,19 @@ Il paper riporta i parametri baseline su n=51 microtissuti che hanno superato il
 
 ---
 
-## 6. Limitazioni Residue
+## 6. Divergenza nel Denominatore QC
+
+Una differenza metodologica importante rispetto al paper riguarda il denominatore usato nel Quality Control.
+
+**Paper (MATLAB)**: Il QC opera per-registrazione. Il paper riporta che 9/60 microtissuti (~15%) sono stati esclusi per CV baseline BP ≥ 25%. Il denominatore è il numero totale di registrazioni (o microtissuti). I battiti individuali non vengono filtrati prima dell'analisi: il template averaging (cross-correlazione di ~90 battiti) è intrinsecamente robusto agli outlier perché la media li diluisce.
+
+**Nostro software (Python)**: Il QC opera per-beat. Prima dell'estrazione dei parametri, ogni singolo battito viene validato tramite SNR locale, ampiezza e correlazione morfologica con il template. I battiti che non superano il QC vengono esclusi. Il denominatore riportato nel QC (es. "Accepted 45/62") è il rapporto fra battiti accettati e battiti segmentati, non il totale dei battiti rilevati. Inoltre, i battiti troncati ai bordi della registrazione vengono rimossi nella fase di segmentazione (prima del QC), quindi il denominatore QC (n_beats_input) è già inferiore al numero totale di battiti rilevati (n_beats_detected).
+
+**Implicazioni pratiche**: Questa differenza significa che i tassi di reiezione non sono direttamente confrontabili fra paper e software. Un tasso di reiezione del 30% nel nostro software non equivale al 15% del paper: il paper non ha un meccanismo di reiezione per-beat, mentre il nostro software può escludere battiti singoli pur mantenendo la registrazione nell'analisi. Questo approccio per-beat è più granulare ma può sembrare più aggressivo nel numero di "battiti esclusi" anche quando la registrazione è globalmente di buona qualità.
+
+---
+
+## 7. Limitazioni Residue
 
 1. **Soglia confidenza critica**: La separazione tra baselines buone e cattive dipende da una soglia molto stretta (conf 0.685 vs 0.691). Su dataset più ampi potrebbe essere necessario un approccio più robusto (es. clustering automatico).
 
@@ -178,7 +190,7 @@ Il paper riporta i parametri baseline su n=51 microtissuti che hanno superato il
 
 ---
 
-## 7. Evoluzione: v1 → v2 → v3
+## 8. Evoluzione: v1 → v2 → v3
 
 | Aspetto | v1 (peak method) | v2 (tangent method) | **v3 (consensus + cessation)** |
 |---------|-----------------|---------------------|-------------------------------|
@@ -197,7 +209,7 @@ Il paper riporta i parametri baseline su n=51 microtissuti che hanno superato il
 
 ---
 
-## 8. Roadmap Rimanente
+## 9. Roadmap Rimanente
 
 ### Priorità 1 — Validazione esterna
 
@@ -218,7 +230,7 @@ Il paper riporta i parametri baseline su n=51 microtissuti che hanno superato il
 
 ---
 
-## 9. Conclusioni
+## 10. Conclusioni
 
 Il software v3 raggiunge **100% sensitivity, 100% specificity e 100% accuracy** su 7 farmaci di riferimento, superando il paper originale (83.3% sensitivity, 100% specificity, 91.6% accuracy).
 

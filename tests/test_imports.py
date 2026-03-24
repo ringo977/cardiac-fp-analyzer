@@ -46,6 +46,24 @@ class TestCoreImports:
         assert callable(analyze_single_file)
         assert callable(batch_analyze)
 
+    def test_import_channel_selection(self):
+        from cardiac_fp_analyzer.channel_selection import select_best_channel
+        assert callable(select_best_channel)
+
+    def test_import_inclusion(self):
+        from cardiac_fp_analyzer.inclusion import apply_inclusion_criteria
+        assert callable(apply_inclusion_criteria)
+
+    def test_import_repolarization(self):
+        from cardiac_fp_analyzer.repolarization import (
+            find_repolarization_on_template,
+            find_repolarization_per_beat,
+            apply_fpd_method,
+        )
+        assert callable(find_repolarization_on_template)
+        assert callable(find_repolarization_per_beat)
+        assert callable(apply_fpd_method)
+
 
 class TestBackCompatAliases:
     """Verify private-name aliases still work for backward compatibility."""
@@ -61,6 +79,23 @@ class TestBackCompatAliases:
     def test_get_group_key_alias(self):
         from cardiac_fp_analyzer.normalization import _get_group_key, get_group_key
         assert _get_group_key is get_group_key
+
+    def test_analyze_back_compat_aliases(self):
+        from cardiac_fp_analyzer.analyze import (
+            _select_best_channel, select_best_channel,
+            _apply_inclusion_criteria, apply_inclusion_criteria,
+        )
+        # These are the same function objects re-exported as back-compat aliases
+        assert callable(_select_best_channel)
+        assert callable(_apply_inclusion_criteria)
+
+    def test_repolarization_back_compat_aliases(self):
+        from cardiac_fp_analyzer.repolarization import (
+            _find_repolarization_on_template, find_repolarization_on_template,
+            _apply_fpd_method, apply_fpd_method,
+        )
+        assert _find_repolarization_on_template is find_repolarization_on_template
+        assert _apply_fpd_method is apply_fpd_method
 
 
 class TestVersion:

@@ -110,7 +110,19 @@ Il nostro software rileva aritmie/alterazioni in quasi tutti i recording (risk s
 
 ---
 
-## 5. Punti di forza del nostro software
+## 5. QC Denominator Divergence
+
+An important methodological difference with the paper concerns the denominator used in Quality Control reporting.
+
+**Paper**: QC operates per-recording. The paper excludes 9/60 microtissues (~15%) with baseline CV BP ≥ 25%. Individual beats are not filtered — template averaging (cross-correlation of ~90 beats) is inherently robust to outliers.
+
+**Our software**: QC operates per-beat. Before parameter extraction, each beat is validated by local SNR, amplitude, and morphological correlation with the template. Beats failing QC are excluded. Additionally, edge-truncated beats are removed during segmentation (before QC), so the QC denominator (n_beats_input) is already smaller than the total number of detected beats (n_beats_detected).
+
+**Practical implication**: Rejection rates are not directly comparable. A 30% per-beat rejection rate in our software does not equate to the paper's 15% per-recording exclusion rate. Our per-beat approach is more granular but can appear more aggressive even when the overall recording quality is acceptable. When comparing QC statistics with the paper, the relevant metric is the per-recording inclusion/exclusion (our inclusion criteria module), not the per-beat rejection rate.
+
+---
+
+## 6. Punti di forza del nostro software
 
 1. **Completamente automatico**: nessuna interazione manuale, processamento batch di 169 file in ~3 minuti
 2. **Multi-metodo beat detection**: più robusto del singolo Pan-Tompkins del paper
@@ -120,7 +132,7 @@ Il nostro software rileva aritmie/alterazioni in quasi tutti i recording (risk s
 6. **Variabilità beat-to-beat**: misure per-beat con STV, vs solo medie nel paper
 7. **Report strutturati**: Excel multi-foglio + PDF con grafici automatici
 
-## 6. Limiti e miglioramenti necessari
+## 7. Limiti e miglioramenti necessari
 
 1. **FPD sottostimato (~50%)**: il punto più critico. Servirebbero:
    - Template averaging come nel paper (media cross-correlata dei battiti)
@@ -137,6 +149,6 @@ Il nostro software rileva aritmie/alterazioni in quasi tutti i recording (risk s
 
 ---
 
-## 7. Conclusione
+## 8. Conclusione
 
 Il BP (parametro più robusto) mostra un **accordo eccellente** (~6%) con il paper. La direzione degli effetti farmacologici è correttamente rilevata per la maggior parte dei farmaci. I punti critici sono la **sottostima dell'FPD** (problema metodologico risolvibile con template averaging) e l'**eccesso di sensibilità dell'arrhythmia classifier**. Nel complesso, il nostro software automatico raggiunge risultati qualitativamente coerenti con l'analisi semi-automatica MATLAB del paper, con il vantaggio di essere completamente automatizzato e di produrre analisi per-beat più dettagliate.

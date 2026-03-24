@@ -23,89 +23,15 @@ from cardiac_fp_analyzer.parameters import extract_all_parameters
 from cardiac_fp_analyzer.arrhythmia import analyze_arrhythmia
 from cardiac_fp_analyzer.quality_control import validate_beats, estimate_global_snr
 from cardiac_fp_analyzer.report import generate_excel_report, generate_pdf_report
+from cardiac_fp_analyzer.channel_selection import select_best_channel
+from cardiac_fp_analyzer.inclusion import apply_inclusion_criteria
 
 logger = logging.getLogger(__name__)
 
 
-def _select_best_channel(df, fs, cfg=None):
-    """Select the best electrode based on beat detection quality. cfg = AnalysisConfig."""
-    if cfg is not None:
-        cs = cfg.channel_selection
-        fc = cfg.filtering
-    else:
-        from .config import ChannelSelectionConfig, FilterConfig
-        cs = ChannelSelectionConfig()
-        fc = FilterConfig()
-
-    best_ch, best_score = 'el1', -999
-    gain = cfg.amplifier_gain if cfg is not None else 1.0
-    details = {}
-    for ch in ['el1', 'el2']:
-        try:
-            raw_ch = df[ch].values
-            if gain != 1.0:
-                raw_ch = raw_ch / gain
-            filt = full_filter_pipeline(raw_ch, fs, cfg=fc)
-            bi, bt, info = detect_beats(filt, fs, method='auto', min_distance_ms=400)
-            bp = compute_beat_periods(bi, fs)
-            score = 0
-            if len(bp) > 2:
-                mbp = np.mean(bp)
-                cv = np.std(bp) / mbp if mbp > 0 else 999
-
-                # ── 1. Beat period in physiological range ──
-                if cs.bp_ideal_range_s[0] <= mbp <= cs.bp_ideal_range_s[1]:
-                    score += cs.w_bp_range
-
-                # ── 2. Beat rate reasonable ──
-                rate = len(bi) / (len(df) / fs)
-                if cs.rate_range_per_s[0] <= rate <= cs.rate_range_per_s[1]:
-                    score += cs.w_rate_ok
-
-                # ── 3. Template correlation — dominant criterion ──
-                from .beat_detection import segment_beats
-                rep_cfg = cfg.repolarization if cfg else None
-                pre_ms = rep_cfg.segment_pre_ms if rep_cfg else 50
-                post_ms = rep_cfg.search_end_ms + 50 if rep_cfg else 900
-                bd, btm, vi = segment_beats(filt, df['time'].values, bi, fs,
-                                            pre_ms=pre_ms, post_ms=post_ms)
-                if len(bd) >= 3:
-                    min_len = min(len(b) for b in bd)
-                    template = np.mean([b[:min_len] for b in bd], axis=0)
-                    corrs = [np.corrcoef(b[:min_len], template)[0, 1]
-                             for b in bd if len(b) >= min_len]
-                    mean_corr = np.nanmean(corrs) if corrs else 0
-                else:
-                    mean_corr = 0
-                score += max(0, min(cs.w_corr_max,
-                                    round(mean_corr * cs.w_corr_scale - cs.w_corr_offset, 1)))
-
-                # ── 4. Beat-period regularity ──
-                cv_pct = cv * 100
-                score += max(0, round(cs.w_regularity_max - cv_pct * cs.w_regularity_slope, 1))
-
-                # ── 5. Spike amplitude ──
-                ptp_per_beat = [np.ptp(b) for b in bd] if len(bd) > 0 else [0]
-                median_ptp_mV = np.median(ptp_per_beat) * 1000
-                score += min(cs.w_amplitude_max,
-                             round(median_ptp_mV / cs.w_amplitude_ref_mV * cs.w_amplitude_max, 1))
-
-                p5, p95 = np.percentile(filt, [5, 95])
-                nm = (filt >= p5) & (filt <= p95)
-                ns = np.std(filt[nm]) if np.sum(nm) > 100 else np.std(filt)
-                snr = np.mean(np.abs(filt[bi])) / ns if ns > 0 else 0
-
-                details[ch] = (f'{len(bi)} beats, BP={mbp*1000:.0f}ms, CV={cv_pct:.1f}%, '
-                               f'ptp={median_ptp_mV:.0f}mV, corr={mean_corr:.3f}, '
-                               f'SNR={snr:.1f}, score={score:.1f}')
-            else:
-                details[ch] = f'{len(bi)} beats (too few)'
-            if score > best_score:
-                best_score, best_ch = score, ch
-        except (ValueError, IndexError, RuntimeError) as e:
-            logger.debug("Channel %s scoring failed: %s", ch, e)
-            details[ch] = f'error: {e}'
-    return best_ch, details
+# Back-compat alias for internal callers
+_select_best_channel = select_best_channel
+_apply_inclusion_criteria = apply_inclusion_criteria
 
 
 def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
@@ -139,7 +65,7 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
 
         actual_ch = channel
         if channel == 'auto':
-            actual_ch, ch_det = _select_best_channel(df, fs, cfg=config)
+            actual_ch, ch_det = select_best_channel(df, fs, cfg=config)
             if verbose:
                 print(f"  Channel selection:")
                 for ch, d in ch_det.items():
@@ -254,188 +180,13 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
                     print(f"  Spectral: {', '.join(parts)}")
 
         return result
-    except Exception as e:
+    except (KeyError, ValueError, IndexError, RuntimeError, AssertionError,
+            FileNotFoundError, OSError) as e:
         logger.error("Analysis failed for %s: %s", filepath, e, exc_info=True)
         if verbose:
             print(f"  ERROR: {e}")
             traceback.print_exc()
         return None
-
-
-def _apply_inclusion_criteria(results, verbose=True, cfg=None):
-    """
-    Apply quality-based inclusion criteria (as in Visone et al. 2023).
-
-    Parameters
-    ----------
-    results : list of result dicts
-    verbose : print progress
-    cfg : InclusionConfig or None — if None, uses defaults
-
-    Criteria applied (in order, short-circuit on first failure):
-      1. Baseline CV of BP must be < max_cv_bp (paper: 25%)
-      2. FPDcF plausibility: wide safety-net range (default 100–1200 ms)
-      3. FPD confidence: baselines with low confidence excluded (data-driven)
-      4. Physiological FPDcF range: literature-based bounds (opt-in)
-      5. Population outlier: baselines > N×MAD from experiment median (opt-in)
-    """
-    if cfg is None:
-        from .config import InclusionConfig
-        cfg = InclusionConfig()
-
-    from .normalization import _get_group_key, _is_baseline
-
-    # ── Pre-compute population statistics for outlier detection (criterion 5) ──
-    bl_fpdc_by_exp = {}
-    if getattr(cfg, 'enabled_fpdc_outlier', False):
-        from collections import defaultdict
-        _exp_vals = defaultdict(list)
-        for r in results:
-            if not _is_baseline(r):
-                continue
-            fpdc = r.get('summary', {}).get('fpdc_ms_mean', np.nan)
-            exp = r.get('file_info', {}).get('experiment', 'unknown')
-            if not np.isnan(fpdc):
-                _exp_vals[exp].append(fpdc)
-        for exp, vals in _exp_vals.items():
-            n_min = getattr(cfg, 'fpdc_outlier_min_baselines', 3)
-            if len(vals) >= n_min:
-                med = np.median(vals)
-                mad = np.median(np.abs(np.array(vals) - med))
-                # Scale MAD to σ-equivalent for normal distributions
-                mad_s = mad * 1.4826 if mad > 0 else np.std(vals)
-                bl_fpdc_by_exp[exp] = (med, mad_s)
-
-    # ── Step 1: identify failing baselines and flag their groups ──
-    excluded_groups = set()
-    n_bl_ok = 0
-    n_bl_fail = 0
-    n_bl_conf_fail = 0
-    n_bl_physiol_fail = 0
-    n_bl_outlier_fail = 0
-
-    for r in results:
-        if not _is_baseline(r):
-            continue
-        summary = r.get('summary', {})
-        cv = summary.get('beat_period_ms_cv', np.nan)
-        conf = summary.get('fpd_confidence', np.nan)
-        fpdc = summary.get('fpdc_ms_mean', np.nan)
-        group = _get_group_key(r)
-        exp = r.get('file_info', {}).get('experiment', 'unknown')
-
-        fail_reason = None
-
-        # Criterion 1: CV of beat period (paper standard)
-        if cfg.enabled_cv and (np.isnan(cv) or cv >= cfg.max_cv_bp):
-            fail_reason = f'Baseline CV={cv:.1f}% >= {cfg.max_cv_bp}%'
-
-        # Criterion 2: wide FPDcF plausibility range (safety net)
-        if fail_reason is None and cfg.enabled_fpdc_range and not np.isnan(fpdc):
-            if fpdc < cfg.fpdc_range_min or fpdc > cfg.fpdc_range_max:
-                fail_reason = f'Baseline FPDcF={fpdc:.0f}ms outside [{cfg.fpdc_range_min:.0f}, {cfg.fpdc_range_max:.0f}]'
-
-        # Criterion 3: FPD confidence (data-driven threshold)
-        if fail_reason is None and cfg.enabled_confidence and not np.isnan(conf) and conf < cfg.min_fpd_confidence:
-            fail_reason = f'Baseline FPD confidence={conf:.3f} < {cfg.min_fpd_confidence}'
-            n_bl_conf_fail += 1
-
-        # Criterion 4: physiological FPDcF range (literature-based, opt-in)
-        if fail_reason is None and getattr(cfg, 'enabled_fpdc_physiol', False) and not np.isnan(fpdc):
-            physiol_min = getattr(cfg, 'fpdc_physiol_min', 350.0)
-            physiol_max = getattr(cfg, 'fpdc_physiol_max', 800.0)
-            if fpdc < physiol_min or fpdc > physiol_max:
-                fail_reason = (f'Baseline FPDcF={fpdc:.0f}ms outside physiological range '
-                               f'[{physiol_min:.0f}, {physiol_max:.0f}]ms')
-                n_bl_physiol_fail += 1
-
-        # Criterion 5: population outlier (data-adaptive, opt-in)
-        if fail_reason is None and getattr(cfg, 'enabled_fpdc_outlier', False) and not np.isnan(fpdc):
-            if exp in bl_fpdc_by_exp:
-                med, mad_s = bl_fpdc_by_exp[exp]
-                if mad_s > 0:
-                    n_sigma = getattr(cfg, 'fpdc_outlier_n_sigma', 2.0)
-                    z = abs(fpdc - med) / mad_s
-                    if z > n_sigma:
-                        fail_reason = (f'Baseline FPDcF={fpdc:.0f}ms is outlier in {exp} '
-                                       f'(median={med:.0f}ms, {z:.1f}σ > {n_sigma}σ)')
-                        n_bl_outlier_fail += 1
-
-        if fail_reason:
-            excluded_groups.add(group)
-            r['inclusion'] = {'passed': False, 'reason': fail_reason}
-            n_bl_fail += 1
-        else:
-            r['inclusion'] = {'passed': True, 'reason': ''}
-            n_bl_ok += 1
-
-    if verbose:
-        parts = [f"CV BP < {cfg.max_cv_bp}%"]
-        if cfg.enabled_confidence:
-            parts.append(f"conf >= {cfg.min_fpd_confidence}")
-        if getattr(cfg, 'enabled_fpdc_physiol', False):
-            parts.append(f"FPDcF ∈ [{cfg.fpdc_physiol_min:.0f}-{cfg.fpdc_physiol_max:.0f}]ms")
-        if getattr(cfg, 'enabled_fpdc_outlier', False):
-            parts.append(f"outlier < {cfg.fpdc_outlier_n_sigma}σ")
-        detail_parts = []
-        if n_bl_conf_fail > 0:
-            detail_parts.append(f"{n_bl_conf_fail} low confidence")
-        if n_bl_physiol_fail > 0:
-            detail_parts.append(f"{n_bl_physiol_fail} outside physiol. range")
-        if n_bl_outlier_fail > 0:
-            detail_parts.append(f"{n_bl_outlier_fail} population outlier")
-        detail_str = f" [{', '.join(detail_parts)}]" if detail_parts else ""
-        print(f"  Inclusion criteria ({', '.join(parts)}): "
-              f"{n_bl_ok} baselines OK, {n_bl_fail} excluded "
-              f"({len(excluded_groups)} groups removed){detail_str}")
-
-    # Step 2: flag drug recordings in excluded groups
-    n_drug_excl = 0
-    for r in results:
-        if _is_baseline(r):
-            continue
-        group = _get_group_key(r)
-        if group in excluded_groups:
-            r['inclusion'] = {'passed': False, 'reason': f'Baseline of group {group} failed inclusion'}
-            n_drug_excl += 1
-        else:
-            r.setdefault('inclusion', {'passed': True, 'reason': ''})
-
-    # Step 3: FPDcF plausibility check
-    n_fpdc_fail = 0
-    if cfg.enabled_fpdc_range:
-        for r in results:
-            fpdc = r.get('summary', {}).get('fpdc_ms_mean', np.nan)
-            if not np.isnan(fpdc) and (fpdc < cfg.fpdc_range_min or fpdc > cfg.fpdc_range_max):
-                inc = r.setdefault('inclusion', {'passed': True, 'reason': ''})
-                inc['fpdc_plausible'] = False
-                inc['fpdc_note'] = f'FPDcF={fpdc:.0f}ms outside [{cfg.fpdc_range_min:.0f}-{cfg.fpdc_range_max:.0f}]ms'
-                n_fpdc_fail += 1
-            else:
-                inc = r.setdefault('inclusion', {'passed': True, 'reason': ''})
-                inc['fpdc_plausible'] = True
-
-    if verbose and n_fpdc_fail > 0:
-        print(f"  FPDcF plausibility: {n_fpdc_fail} recordings outside {cfg.fpdc_range_min:.0f}-{cfg.fpdc_range_max:.0f}ms range")
-
-    # Step 4: Flag drug recordings with low FPD confidence
-    n_drug_conf = 0
-    if cfg.enabled_confidence:
-        for r in results:
-            if _is_baseline(r):
-                continue
-            conf = r.get('summary', {}).get('fpd_confidence', np.nan)
-            inc = r.setdefault('inclusion', {'passed': True, 'reason': ''})
-            if not np.isnan(conf) and conf < cfg.min_fpd_confidence:
-                inc['fpd_reliable'] = False
-                n_drug_conf += 1
-            else:
-                inc['fpd_reliable'] = True
-
-    if verbose and n_drug_conf > 0:
-        print(f"  FPD reliability: {n_drug_conf} drug recordings with confidence < {cfg.min_fpd_confidence}")
-
-    return results
 
 
 def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
@@ -514,7 +265,8 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
                     r = future.result()
                     if r: results.append(r)
                     else: errors.append(f"{f}{ch_tag}")
-                except Exception as e:
+                except (KeyError, ValueError, IndexError, RuntimeError,
+                        OSError) as e:
                     logger.warning("Batch item failed %s%s: %s", f, ch_tag, e)
                     errors.append(f"{f}{ch_tag}: {e}")
     else:
@@ -534,27 +286,27 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
     # risk score measures drug-induced proarrhythmic risk, so it's not
     # meaningful for baselines. We keep the flags (useful for QC) but
     # reset risk_score and classification.
-    from .normalization import _is_baseline
+    from .normalization import is_baseline
     for r in results:
-        if _is_baseline(r):
+        if is_baseline(r):
             ar = r.get('arrhythmia_report')
             if ar is not None:
                 ar.risk_score = 0
                 ar.classification = 'Baseline (reference)'
 
     # ─── Inclusion criteria ───
-    results = _apply_inclusion_criteria(results, verbose=verbose, cfg=config.inclusion)
+    results = apply_inclusion_criteria(results, verbose=verbose, cfg=config.inclusion)
 
     # ─── Baseline-relative residual analysis (pass 2) ───
     # Collect baseline templates per group (chip+channel), then re-run
     # arrhythmia analysis for drug recordings using the baseline template.
     # This captures drug-induced morphology changes vs. normal baseline.
-    from .normalization import _get_group_key, _is_baseline
-    from .arrhythmia import _compute_template, analyze_arrhythmia as _analyze_arrhythmia
+    from .normalization import get_group_key
+    from .arrhythmia import compute_template, analyze_arrhythmia as _analyze_arrhythmia
 
     baseline_templates = {}
     for r in results:
-        if not _is_baseline(r):
+        if not is_baseline(r):
             continue
         # Only use baselines that passed inclusion criteria
         inc = r.get('inclusion', {})
@@ -563,17 +315,17 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
         bd = r.get('beats_data')
         if bd is None or len(bd) < 5:
             continue
-        group = _get_group_key(r)
-        tmpl = _compute_template(bd)
+        group = get_group_key(r)
+        tmpl = compute_template(bd)
         if tmpl is not None:
             baseline_templates[group] = tmpl
 
     if baseline_templates:
         n_reanalyzed = 0
         for r in results:
-            if _is_baseline(r):
+            if is_baseline(r):
                 continue
-            group = _get_group_key(r)
+            group = get_group_key(r)
             bl_tmpl = baseline_templates.get(group)
             if bl_tmpl is None:
                 continue
@@ -604,7 +356,7 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
         r.pop('raw_signal', None)
         bd = r.pop('beats_data', None)
         if bd is not None and len(bd) >= 5 and 'beat_template' not in r:
-            tmpl = _compute_template(bd)
+            tmpl = compute_template(bd)
             if tmpl is not None:
                 r['beat_template'] = tmpl
     del baseline_templates
