@@ -37,6 +37,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from . import __version__
+
 logger = logging.getLogger(__name__)
 
 
@@ -982,7 +984,7 @@ def _generate_define_xml(study_id: str, datasets: dict, output_dir: Path):
         '<!-- Define-XML v2.1 for SEND submission -->',
         f'<!-- Study: {study_id} -->',
         f'<!-- Generated: {datetime.now().isoformat()} -->',
-        f'<!-- Generator: Cardiac FP Analyzer v3.6 -->',
+        f'<!-- Generator: Cardiac FP Analyzer v{__version__} -->',
         '',
         '<ODM xmlns="http://www.cdisc.org/ns/odm/v1.3"',
         '     xmlns:def="http://www.cdisc.org/ns/def/v2.1"',

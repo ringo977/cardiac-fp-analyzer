@@ -669,7 +669,7 @@ La qualità dei dati µECG è variabile: chip con cattivo contatto, microtessuti
 
 Ogni drug recording viene accoppiato al baseline dello stesso chip+camera+elettrodo nello stesso esperimento. Se più baseline esistono, viene preferito quello con grado QC migliore.
 
-**Fallback cross-electrode (v3.6)**: in modalità `auto`, ogni file sceglie indipendentemente l'elettrodo migliore. Può accadere che il baseline scelga el2 (il migliore) e il drug scelga el1 (perché il CSV ha colonne identiche, quindi pareggio → default el1). In questo caso la chiave di raggruppamento `EXP/chipA_ch1/el2` non combacerebbe con `EXP/chipA_ch1/el1`. Il sistema fa **fallback** cercando il baseline sullo stesso chip+camera senza vincolo sull'elettrodo. Questo garantisce che il pairing funzioni anche quando gli elettrodi selezionati differiscono.
+**Fallback cross-electrode**: in modalità `auto`, ogni file sceglie indipendentemente l'elettrodo migliore. Può accadere che il baseline scelga el2 (il migliore) e il drug scelga el1 (perché il CSV ha colonne identiche, quindi pareggio → default el1). In questo caso la chiave di raggruppamento `EXP/chipA_ch1/el2` non combacerebbe con `EXP/chipA_ch1/el1`. Il sistema fa **fallback** cercando il baseline sullo stesso chip+camera senza vincolo sull'elettrodo. Questo garantisce che il pairing funzioni anche quando gli elettrodi selezionati differiscono.
 
 > **Nota**: il cross-electrode pairing può introdurre un bias sistematico sull'FPDcF se i due elettrodi misurano durate diverse. Per questo motivo i filtri QC sulla normalizzazione (vedi sotto) sono particolarmente importanti.
 
@@ -705,7 +705,7 @@ Valore 0 = identico al baseline, 1 = completamente diverso. I farmaci hERG+ most
 
 Se un recording mostra cessazione (waveform destruction) con bassa confidenza FPD (< 0.60), viene classificato come positivo indipendentemente dal ΔFPDcF. Questo cattura farmaci che distruggono il segnale prima che il FPD possa allungarsi.
 
-#### Filtri QC sulla normalizzazione (v3.6)
+#### Filtri QC sulla normalizzazione
 
 Le drug recording con segnale di bassa qualità possono produrre valori FPDcF inaffidabili, causando falsi positivi nella classificazione CiPA. Due filtri opzionali escludono queste recording dalla classificazione drug-level (la normalizzazione individuale resta visibile nel report):
 
@@ -735,7 +735,7 @@ Tre metodi disponibili per aggregare le concentrazioni:
 | `classification_method` | `'max'` | Metodo di aggregazione |
 | `classification_n_above` | `2` | N minimo per metodo `n_above` |
 
-#### Confronto configurazioni sul dataset di validazione (v3.6)
+#### Confronto configurazioni sul dataset di validazione
 
 Accuratezza CiPA su 7 farmaci (3 positivi, 4 negativi) dal dataset Visone et al. 2023:
 

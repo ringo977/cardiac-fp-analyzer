@@ -37,7 +37,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install package with dev extras
-        run: pip install -e ".[dev]"
+      - name: Install core + test dependencies
+        run: |
+          pip install -e ".[gui,reports]"
+          pip install pytest pytest-cov
       - name: Run tests
-        run: pytest tests/ -v --tb=short --co -q && pytest tests/ -v --tb=short
+        run: pytest tests/ -v --tb=short
