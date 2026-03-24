@@ -13,6 +13,7 @@ drug recordings belonging to the same group (chip + channel).
 """
 
 import logging
+
 import numpy as np
 
 logger = logging.getLogger(__name__)

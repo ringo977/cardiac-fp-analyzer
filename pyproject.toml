@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cardiac-fp-analyzer"
-version = "3.2.1"
+version = "3.3.0"
 description = "Field Potential analysis pipeline for hiPSC-CM micro-ECG recordings"
 readme = "README.md"
 license = "MIT"
@@ -80,9 +80,19 @@ src = ["cardiac_fp_analyzer"]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 ignore = [
     "E501",   # line too long — handled by formatter where possible
+    "E701",   # multiple statements on one line — used for compact config
+    "E702",   # multiple statements on one line (semicolon) — compact config
     "E741",   # ambiguous variable names (l, O, I) — common in scientific code
+    "F541",   # f-string without placeholders — harmless
+    "B007",   # unused loop variable — common in scientific iteration
+    "B023",   # function def does not bind loop variable — acceptable pattern
     "B028",   # no stacklevel in warnings — not critical
+    "SIM102", # collapsible if — nested form preferred for readability
+    "SIM108", # ternary operator — explicit if/else preferred for clarity
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"app.py" = ["E402"]  # Streamlit requires st.set_page_config() before UI imports
 
 [tool.ruff.lint.isort]
 known-first-party = ["cardiac_fp_analyzer"]

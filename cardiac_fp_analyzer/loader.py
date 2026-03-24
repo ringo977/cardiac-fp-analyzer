@@ -7,9 +7,9 @@ and returns a clean DataFrame plus a metadata dict.
 """
 
 import re
-import numpy as np
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
 
 
 def load_csv(filepath):
@@ -31,7 +31,7 @@ def load_csv(filepath):
     }
 
     header_lines = 0
-    with open(filepath, 'r') as f:
+    with open(filepath) as f:
         for line in f:
             if not line.startswith('#'):
                 break

@@ -2,11 +2,13 @@
 report.py — Excel and PDF report generation for cardiac FP analysis.
 """
 
+from datetime import datetime
+from pathlib import Path
+
+import matplotlib
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from datetime import datetime
-import matplotlib
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
@@ -17,7 +19,7 @@ def generate_excel_report(results_list, output_path):
     with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
         workbook = writer.book
         hdr = workbook.add_format({'bold': True, 'bg_color': '#2E86AB', 'font_color': 'white', 'border': 1, 'text_wrap': True})
-        norm = workbook.add_format({'border': 1})
+        norm = workbook.add_format({'border': 1})  # noqa: F841 — available for cell formatting
         crit = workbook.add_format({'border': 1, 'bg_color': '#F8D7DA', 'font_color': '#721c24'})
         warn = workbook.add_format({'border': 1, 'bg_color': '#FFF3CD'})
         ok = workbook.add_format({'border': 1, 'bg_color': '#D4EDDA', 'font_color': '#155724'})
@@ -98,9 +100,7 @@ def generate_excel_report(results_list, output_path):
                 val = int(val) if not isinstance(val, str) else 0
                 if val >= 3:
                     fmt = tdp_crit
-                elif val >= 2:
-                    fmt = tdp_warn
-                elif val >= 1:
+                elif val >= 2 or val >= 1:
                     fmt = tdp_warn
                 elif val <= -1:
                     fmt = tdp_short

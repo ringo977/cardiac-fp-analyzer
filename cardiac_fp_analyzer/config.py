@@ -11,10 +11,9 @@ Every function in the pipeline accepts the relevant config section, so the
 entire analysis behaviour can be controlled from a single config object.
 """
 
-from dataclasses import dataclass, field, asdict
-from typing import Optional, Tuple, List
 import json
-import copy
+from dataclasses import asdict, dataclass, field
+from typing import Optional
 
 # Import sub-configs from their modules (lazy to avoid circular imports)
 # CessationConfig and SpectralConfig are re-exported here for convenience
@@ -73,8 +72,8 @@ class BeatDetectionConfig:
     retry_threshold_factor: float = 3.0
 
     # Physiological plausibility scoring (thresholds)
-    bp_ideal_range_s: Tuple[float, float] = (0.4, 3.0)
-    bp_extended_range_s: Tuple[float, float] = (0.3, 5.0)
+    bp_ideal_range_s: tuple[float, float] = (0.4, 3.0)
+    bp_extended_range_s: tuple[float, float] = (0.3, 5.0)
     cv_good: float = 0.15        # CV < 15% → good score
     cv_fair: float = 0.30        # CV < 30% → fair
     cv_marginal: float = 0.50    # CV < 50% → marginal
@@ -386,11 +385,11 @@ class ArrhythmiaConfig:
 class ChannelSelectionConfig:
     """Parameters for automatic channel selection."""
 
-    bp_ideal_range_s: Tuple[float, float] = (0.3, 4.0)
+    bp_ideal_range_s: tuple[float, float] = (0.3, 4.0)
     cv_excellent: float = 10.0    # CV < 10% → +40 score
     cv_good: float = 20.0        # CV < 20% → +30
     cv_fair: float = 35.0        # CV < 35% → +15
-    rate_range_per_s: Tuple[float, float] = (0.3, 3.5)
+    rate_range_per_s: tuple[float, float] = (0.3, 3.5)
     snr_good: float = 5.0        # +20
     snr_fair: float = 3.0        # +10
 

@@ -15,9 +15,9 @@ cases the standard FPD measurement fails (low confidence), but cessation
 detection captures the drug effect via a different mechanism.
 """
 
-import numpy as np
-from scipy import signal as sig
 from dataclasses import dataclass, field
+
+import numpy as np
 
 
 @dataclass
@@ -198,10 +198,7 @@ def detect_cessation(filtered_signal, fs, beat_indices, all_params=None,
         # QC says waveform is destroyed + some gaps in clean beats
         report.cessation_type = 'waveform_destruction'
         report.has_cessation = True
-    elif len(report.silent_periods) > 0 and energy_conf > 0.4:
-        report.cessation_type = 'intermittent'
-        report.has_cessation = True
-    elif composite > 0.35:
+    elif len(report.silent_periods) > 0 and energy_conf > 0.4 or composite > 0.35:
         report.cessation_type = 'intermittent'
         report.has_cessation = True
 

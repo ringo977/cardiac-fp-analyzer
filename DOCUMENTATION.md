@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.2.1
+**Versione**: 3.3.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1098,6 +1098,14 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.3.0 (Marzo 2026)
+
+- **CI GitHub Actions**: workflow `.github/workflows/ci.yml` con lint (ruff) e test su Python 3.9, 3.10, 3.11, 3.12.
+- **Refactoring arrhythmia**: `arrhythmia.py` (708→438 righe) spezzato in `residual_analysis.py` (304 righe) — template computation, residual RMS, EAD detection, Poincaré STV.
+- **Ruff lint clean**: 194 errori risolti; configurazione ruff in `pyproject.toml` con ignore mirate per codice scientifico.
+- **Test end-to-end numerici**: 17 test su segnali sintetici con ground truth noto — copertura da beat detection a classificazione aritmie.
+- **Suite test**: 54 test totali (smoke, config, alignment, denominatore, e2e sintetici).
 
 ### v3.2.1 (Marzo 2026)
 

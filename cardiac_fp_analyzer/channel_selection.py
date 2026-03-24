@@ -8,10 +8,11 @@ All scoring weights are configurable via ChannelSelectionConfig.
 """
 
 import logging
+
 import numpy as np
 
+from .beat_detection import compute_beat_periods, detect_beats, segment_beats
 from .filtering import full_filter_pipeline
-from .beat_detection import detect_beats, segment_beats, compute_beat_periods
 
 logger = logging.getLogger(__name__)
 

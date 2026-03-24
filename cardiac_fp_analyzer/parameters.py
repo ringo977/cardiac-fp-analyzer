@@ -20,15 +20,16 @@ All parameters are configurable via RepolarizationConfig (see config.py).
 """
 
 import logging
+
 import numpy as np
-from scipy import signal as sig
 
 from .repolarization import (
     _get_repol_cfg,
-    linear_detrend_endpoints as _linear_detrend_endpoints,
-    apply_fpd_method as _apply_fpd_method,
-    consensus_fpd as _consensus_fpd,
+)
+from .repolarization import (
     find_repolarization_on_template as _find_repolarization_on_template,
+)
+from .repolarization import (
     find_repolarization_per_beat as _find_repolarization_per_beat,
 )
 
@@ -216,7 +217,7 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
             repol_confidence = fpd_result[3] if len(fpd_result) > 3 else 0.5
             template_peak_samples = fpd_result[4] if len(fpd_result) > 4 else None
             consensus_info = fpd_result[5] if len(fpd_result) > 5 else None
-            template_fpd_ms = template_fpd_samples / fs * 1000
+            _template_fpd_ms = template_fpd_samples / fs * 1000  # noqa: F841
 
     # ─── Per-beat extraction ───
     all_params = []

@@ -5,8 +5,9 @@ Uses min-max downsampling to render 360k-point traces while
 preserving all visually important features (spikes, peaks).
 """
 
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec

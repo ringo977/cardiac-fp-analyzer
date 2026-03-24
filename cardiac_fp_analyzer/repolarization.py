@@ -12,6 +12,7 @@ All parameters are configurable via RepolarizationConfig (see config.py).
 """
 
 import logging
+
 import numpy as np
 from scipy import signal as sig
 
@@ -132,7 +133,6 @@ def consensus_fpd(seg_det, best_pk, best_sign, fs, search_start, spike_idx, cfg=
 
     for method in methods:
         # Temporarily override fpd_method in a copy
-        from .config import RepolarizationConfig
         from dataclasses import replace
         temp_cfg = replace(rc, fpd_method=method)
         try:

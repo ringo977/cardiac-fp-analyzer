@@ -7,16 +7,14 @@ import re as _re_sort
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
+from plotly.subplots import make_subplots
 
-from cardiac_fp_analyzer.config import AnalysisConfig
 from cardiac_fp_analyzer.arrhythmia import compute_template
+from cardiac_fp_analyzer.config import AnalysisConfig
 from cardiac_fp_analyzer.normalization import is_baseline
-
-from ui.i18n import T
 from ui.helpers import amplitude_scale
-
+from ui.i18n import T
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Page entry point

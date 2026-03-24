@@ -19,9 +19,9 @@ TdP risk scoring (from Ando et al. 2017):
   Score  3: strong prolongation (%FPDcF ≥ HIGH) or arrhythmic events
 """
 
-import numpy as np
 from collections import defaultdict
 
+import numpy as np
 
 # ─── Thresholds (module-level defaults, overridden by NormalizationConfig) ───
 THRESHOLD_LOW = 10.0    # %FPDcF change ≥ 10%
@@ -169,9 +169,7 @@ def pair_with_baselines(results_list):
 
         for r in group_results:
             fname = r.get('metadata', {}).get('filename', '')
-            if _is_baseline(r) or _is_control(r):
-                baseline_map[fname] = None
-            elif not bl_passed or best_bl is None:
+            if _is_baseline(r) or _is_control(r) or not bl_passed or best_bl is None:
                 baseline_map[fname] = None
             else:
                 baseline_map[fname] = best_bl
@@ -294,17 +292,12 @@ def _compute_tdp_score(result, norm, cfg=None):
 
     # Also check cessation detection module (more robust)
     cess = result.get('cessation_report')
-    if cess is not None and cess.has_cessation:
-        if cess.cessation_confidence > 0.5:
-            has_cessation = True
+    if cess is not None and cess.has_cessation and cess.cessation_confidence > 0.5:
+        has_cessation = True
 
     # Score based on FPDcF change (primary criterion)
     t_low, t_mid, t_high = _get_norm_thresholds(cfg)
-    if has_cessation:
-        return 3
-    elif pct >= t_high:
-        return 3
-    elif has_severe_arrhythmia and pct >= t_low:
+    if has_cessation or pct >= t_high or has_severe_arrhythmia and pct >= t_low:
         return 3
     elif pct >= t_mid:
         return 2
@@ -522,7 +515,11 @@ def normalize_all_results(results_list, cfg=None):
 
     # Lazy import to avoid circular dependency
     try:
-        from .spectral import compute_morphology_change_score, _compare_with_baseline, SpectralConfig
+        from .spectral import (
+            SpectralConfig,
+            _compare_with_baseline,
+            compute_morphology_change_score,
+        )
     except ImportError:
         compute_morphology_change_score = None
 

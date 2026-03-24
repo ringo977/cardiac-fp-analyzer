@@ -10,6 +10,7 @@ Modules:
   parameters      — Electrophysiology parameter extraction (BP, FPD, FPDc, etc.)
   quality_control — Signal quality grading and beat validation
   arrhythmia      — Arrhythmia detection and classification
+  residual_analysis — Residual-based arrhythmia analysis (template, EAD, STV)
   normalization   — Baseline normalization and TdP risk scoring
   cessation       — Beating cessation / quiescence detection
   spectral        — Frequency domain analysis (PSD, entropy, harmonics)
@@ -17,7 +18,7 @@ Modules:
   analyze         — Main pipeline orchestrator (single file + batch)
 """
 
-__version__ = '3.2.1'
+__version__ = '3.3.0'
 
 # ── Package-level logger ──
 # Usage in submodules:  import logging; logger = logging.getLogger(__name__)
@@ -26,4 +27,5 @@ __version__ = '3.2.1'
 # Users/apps can configure logging via logging.basicConfig() or by
 # attaching handlers to the 'cardiac_fp_analyzer' logger.
 import logging as _logging
+
 _logging.getLogger(__name__).addHandler(_logging.NullHandler())

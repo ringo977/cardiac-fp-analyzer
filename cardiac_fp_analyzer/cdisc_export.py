@@ -28,12 +28,14 @@ Usage:
 """
 
 import logging
+import re
+import shutil
+import warnings
+from datetime import datetime
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Optional
-import io, warnings, shutil, re
 
 logger = logging.getLogger(__name__)
 
@@ -557,7 +559,7 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
                 return
             code_info = _TEST_CODES.get(testcd, ('EGTEST', testcd, unit_override, False))
             unit = unit_override or code_info[2] or ''
-            is_score = code_info[3] if len(code_info) > 3 else False
+            _is_score = code_info[3] if len(code_info) > 3 else False  # noqa: F841
 
             # For QCGRADE (character-only), handle specially
             if testcd == 'QCGRADE':
@@ -750,10 +752,7 @@ def _build_tx(results: list, study_id: str, dm_df: pd.DataFrame = None) -> pd.Da
     TX SETCDs are restricted to only those present in DM to avoid SE2347.
     """
     # Get SETCDs actually used in DM (for cross-domain consistency)
-    if dm_df is not None and not dm_df.empty:
-        dm_setcds = set(dm_df['SETCD'].unique())
-    else:
-        dm_setcds = None
+    dm_setcds = set(dm_df['SETCD'].unique()) if dm_df is not None and not dm_df.empty else None
 
     has_control = dm_setcds is not None and 'CONTROL' in dm_setcds
 
@@ -1041,7 +1040,7 @@ def _generate_define_xml(study_id: str, datasets: dict, output_dir: Path):
     for domain, df in datasets.items():
         for col in df.columns:
             dtype = df[col].dtype
-            sas_type = 'Char' if dtype == object else 'Num'
+            sas_type = 'Char' if dtype is object else 'Num'
             length = int(df[col].astype(str).str.len().max()) if len(df) > 0 else 8
             length = max(length, 1)
             label = _get_label(domain, col)

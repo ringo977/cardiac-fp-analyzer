@@ -3,14 +3,11 @@ Shared helper functions for the Streamlit GUI.
 """
 
 import numpy as np
-import streamlit as st
 
-from cardiac_fp_analyzer.config import AnalysisConfig
-from cardiac_fp_analyzer.beat_detection import segment_beats, compute_beat_periods
+from cardiac_fp_analyzer.arrhythmia import analyze_arrhythmia
+from cardiac_fp_analyzer.beat_detection import compute_beat_periods, segment_beats
 from cardiac_fp_analyzer.parameters import extract_all_parameters
 from cardiac_fp_analyzer.quality_control import validate_beats
-from cardiac_fp_analyzer.arrhythmia import analyze_arrhythmia
-
 from ui.i18n import T
 
 

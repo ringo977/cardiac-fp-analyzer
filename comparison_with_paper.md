@@ -2,7 +2,7 @@
 
 **Paper**: Visone, Lozano-Juan et al., *"Predicting human cardiac QT alterations and pro-arrhythmic effects of compounds with a 3D beating heart-on-chip platform"*, Toxicological Sciences, 2023, 191(1), 47-60.
 
-**Software**: `cardiac_fp_analyzer` v3.2.1 (Python, questo progetto)
+**Software**: `cardiac_fp_analyzer` v3.3.0 (Python, questo progetto)
 
 ---
 

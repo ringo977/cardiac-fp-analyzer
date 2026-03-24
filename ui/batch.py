@@ -13,16 +13,13 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from cardiac_fp_analyzer.config import AnalysisConfig
 from cardiac_fp_analyzer.analyze import batch_analyze
-from cardiac_fp_analyzer.arrhythmia import compute_template
+from cardiac_fp_analyzer.config import AnalysisConfig
 from cardiac_fp_analyzer.normalization import is_baseline
-
-from ui.i18n import T
+from ui.display import plot_beats, plot_signal, show_arrhythmia, show_params_table
 from ui.helpers import amplitude_scale
-from ui.display import plot_signal, plot_beats, show_params_table, show_arrhythmia
+from ui.i18n import T
 from ui.reports import download_reports
-
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Page entry point
@@ -69,7 +66,8 @@ def page_batch_analysis(config: AnalysisConfig):
 
     elif upload_mode == "Seleziona cartella":
         if st.button("📂 Apri selezione cartella", type="primary", use_container_width=True):
-            import subprocess, platform
+            import platform
+            import subprocess
             chosen = None
             try:
                 os_name = platform.system()
@@ -202,7 +200,9 @@ def page_batch_analysis(config: AnalysisConfig):
 def _show_risk_map(results, config, ground_truth):
     """Generate and display interactive risk map."""
     from cardiac_fp_analyzer.risk_map import (
-        aggregate_drug_metrics, compute_proarrhythmic_index, RiskZoneConfig
+        RiskZoneConfig,
+        aggregate_drug_metrics,
+        compute_proarrhythmic_index,
     )
 
     metrics = aggregate_drug_metrics(results)

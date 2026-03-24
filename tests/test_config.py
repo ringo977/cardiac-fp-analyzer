@@ -1,7 +1,6 @@
 """Tests for AnalysisConfig — JSON round-trip, defaults, presets."""
 
 import json
-import pytest
 
 from cardiac_fp_analyzer.config import AnalysisConfig
 

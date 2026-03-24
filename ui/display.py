@@ -10,11 +10,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from cardiac_fp_analyzer.config import AnalysisConfig
 from cardiac_fp_analyzer.arrhythmia import compute_template
-
+from cardiac_fp_analyzer.config import AnalysisConfig
+from ui.helpers import amplitude_scale, reanalyze_with_modified_beats
 from ui.i18n import T
-from ui.helpers import reanalyze_with_modified_beats, amplitude_scale
 
 
 def plot_signal(result, key_suffix=""):
@@ -23,7 +22,7 @@ def plot_signal(result, key_suffix=""):
     scale, y_label = amplitude_scale(sig_filt)
     sig = sig_filt * scale
     t = result['time_vector']
-    fs = result['metadata']['sample_rate']
+    _fs = result['metadata']['sample_rate']  # noqa: F841 — reserved for future per-beat time conversion
     ks = key_suffix
 
     # ── Build unified beat set with inclusion state ──

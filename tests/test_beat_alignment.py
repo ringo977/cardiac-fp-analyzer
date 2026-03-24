@@ -7,9 +7,7 @@ and morphology checks (M items, M < N).
 """
 
 import numpy as np
-import pytest
 
-from cardiac_fp_analyzer.config import AnalysisConfig
 from cardiac_fp_analyzer.beat_detection import segment_beats
 
 

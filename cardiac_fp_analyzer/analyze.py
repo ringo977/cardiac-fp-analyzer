@@ -6,20 +6,23 @@ Usage:
   python analyze.py /path/to/data/folder [--channel auto] [--output /path/to/output]
 """
 
-import argparse, logging, traceback
-from pathlib import Path
+import argparse
+import logging
+import traceback
 from datetime import datetime
+from pathlib import Path
+
 import numpy as np
 
-from cardiac_fp_analyzer.loader import load_csv, parse_filename
-from cardiac_fp_analyzer.filtering import full_filter_pipeline
-from cardiac_fp_analyzer.beat_detection import detect_beats, segment_beats, compute_beat_periods
-from cardiac_fp_analyzer.parameters import extract_all_parameters
 from cardiac_fp_analyzer.arrhythmia import analyze_arrhythmia
-from cardiac_fp_analyzer.quality_control import validate_beats, estimate_global_snr
-from cardiac_fp_analyzer.report import generate_excel_report, generate_pdf_report
+from cardiac_fp_analyzer.beat_detection import compute_beat_periods, detect_beats, segment_beats
 from cardiac_fp_analyzer.channel_selection import select_best_channel
+from cardiac_fp_analyzer.filtering import full_filter_pipeline
 from cardiac_fp_analyzer.inclusion import apply_inclusion_criteria
+from cardiac_fp_analyzer.loader import load_csv, parse_filename
+from cardiac_fp_analyzer.parameters import extract_all_parameters
+from cardiac_fp_analyzer.quality_control import validate_beats
+from cardiac_fp_analyzer.report import generate_excel_report, generate_pdf_report
 
 logger = logging.getLogger(__name__)
 
@@ -238,8 +241,8 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
 
     if n_workers > 1 and len(csv_files) > 1:
         # Parallel pass 1: each file is independent
-        from concurrent.futures import ProcessPoolExecutor, as_completed
         import multiprocessing as _mp
+        from concurrent.futures import ProcessPoolExecutor, as_completed
         n_workers = min(n_workers, len(csv_files), _mp.cpu_count() or 4)
         if verbose:
             print(f"  Parallel processing: {n_workers} workers")
@@ -296,8 +299,9 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
     # Collect baseline templates per group (chip+channel), then re-run
     # arrhythmia analysis for drug recordings using the baseline template.
     # This captures drug-induced morphology changes vs. normal baseline.
+    from .arrhythmia import analyze_arrhythmia as _analyze_arrhythmia
+    from .arrhythmia import compute_template
     from .normalization import get_group_key
-    from .arrhythmia import compute_template, analyze_arrhythmia as _analyze_arrhythmia
 
     baseline_templates = {}
     for r in results:

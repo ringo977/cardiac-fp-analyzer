@@ -21,8 +21,6 @@ Quality grades:
 """
 
 import numpy as np
-from scipy import signal as sig
-
 
 # ─── Module-level defaults (used when no config is provided) ───
 GLOBAL_SNR_EXCELLENT = 8.0

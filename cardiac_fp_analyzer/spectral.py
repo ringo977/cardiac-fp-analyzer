@@ -17,9 +17,10 @@ These features are especially useful for:
   - Distinguishing noise from genuine signal morphology changes
 """
 
+from dataclasses import dataclass, field
+
 import numpy as np
 from scipy import signal as sig
-from dataclasses import dataclass, field
 
 
 @dataclass

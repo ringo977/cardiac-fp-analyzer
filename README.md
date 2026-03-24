@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer
 
-**Versione**: 3.2.1
+**Versione**: 3.3.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
@@ -37,7 +37,8 @@ cardiac_fp_analyzer/        # Libreria core di analisi
 ├── beat_detection.py       # Rilevamento battiti multi-metodo
 ├── parameters.py           # Estrazione parametri elettrofisiologici
 ├── quality_control.py      # QC: SNR, ampiezza, morfologia, grading A–F
-├── arrhythmia.py           # Analisi e classificazione aritmie
+├── arrhythmia.py           # Analisi e classificazione aritmie (stat + residuale)
+├── residual_analysis.py    # Analisi residua: template, EAD, Poincaré STV
 ├── normalization.py        # Normalizzazione baseline + TdP scoring
 ├── cessation.py            # Rilevamento cessazione battito (5 sub-detector)
 ├── spectral.py             # Analisi spettrale (PSD, entropia, armoniche)
@@ -119,6 +120,13 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.3.0 (Marzo 2026)
+- **CI GitHub Actions**: workflow `ci.yml` con lint (ruff) + test su Python 3.9–3.12
+- **Refactoring arrhythmia**: `arrhythmia.py` (708→438 righe) spezzato in `residual_analysis.py` (304 righe) — template, residui, EAD detection, Poincaré STV
+- **Ruff lint clean**: risolti 194 errori ruff; configurazione in `pyproject.toml` con regole mirate
+- **Test end-to-end numerici**: 17 test su segnali sintetici — beat detection, periodi, parametri, residui, classificazione aritmie, Poincaré STV
+- **Suite test**: 54 test totali (smoke, config, alignment, e2e sintetici)
 
 ### v3.2.1 (Marzo 2026)
 - **Refactoring core**: `analyze.py` (690→442 righe) spezzato in `channel_selection.py`, `inclusion.py`; `parameters.py` (671→293 righe) spezzato in `repolarization.py`

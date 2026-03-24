@@ -45,11 +45,11 @@ st.set_page_config(
 )
 
 # ── UI module imports ──
-from ui.i18n import T
-from ui.config_sidebar import build_config_from_sidebar
-from ui.single_file import page_single_file
 from ui.batch import page_batch_analysis
+from ui.config_sidebar import build_config_from_sidebar
 from ui.drug_comparison import page_drug_comparison
+from ui.i18n import T
+from ui.single_file import page_single_file
 
 
 def main():

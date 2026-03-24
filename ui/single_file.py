@@ -8,13 +8,10 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from cardiac_fp_analyzer.config import AnalysisConfig
 from cardiac_fp_analyzer.analyze import analyze_single_file
-
+from cardiac_fp_analyzer.config import AnalysisConfig
+from ui.display import plot_beats, plot_signal, show_arrhythmia, show_params_table
 from ui.i18n import T
-from ui.helpers import amplitude_scale
-from ui.display import plot_signal, plot_beats, show_params_table, show_arrhythmia
-
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Page entry point

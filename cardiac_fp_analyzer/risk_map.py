@@ -23,21 +23,20 @@ Usage
     fig = generate_risk_map(results_list, config=config, ground_truth=gt)
 """
 
-import numpy as np
 from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Dict, Optional, List, Tuple
+from dataclasses import dataclass
+from typing import Optional
 
 import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from matplotlib.patches import FancyBboxPatch
-import matplotlib.patheffects as pe
+import numpy as np
 
+matplotlib.use('Agg')
+import matplotlib.patheffects as pe
+import matplotlib.pyplot as plt
 
 # ── Drug-name normalisation (same aliases used across the pipeline) ────
 
-_DRUG_ALIASES: Dict[str, str] = {
+_DRUG_ALIASES: dict[str, str] = {
     'terfe': 'terfenadine',
     'quinidine': 'quinidine',
     'dofe': 'dofetilide', 'dofetilide': 'dofetilide',
@@ -93,7 +92,7 @@ class DrugRiskMetrics:
     cessation_override: bool = False
 
 
-def aggregate_drug_metrics(results_list) -> Dict[str, DrugRiskMetrics]:
+def aggregate_drug_metrics(results_list) -> dict[str, DrugRiskMetrics]:
     """
     Walk the full results list and aggregate risk-relevant metrics per
     canonical drug name.
@@ -281,9 +280,9 @@ class RiskZoneConfig:
 def generate_risk_map(
     results_list,
     config=None,
-    ground_truth: Optional[Dict[str, bool]] = None,
+    ground_truth: Optional[dict[str, bool]] = None,
     zone_cfg: Optional[RiskZoneConfig] = None,
-    figsize: Tuple[float, float] = (10, 8),
+    figsize: tuple[float, float] = (10, 8),
     title: str = 'CiPA-style 2D Risk Map',
 ) -> plt.Figure:
     """

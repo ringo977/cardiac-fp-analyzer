@@ -12,10 +12,10 @@ Filter coefficients are cached per (fs, parameters) to avoid
 redundant recomputation across files with the same sample rate.
 """
 
-import numpy as np
 from functools import lru_cache
-from scipy import signal
 
+import numpy as np
+from scipy import signal
 
 # ── Cached coefficient computation ──────────────────────────────────
 

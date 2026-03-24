@@ -1,6 +1,5 @@
 """Smoke tests — verify all package modules import without errors."""
 
-import pytest
 
 
 class TestCoreImports:
@@ -20,7 +19,7 @@ class TestCoreImports:
         assert callable(full_filter_pipeline)
 
     def test_import_beat_detection(self):
-        from cardiac_fp_analyzer.beat_detection import detect_beats, segment_beats
+        from cardiac_fp_analyzer.beat_detection import detect_beats
         assert callable(detect_beats)
 
     def test_import_parameters(self):
@@ -37,7 +36,7 @@ class TestCoreImports:
         assert callable(compute_template)
 
     def test_import_normalization(self):
-        from cardiac_fp_analyzer.normalization import is_baseline, get_group_key
+        from cardiac_fp_analyzer.normalization import get_group_key, is_baseline
         assert callable(is_baseline)
         assert callable(get_group_key)
 
@@ -54,11 +53,23 @@ class TestCoreImports:
         from cardiac_fp_analyzer.inclusion import apply_inclusion_criteria
         assert callable(apply_inclusion_criteria)
 
+    def test_import_residual_analysis(self):
+        from cardiac_fp_analyzer.residual_analysis import (
+            analyze_residual,
+            compute_template,
+            detect_ead_from_residual,
+            poincare_stv,
+        )
+        assert callable(compute_template)
+        assert callable(analyze_residual)
+        assert callable(detect_ead_from_residual)
+        assert callable(poincare_stv)
+
     def test_import_repolarization(self):
         from cardiac_fp_analyzer.repolarization import (
+            apply_fpd_method,
             find_repolarization_on_template,
             find_repolarization_per_beat,
-            apply_fpd_method,
         )
         assert callable(find_repolarization_on_template)
         assert callable(find_repolarization_per_beat)
@@ -82,17 +93,38 @@ class TestBackCompatAliases:
 
     def test_analyze_back_compat_aliases(self):
         from cardiac_fp_analyzer.analyze import (
-            _select_best_channel, select_best_channel,
-            _apply_inclusion_criteria, apply_inclusion_criteria,
+            _apply_inclusion_criteria,
+            _select_best_channel,
         )
         # These are the same function objects re-exported as back-compat aliases
         assert callable(_select_best_channel)
         assert callable(_apply_inclusion_criteria)
 
+    def test_residual_analysis_back_compat_aliases(self):
+        from cardiac_fp_analyzer.residual_analysis import (
+            _compute_residuals,
+            _compute_template,
+            _detect_ead_from_residual,
+            _poincare_stv,
+            _residual_rms,
+            compute_residuals,
+            compute_template,
+            detect_ead_from_residual,
+            poincare_stv,
+            residual_rms,
+        )
+        assert _compute_template is compute_template
+        assert _compute_residuals is compute_residuals
+        assert _residual_rms is residual_rms
+        assert _detect_ead_from_residual is detect_ead_from_residual
+        assert _poincare_stv is poincare_stv
+
     def test_repolarization_back_compat_aliases(self):
         from cardiac_fp_analyzer.repolarization import (
-            _find_repolarization_on_template, find_repolarization_on_template,
-            _apply_fpd_method, apply_fpd_method,
+            _apply_fpd_method,
+            _find_repolarization_on_template,
+            apply_fpd_method,
+            find_repolarization_on_template,
         )
         assert _find_repolarization_on_template is find_repolarization_on_template
         assert _apply_fpd_method is apply_fpd_method
@@ -103,7 +135,7 @@ class TestVersion:
 
     def test_version_string(self):
         import cardiac_fp_analyzer
-        assert cardiac_fp_analyzer.__version__ == '3.2.1'
+        assert cardiac_fp_analyzer.__version__ == '3.3.0'
 
     def test_version_format(self):
         import cardiac_fp_analyzer
