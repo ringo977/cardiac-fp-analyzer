@@ -2,6 +2,8 @@
 Sidebar configuration panel — builds AnalysisConfig from Streamlit widgets.
 """
 
+import json
+
 import streamlit as st
 
 from cardiac_fp_analyzer.config import AnalysisConfig
@@ -158,8 +160,7 @@ def build_config_from_sidebar() -> AnalysisConfig:
                 st.session_state.pop('_cfg_imported', None)
             if uploaded_cfg is not None and not st.session_state.get('_cfg_imported', False):
                 try:
-                    import json as _json
-                    cfg_dict = _json.loads(uploaded_cfg.read())
+                    cfg_dict = json.loads(uploaded_cfg.read())
                     imported = AnalysisConfig.from_dict(cfg_dict)
                     # Update widget session_state keys so sidebar reflects imported values
                     _cfg_widget_map = {
@@ -206,7 +207,7 @@ def build_config_from_sidebar() -> AnalysisConfig:
                     st.session_state['_cfg_imported'] = True
                     st.success(T('config_loaded'))
                     st.rerun()
-                except Exception as e:
+                except (json.JSONDecodeError, ValueError, KeyError, AttributeError) as e:
                     st.error(f"{T('error')}: {e}")
 
     return config

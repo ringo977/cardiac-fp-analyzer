@@ -37,7 +37,7 @@ def download_reports(results, config, data_dir):
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
-                except Exception as e:
+                except (OSError, ValueError, KeyError, ImportError, RuntimeError) as e:
                     st.error(f"{T('error')}: {e}")
 
     with cols[1]:
@@ -56,7 +56,7 @@ def download_reports(results, config, data_dir):
                         mime="application/pdf",
                         use_container_width=True
                     )
-                except Exception as e:
+                except (OSError, ValueError, KeyError, ImportError, RuntimeError) as e:
                     st.error(f"{T('error')}: {e}")
 
     with cols[2]:
@@ -93,7 +93,7 @@ def download_reports(results, config, data_dir):
                         use_container_width=True
                     )
                     st.success(f"{T('cdisc_success')} TS, DM, EX, EG, RISK + define.xml")
-                except Exception as e:
+                except (OSError, ValueError, KeyError, ImportError, RuntimeError) as e:
                     st.error(f"{T('error')} export CDISC: {e}")
                     st.code(traceback.format_exc())
 

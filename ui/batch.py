@@ -113,7 +113,7 @@ def page_batch_analysis(config: AnalysisConfig):
                     st.session_state['batch_local_path'] = chosen
                 elif not chosen:
                     st.info("Nessuna cartella selezionata.")
-            except Exception as e:
+            except (OSError, subprocess.SubprocessError, FileNotFoundError) as e:
                 st.error(f"{T('error')} nell'aprire il file picker: {e}")
 
         # Show selected path and scan
@@ -165,7 +165,7 @@ def page_batch_analysis(config: AnalysisConfig):
                 st.session_state['batch_ground_truth'] = ground_truth
                 progress_bar.progress(100, text="Completato!")
                 status_text.success(f"Analisi completata: {len(results)} registrazioni processate.")
-            except Exception as e:
+            except (OSError, ValueError, KeyError, RuntimeError, AssertionError) as e:
                 st.error(f"{T('error')}: {e}")
                 st.code(traceback.format_exc())
                 return

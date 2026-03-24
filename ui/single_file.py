@@ -270,5 +270,5 @@ def _single_file_exports(result, config):
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True,
                     )
-                except Exception as e:
+                except (OSError, ValueError, KeyError, ImportError, RuntimeError) as e:
                     st.error(f"{T('error')}: {e}")

@@ -19,7 +19,7 @@ Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **m
 - **Report**: Excel multi-foglio (Summary + Arrhythmia + Per-Beat) e PDF con grafici
 - **Export CDISC SEND**: pacchetto regolatorio conforme SENDIG v3.1 (TS, DM, EX, EG, RISK + define.xml)
 - **GUI Streamlit**: interfaccia web con analisi singolo file, batch + risk map, confronto farmaci
-- **Logging strutturato**: logging per modulo con `NullHandler`, nessuna soppressione blanket di warning
+- **Logging strutturato**: logging per modulo con `NullHandler`; warning soppressi solo per librerie terze (streamlit, matplotlib, plotly) nella GUI
 - **Configurazione completa**: tutti i parametri e pesi di scoring esportabili/importabili via JSON
 
 ## Struttura
@@ -29,6 +29,9 @@ cardiac_fp_analyzer/        # Libreria core di analisi
 ├── __init__.py             # Package init + versione + NullHandler
 ├── config.py               # Configurazione centralizzata (AnalysisConfig, dataclasses JSON)
 ├── analyze.py              # Pipeline principale + CLI + batch
+├── channel_selection.py    # Selezione automatica canale (scoring multi-criterio)
+├── inclusion.py            # Criteri di inclusione batch (5 criteri gerarchici)
+├── repolarization.py       # Rilevamento ripolarizzazione e metodi FPD
 ├── loader.py               # Parser CSV WaveForms
 ├── filtering.py            # Pipeline di filtraggio
 ├── beat_detection.py       # Rilevamento battiti multi-metodo
@@ -47,6 +50,7 @@ ui/                         # Moduli GUI Streamlit
 ├── __init__.py             # Package marker
 ├── i18n.py                 # Traduzioni IT/EN + helper T()
 ├── helpers.py              # Funzioni condivise (reanalyze, amplitude_scale)
+├── display.py              # Componenti display condivisi (plot_signal, plot_beats, show_params_table)
 ├── config_sidebar.py       # Sidebar configurazione con import/export JSON
 ├── single_file.py          # Pagina analisi singolo file + editor battiti
 ├── batch.py                # Pagina analisi batch + risk map

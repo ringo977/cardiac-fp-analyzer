@@ -17,16 +17,15 @@ The UI is split into modules under the ``ui/`` package:
 
 import logging
 import warnings
-import sys
-from pathlib import Path
 
 import streamlit as st
 
-# Suppress noisy third-party warnings in the GUI (streamlit, matplotlib).
-# Pipeline warnings from cardiac_fp_analyzer are handled by logging.
+# Suppress noisy third-party warnings in the GUI.
+# Only target specific modules — no blanket category suppression.
+# Pipeline warnings from cardiac_fp_analyzer are preserved and handled by logging.
 warnings.filterwarnings('ignore', module='streamlit')
 warnings.filterwarnings('ignore', module='matplotlib')
-warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.filterwarnings('ignore', module='plotly')
 
 # Configure logging for the GUI — INFO level by default,
 # DEBUG available via ?debug=1 query param (handled below).
@@ -44,11 +43,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-# ── Ensure project root is on sys.path (for development without pip install) ──
-_project_root = str(Path(__file__).resolve().parent)
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
 
 # ── UI module imports ──
 from ui.i18n import T
