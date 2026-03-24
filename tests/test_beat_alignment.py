@@ -74,3 +74,58 @@ class TestSegmentBeatsValidIndices:
             f"Alignment error: bi_seg={len(bi_seg)}, "
             f"beats_data={len(bd)}, beats_time={len(btm)}"
         )
+
+
+class TestBeatPeriodDenominatorConsistency:
+    """Regression test for the residual re-analysis denominator mismatch.
+
+    In the batch pipeline's second pass (baseline-relative residual analysis),
+    beat_indices (QC-cleaned) must be paired with beat_periods recomputed
+    from those same cleaned indices — NOT from the raw/all-detected indices.
+    Otherwise n_beats and CV denominators diverge when QC rejects many beats.
+    """
+
+    def test_recomputed_bp_matches_cleaned_bi(self):
+        """beat_periods length must be len(beat_indices) - 1."""
+        from cardiac_fp_analyzer.beat_detection import compute_beat_periods
+
+        fs = 1000
+        # Simulate: 10 raw beats, QC keeps only 6
+        bi_raw = np.array([500, 1500, 2500, 3500, 4500, 5500, 6500, 7500, 8500, 9500])
+        bi_clean = np.array([500, 1500, 2500, 5500, 6500, 7500])  # 4 rejected
+
+        bp_raw = compute_beat_periods(bi_raw, fs)
+        bp_clean = compute_beat_periods(bi_clean, fs)
+
+        # Raw: 9 periods for 10 beats
+        assert len(bp_raw) == len(bi_raw) - 1
+
+        # Cleaned: 5 periods for 6 beats
+        assert len(bp_clean) == len(bi_clean) - 1
+
+        # The mismatch: pairing bi_clean with bp_raw would give
+        # 6 beats + 9 periods — inconsistent denominators
+        assert len(bp_raw) != len(bi_clean) - 1, "Sanity: raw and clean should differ"
+        assert len(bp_clean) == len(bi_clean) - 1, "Clean bp must match clean bi"
+
+    def test_cv_diverges_with_mismatched_denominators(self):
+        """Show that using raw bp with cleaned bi gives a different CV."""
+        from cardiac_fp_analyzer.beat_detection import compute_beat_periods
+
+        fs = 1000
+        # Regular beats plus two irregular ones that QC would reject
+        bi_raw = np.array([500, 1500, 2500, 2700, 3500, 4500, 4600, 5500, 6500, 7500])
+        bi_clean = np.array([500, 1500, 2500, 3500, 4500, 5500, 6500, 7500])
+
+        bp_raw = compute_beat_periods(bi_raw, fs)
+        bp_clean = compute_beat_periods(bi_clean, fs)
+
+        cv_raw = np.std(bp_raw) / np.mean(bp_raw) * 100 if np.mean(bp_raw) > 0 else 0
+        cv_clean = np.std(bp_clean) / np.mean(bp_clean) * 100 if np.mean(bp_clean) > 0 else 0
+
+        # Raw CV should be higher due to irregular beats
+        assert cv_raw > cv_clean, (
+            f"Expected raw CV ({cv_raw:.1f}%) > clean CV ({cv_clean:.1f}%)"
+        )
+        # Clean beat periods should be very regular (all 1.0s)
+        assert cv_clean < 1.0, f"Clean beats should be nearly regular, CV={cv_clean:.1f}%"

@@ -327,9 +327,13 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
             bd = r.get('beats_data')
             if bd is None or len(bd) < 5:
                 continue
-            # Re-run arrhythmia analysis with baseline template
+            # Re-run arrhythmia analysis with baseline template.
+            # Use cleaned beat_indices and recompute beat_periods from them
+            # to ensure n_beats and CV denominators are consistent.
+            # (beat_periods in the result dict are from raw/all detected beats,
+            # which can diverge from cleaned beat_indices when QC rejects many.)
             bi = r.get('beat_indices', np.array([]))
-            bp = r.get('beat_periods', np.array([]))
+            bp = compute_beat_periods(bi, r.get('metadata', {}).get('sample_rate', 1000.0))
             all_p = r.get('all_params', [])
             summary = r.get('summary', {})
             fs_val = r.get('metadata', {}).get('sample_rate', 1000.0)
