@@ -1,5 +1,7 @@
 # Cardiac FP Analyzer
 
+[![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
+
 **Versione**: 3.3.0
 **Python**: ≥ 3.9
 
