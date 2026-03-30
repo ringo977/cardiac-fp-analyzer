@@ -93,13 +93,20 @@ def plot_beat_overlay(beats_time, beats_data, metadata, channel='el1',
 
 
 def plot_analysis_summary(df_time, filtered, beat_indices, params, metadata,
-                          channel='el1', save_path=None, figsize=(16, 14)):
+                          channel='el1', save_path=None, figsize=(16, 14),
+                          all_params=None):
     """
     4-panel analysis summary:
-      1. Full filtered trace with beat markers
+      1. Full filtered trace with beat markers (depolarization + repolarization peak)
       2. Zoomed view of ~5 beats
       3. Beat period trend
       4. FPD trend
+
+    Parameters
+    ----------
+    all_params : list of dict, optional
+        Per-beat parameter dicts with ``repol_peak_global_idx`` (from parameter
+        extraction) to draw inverted triangles at identified repolarization peaks.
     """
     fig = plt.figure(figsize=figsize)
     gs = GridSpec(4, 1, height_ratios=[1.5, 1.5, 1, 1], hspace=0.35)
@@ -110,7 +117,21 @@ def plot_analysis_summary(df_time, filtered, beat_indices, params, metadata,
     t_ds, y_ds = minmax_downsample(t, y * 1000, target_points=8000)
     ax1.plot(t_ds, y_ds, linewidth=0.4, color='#1f77b4')
     if len(beat_indices) > 0:
-        ax1.plot(t[beat_indices], y[beat_indices] * 1000, 'rv', markersize=3, alpha=0.6)
+        ax1.plot(t[beat_indices], y[beat_indices] * 1000, 'rv', markersize=4, alpha=0.75,
+                 label='Depolarization', zorder=5)
+    repol_global = []
+    if all_params is not None and len(all_params) == len(beat_indices):
+        for p in all_params:
+            g = p.get('repol_peak_global_idx')
+            if g is not None and 0 <= int(g) < len(t):
+                repol_global.append(int(g))
+    if repol_global:
+        rg = np.asarray(repol_global, dtype=int)
+        ax1.plot(t[rg], y[rg] * 1000, linestyle='none', marker='^', color='#1b9e77',
+                 markersize=4, alpha=0.8, label='Repolarization peak', zorder=5,
+                 markeredgecolor='black', markeredgewidth=0.25)
+    if len(beat_indices) > 0 or repol_global:
+        ax1.legend(loc='upper right', fontsize=7, framealpha=0.9)
     ax1.set_ylabel('Voltage (mV)')
     el_label = metadata.get('analyzed_channel', '')
     title_suffix = f" [{el_label.upper()}]" if el_label else ""
@@ -127,7 +148,15 @@ def plot_analysis_summary(df_time, filtered, beat_indices, params, metadata,
         ax2.plot(t[start_idx:end_idx], y[start_idx:end_idx] * 1000, linewidth=0.8, color='#1f77b4')
         for bi in beat_indices:
             if start_idx <= bi <= end_idx:
-                ax2.axvline(t[bi], color='red', alpha=0.3, linewidth=0.5)
+                ax2.axvline(t[bi], color='red', alpha=0.35, linewidth=0.6, linestyle='-')
+        if all_params is not None and len(all_params) == len(beat_indices):
+            for p in all_params:
+                g = p.get('repol_peak_global_idx')
+                if g is None:
+                    continue
+                gi = int(g)
+                if start_idx <= gi <= end_idx:
+                    ax2.axvline(t[gi], color='#1b9e77', alpha=0.45, linewidth=0.7, linestyle=':')
     ax2.set_ylabel('Voltage (mV)'); ax2.set_xlabel('Time (s)')
     ax2.set_title('Zoomed View (~5 beats)', fontsize=9); ax2.grid(True, alpha=0.3)
 

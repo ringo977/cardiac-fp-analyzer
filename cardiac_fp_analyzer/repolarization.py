@@ -320,6 +320,19 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
     Find repolarization in a single beat, optionally guided by template.
 
     Uses the configured FPD method (consistent with template detection).
+
+    Returns
+    -------
+    fpd : float or None
+        Field potential duration (s), or None if not measurable.
+    repol_amp : float
+        Smoothed signal amplitude at repolarization peak (V); NaN if unknown.
+    repol_peak_idx : int or None
+        Sample index *within the beat segment* ``data`` where the repolarization
+        peak was identified (for overlay on full trace: ``bi - pre + repol_peak_idx``).
+    fpd_endpoint_idx : int or None
+        Sample index *within the beat segment* where the configured FPD endpoint
+        lies (tangent / peak / etc.); None if FPD could not be computed.
     """
     rc = _get_repol_cfg(cfg)
     search_tolerance = int(rc.per_beat_tolerance_ms * fs / 1000)
@@ -338,7 +351,7 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
     if peak_search_end > len(data):
         peak_search_end = len(data)
     if peak_search_start >= peak_search_end or (peak_search_end - peak_search_start) < 10:
-        return None, np.nan
+        return None, np.nan, None, None
 
     segment = data[peak_search_start:peak_search_end]
 
@@ -394,13 +407,16 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
     # ─── Step 2: Apply configured FPD method ───
     fpd_idx = apply_fpd_method(seg_det, best_idx, template_repol_sign, fs,
                                peak_search_start, spike_idx, cfg=cfg)
-    # Convert from "samples from spike" to absolute index
-    actual_idx = spike_idx + fpd_idx
+    # Convert from "samples from spike" to absolute index (within beat segment ``data``)
+    repol_peak_idx = int(peak_search_start + best_idx)
+    actual_idx = int(spike_idx + fpd_idx)
+    repol_amp_val = float(seg_smooth[min(int(best_idx), len(seg_smooth) - 1)])
+
     if actual_idx < len(t):
         fpd = abs(t[actual_idx] - t[spike_idx])
-        return fpd, seg_smooth[min(best_idx, len(seg_smooth)-1)]
+        return fpd, repol_amp_val, repol_peak_idx, actual_idx
 
-    return None, np.nan
+    return None, np.nan, repol_peak_idx, None
 
 
 # ── Back-compat aliases (private names used by older code) ──

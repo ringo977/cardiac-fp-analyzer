@@ -257,7 +257,10 @@ def generate_pdf_report(results_list, output_path, data_dir=None):
                 fi = r.get('file_info', {})
                 meta_plot = dict(meta)
                 meta_plot['analyzed_channel'] = fi.get('analyzed_channel', '')
-                fig = plot_analysis_summary(time, filtered, bi, params_plot, meta_plot, figsize=(11, 14))
+                fig = plot_analysis_summary(
+                    time, filtered, bi, params_plot, meta_plot,
+                    figsize=(11, 14), all_params=r.get('all_params'),
+                )
                 # Footer: arrhythmia + normalization info
                 footer_parts = []
                 if ar:

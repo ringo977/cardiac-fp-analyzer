@@ -150,7 +150,7 @@ def extract_beat_parameters(beat_data, beat_time, fs, rr_interval=None,
         params['rise_time_ms'] = np.nan
 
     # FPD (template-guided, configured method)
-    fpd, repol_amp = _find_repolarization_per_beat(
+    fpd, repol_amp, repol_peak_i, fpd_end_i = _find_repolarization_per_beat(
         data, t, zero_idx, fs,
         template_fpd_samples=template_fpd_samples,
         template_peak_samples=template_peak_samples,
@@ -159,6 +159,8 @@ def extract_beat_parameters(beat_data, beat_time, fs, rr_interval=None,
     )
     params['fpd_ms'] = fpd * 1000 if fpd is not None else np.nan
     params['repol_amplitude_mV'] = repol_amp * 1000 if not np.isnan(repol_amp) else np.nan
+    params['repol_peak_idx_in_beat'] = repol_peak_i
+    params['fpd_endpoint_idx_in_beat'] = fpd_end_i
 
     # FPDc Fridericia & Bazett (always compute both; config selects which to report)
     if fpd is not None and rr_interval is not None and rr_interval > 0:
@@ -222,6 +224,7 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
     # ─── Per-beat extraction ───
     all_params = []
     fpd_vals, fpdc_vals, fpdc_bazett_vals, amp_vals = [], [], [], []
+    pre_samples = int(rc.segment_pre_ms / 1000 * fs)
 
     for i, (bd, bt) in enumerate(zip(beats_data, beats_time)):
         rr = beat_periods[i-1] if i > 0 and i-1 < len(beat_periods) else None
@@ -234,6 +237,17 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
         )
         params['beat_number'] = i + 1
         params['rr_interval_ms'] = rr * 1000 if rr is not None else np.nan
+        bi_g = beat_indices[i]
+        rp = params.get('repol_peak_idx_in_beat')
+        fe = params.get('fpd_endpoint_idx_in_beat')
+        if rp is not None:
+            params['repol_peak_global_idx'] = int(bi_g - pre_samples + rp)
+        else:
+            params['repol_peak_global_idx'] = None
+        if fe is not None:
+            params['fpd_endpoint_global_idx'] = int(bi_g - pre_samples + fe)
+        else:
+            params['fpd_endpoint_global_idx'] = None
         all_params.append(params)
         if not np.isnan(params['fpd_ms']):
             fpd_vals.append(params['fpd_ms'])
