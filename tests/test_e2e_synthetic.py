@@ -13,7 +13,6 @@ from cardiac_fp_analyzer.beat_detection import (
     compute_beat_periods,
     detect_beats,
     segment_beats,
-    validate_beats_morphology,
 )
 from cardiac_fp_analyzer.parameters import extract_all_parameters
 from cardiac_fp_analyzer.residual_analysis import (
@@ -425,7 +424,6 @@ class TestBeatValidation:
             fs=fs, n_beats=10, beat_period_s=1.0, spike_amp=0.002, noise_std=1e-5
         )
         # Inject small noise spikes at known locations
-        rng = np.random.default_rng(99)
         noise_indices = []
         for ti in true_indices[:8]:
             # Add a spike halfway between two beats (amplitude = 20% of real)
