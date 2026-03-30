@@ -117,6 +117,13 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
     # Fix: increase min_distance to midpoint between groups and re-detect.
     bi, bt, info = _fix_bimodal_bp(data, fs, bi, bt, info, threshold_factor, cfg)
 
+    # ── Post-detection morphological validation ──
+    # Remove noise spikes before they reach segmentation/parameter extraction.
+    bi, val_info = validate_beats_morphology(data, fs, bi, cfg=cfg)
+    bt = bi / fs
+    info['n_beats'] = len(bi)
+    info['beat_validation'] = val_info
+
     info['method'] = f"auto({info.get('_method_name', '?')})"
     for k in list(info.keys()):
         if k.startswith('_'): del info[k]
@@ -285,6 +292,131 @@ def _detect_peak(data, fs, min_dist, threshold_factor):
     else:
         bi, pol = peaks_neg, 'negative'
     return bi, bi / fs, {'method': 'peak', 'polarity': pol, 'n_beats': len(bi)}
+
+
+def validate_beats_morphology(data, fs, beat_indices, cfg=None):
+    """
+    Post-detection morphological validation (CardioMDA-inspired).
+
+    Builds a template from the strongest beat candidates (by amplitude),
+    then rejects beats whose correlation with the template is below threshold
+    AND beats whose amplitude is far below the robust reference.
+
+    This runs BEFORE segmentation/parameter extraction — unlike the QC module
+    which runs after.  The goal is to remove noise spikes mistakenly identified
+    as depolarization spikes, so downstream modules never see them.
+
+    References:
+      - Clements & Thomas, PLOS ONE 2013 (CardioMDA): correlation ≥ 0.95–0.98
+      - Patel et al., Sci Rep 2025 (EFP Analyzer): stringent quality criteria
+
+    Parameters
+    ----------
+    data : array — filtered FP signal
+    fs : float — sampling rate
+    beat_indices : array of int — detected beat locations
+    cfg : BeatDetectionConfig or None
+
+    Returns
+    -------
+    validated_indices : array of int — indices of accepted beats
+    validation_info : dict — diagnostics (n_rejected_amplitude, n_rejected_morphology, etc.)
+    """
+    c = _get_bd_cfg(cfg)
+
+    if not c.enable_morphology_validation or len(beat_indices) < 3:
+        return beat_indices, {'validation': 'skipped', 'n_input': len(beat_indices)}
+
+    # ── Step 1: Compute amplitude for each beat ──
+    window = int(20 * fs / 1000)  # ±20 ms around spike
+    amplitudes = np.zeros(len(beat_indices))
+    for i, bi in enumerate(beat_indices):
+        s = max(0, bi - window)
+        e = min(len(data), bi + window)
+        seg = data[s:e]
+        amplitudes[i] = np.max(seg) - np.min(seg)
+
+    # Robust reference: median of upper 50% of amplitudes
+    sorted_amps = np.sort(amplitudes)
+    upper_half = sorted_amps[len(sorted_amps) // 2:]
+    ref_amplitude = np.median(upper_half) if len(upper_half) > 0 else np.median(amplitudes)
+
+    # ── Step 2: Amplitude gate ──
+    if ref_amplitude > 0:
+        amp_ratios = amplitudes / ref_amplitude
+    else:
+        amp_ratios = np.ones(len(amplitudes))
+
+    amp_ok = amp_ratios >= c.min_amplitude_ratio
+
+    # ── Step 3: Morphological validation (template correlation) ──
+    morph_ok = np.ones(len(beat_indices), dtype=bool)
+
+    if len(beat_indices) >= c.morphology_min_beats:
+        # Build template from highest-amplitude beats
+        pre = int(20 * fs / 1000)   # 20 ms before spike
+        post = int(80 * fs / 1000)  # 80 ms after spike (depolarization region)
+
+        # Select top 50% by amplitude for template
+        n_for_template = max(5, len(beat_indices) // 2)
+        top_indices = np.argsort(amplitudes)[::-1][:n_for_template]
+        template_beats = []
+        for idx in top_indices:
+            bi = beat_indices[idx]
+            s, e = bi - pre, bi + post
+            if s >= 0 and e < len(data):
+                template_beats.append(data[s:e])
+
+        if len(template_beats) >= 3:
+            # Median template (robust to outliers)
+            min_len = min(len(b) for b in template_beats)
+            mat = np.array([b[:min_len] for b in template_beats])
+            template = np.median(mat, axis=0)
+
+            # Correlate each beat with template
+            for i, bi in enumerate(beat_indices):
+                s, e = bi - pre, bi + post
+                if s < 0 or e >= len(data):
+                    # Edge beat — skip morphology check, keep amplitude gate
+                    continue
+                beat_seg = data[s:e][:min_len]
+                # Pearson correlation
+                b_c = beat_seg - np.mean(beat_seg)
+                t_c = template - np.mean(template)
+                denom = np.sqrt(np.sum(b_c**2) * np.sum(t_c**2))
+                if denom > 0:
+                    corr = np.sum(b_c * t_c) / denom
+                else:
+                    corr = 0.0
+                morph_ok[i] = corr >= c.morphology_min_corr
+
+    # ── Step 4: Combine gates ──
+    accepted = amp_ok & morph_ok
+    n_rej_amp = int(np.sum(~amp_ok))
+    n_rej_morph = int(np.sum(amp_ok & ~morph_ok))  # morphology-only rejections
+
+    validated_indices = beat_indices[accepted]
+
+    info = {
+        'validation': 'applied',
+        'n_input': len(beat_indices),
+        'n_accepted': len(validated_indices),
+        'n_rejected_amplitude': n_rej_amp,
+        'n_rejected_morphology': n_rej_morph,
+        'ref_amplitude': float(ref_amplitude),
+    }
+
+    if len(validated_indices) < 3 and len(beat_indices) >= 5:
+        # Validation too aggressive — fall back to amplitude-only
+        validated_indices = beat_indices[amp_ok]
+        info['validation'] = 'fallback_amplitude_only'
+        info['n_accepted'] = len(validated_indices)
+        info['note'] = 'Morphology validation rejected too many beats; using amplitude-only'
+
+    logger.info("Beat validation: %d → %d (-%d amp, -%d morph)",
+                len(beat_indices), len(validated_indices), n_rej_amp, n_rej_morph)
+
+    return validated_indices, info
 
 
 def segment_beats(data, time, beat_indices, fs, pre_ms=50, post_ms=600, cfg=None):

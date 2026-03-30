@@ -89,6 +89,24 @@ class BeatDetectionConfig:
     score_rate_excess: float = -20.0   # too many beats (likely noise)
     score_too_few: float = -10.0       # <3 beats
 
+    # ── Post-detection morphological validation (CardioMDA approach) ──
+    # After initial beat detection, build a template from the strongest
+    # candidates and reject beats whose correlation with the template
+    # falls below this threshold.  This removes noise spikes BEFORE
+    # parameter extraction — unlike QC which runs after segmentation.
+    # Reference: Clements & Thomas, PLOS ONE 2013 (CardioMDA, r ≥ 0.95–0.98).
+    # Default 0.7 is intentionally lower than CardioMDA's 0.98 because
+    # µECG signals have more morphological variability than planar MEA.
+    enable_morphology_validation: bool = True
+    morphology_min_corr: float = 0.7
+    # Minimum amplitude ratio vs robust reference (median of top 50%).
+    # Beats below this are likely noise, not depolarization spikes.
+    min_amplitude_ratio: float = 0.25
+    # Minimum number of beats required to build a validation template.
+    # With fewer beats, morphological validation is skipped (amplitude
+    # validation still applies).
+    morphology_min_beats: int = 5
+
     # Derivative method
     deriv_smooth_ms: float = 2.0       # smoothing window for derivative (ms)
     peak_refine_window_ms: float = 10.0  # ±window for peak refinement (ms)
@@ -146,6 +164,16 @@ class RepolarizationConfig:
     per_beat_tolerance_ms: float = 150.0  # search window ±tolerance around template FPD
     per_beat_peak_distance_ms: float = 30.0
     per_beat_distance_penalty_ms: float = 50.0  # distance penalty scale
+
+    # --- Repolarization detectability gate ---
+    # If the best repolarization candidate has prominence < gate_min_snr × noise,
+    # the repolarization is considered NOT DETECTABLE and FPD is set to NaN.
+    # This prevents forcing FPD measurements on noise (flat T-wave / drug effect).
+    # Reference: EFP Analyzer (Patel et al., Sci Rep 2025) excludes traces
+    # with non-detectable repolarization rather than forcing a value.
+    enable_repol_gate: bool = True
+    repol_gate_min_snr: float = 2.5    # min prominence / noise_std for template
+    repol_gate_min_snr_beat: float = 2.0  # min for per-beat (more lenient)
 
     # --- Confidence scoring ---
     confidence_prominence_scale: float = 3.0  # prominence / (scale × noise) → saturates at 1

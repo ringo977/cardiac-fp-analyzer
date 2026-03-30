@@ -261,9 +261,26 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None):
                 best_sign = sign
 
     if best_pk is None:
+        # No peak found by find_peaks — try argmax as last resort
         best_pk = np.argmax(np.abs(seg_det))
         best_sign = 1 if seg_det[best_pk] > 0 else -1
         best_prom = np.abs(seg_det[best_pk])
+
+    # ─── Repolarization detectability gate ───
+    # If the best candidate's prominence is too low relative to noise,
+    # the repolarization is not detectable (flat T-wave / drug effect).
+    # Return None instead of forcing a spurious FPD measurement.
+    # Reference: EFP Analyzer (Patel et al., Sci Rep 2025) — traces with
+    # non-detectable repolarization are excluded, not force-measured.
+    noise_level_gate = np.std(seg_det)
+    if rc.enable_repol_gate and noise_level_gate > 0:
+        repol_snr = best_prom / noise_level_gate
+        if repol_snr < rc.repol_gate_min_snr:
+            logger.debug("Template repol gate: prominence %.4f < %.1f × noise %.4f "
+                         "(SNR=%.2f < %.1f) → repolarization not detectable",
+                         best_prom, rc.repol_gate_min_snr, noise_level_gate,
+                         repol_snr, rc.repol_gate_min_snr)
+            return None, 1, 0.0, 0.0, None, None
 
     peak_samples = search_start + best_pk - spike_idx
     repol_amp = seg_smooth[best_pk]
@@ -403,6 +420,19 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
 
     if best_idx is None:
         best_idx = np.argmax(np.abs(seg_det))
+
+    # ─── Repolarization detectability gate (per-beat) ───
+    # Same logic as template gate but with more lenient threshold,
+    # since individual beats are noisier than the averaged template.
+    if rc.enable_repol_gate:
+        noise_level_beat = np.std(seg_det)
+        if noise_level_beat > 0:
+            beat_prom = np.abs(seg_det[best_idx])
+            beat_repol_snr = beat_prom / noise_level_beat
+            if beat_repol_snr < rc.repol_gate_min_snr_beat:
+                logger.debug("Per-beat repol gate: SNR=%.2f < %.1f → not detectable",
+                             beat_repol_snr, rc.repol_gate_min_snr_beat)
+                return None, np.nan, None, None
 
     # ─── Step 2: Apply configured FPD method ───
     fpd_idx = apply_fpd_method(seg_det, best_idx, template_repol_sign, fs,

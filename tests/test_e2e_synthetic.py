@@ -13,6 +13,7 @@ from cardiac_fp_analyzer.beat_detection import (
     compute_beat_periods,
     detect_beats,
     segment_beats,
+    validate_beats_morphology,
 )
 from cardiac_fp_analyzer.parameters import extract_all_parameters
 from cardiac_fp_analyzer.residual_analysis import (
@@ -408,3 +409,149 @@ class TestFullPipelineIntegration:
         assert len(bp) == len(bi) - 1, (
             f"len(bp)={len(bp)} != len(bi)-1={len(bi)-1}"
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#   TEST: BEAT VALIDATION (STADIO 1 — CardioMDA-inspired)
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestBeatValidation:
+    """Verify post-detection morphological validation rejects noise spikes."""
+
+    def test_noise_spikes_rejected(self):
+        """Inject noise spikes between real beats — they should be rejected."""
+        fs = 1000
+        signal, time, true_indices, _, _ = make_synthetic_signal(
+            fs=fs, n_beats=10, beat_period_s=1.0, spike_amp=0.002, noise_std=1e-5
+        )
+        # Inject small noise spikes at known locations
+        rng = np.random.default_rng(99)
+        noise_indices = []
+        for ti in true_indices[:8]:
+            # Add a spike halfway between two beats (amplitude = 20% of real)
+            ni = ti + int(0.5 * fs)
+            if ni < len(signal) - 50:
+                signal[ni] += 0.0004  # small positive spike
+                signal[ni + 1] -= 0.0004
+                noise_indices.append(ni)
+
+        # Detect beats (might pick up noise spikes)
+        from cardiac_fp_analyzer.config import BeatDetectionConfig
+        cfg = BeatDetectionConfig(
+            enable_morphology_validation=True,
+            morphology_min_corr=0.7,
+            min_amplitude_ratio=0.25,
+        )
+        bi_raw, _, _ = detect_beats(signal, fs=fs, cfg=cfg)
+
+        # The validated output should not contain noise spike locations
+        for ni in noise_indices:
+            dists = np.abs(bi_raw - ni)
+            if np.min(dists) < 20:
+                # A noise spike was falsely detected — that's OK if validation
+                # rejects it. The key is the FINAL bi should be clean.
+                # (validation is part of detect_beats in auto mode)
+                pass
+
+        # Check that validated beats are close to true beats
+        for detected in bi_raw:
+            dists = np.abs(np.array(true_indices) - detected)
+            assert np.min(dists) <= 20, (
+                f"Validated beat at {detected} not near any true beat "
+                f"(min dist = {np.min(dists)})"
+            )
+
+    def test_validation_preserves_real_beats(self):
+        """Validation should not reject real beats from a clean signal."""
+        fs = 1000
+        signal, time, true_indices, _, _ = make_synthetic_signal(
+            fs=fs, n_beats=15, beat_period_s=1.0, spike_amp=0.002, noise_std=1e-5
+        )
+        from cardiac_fp_analyzer.config import BeatDetectionConfig
+        cfg = BeatDetectionConfig(
+            enable_morphology_validation=True,
+            morphology_min_corr=0.7,
+        )
+        bi, _, info = detect_beats(signal, fs=fs, cfg=cfg)
+        # Should keep almost all real beats
+        assert len(bi) >= 13, (
+            f"Expected ≥13 beats after validation, got {len(bi)}"
+        )
+
+    def test_validation_can_be_disabled(self):
+        """When disabled, all beats pass through."""
+        fs = 1000
+        signal, _, _, _, _ = make_synthetic_signal(
+            fs=fs, n_beats=10, noise_std=1e-5
+        )
+        from cardiac_fp_analyzer.config import BeatDetectionConfig
+        cfg_off = BeatDetectionConfig(enable_morphology_validation=False)
+        bi_off, _, info_off = detect_beats(signal, fs=fs, cfg=cfg_off)
+
+        cfg_on = BeatDetectionConfig(enable_morphology_validation=True)
+        bi_on, _, info_on = detect_beats(signal, fs=fs, cfg=cfg_on)
+
+        # For a clean signal, both should find similar counts
+        assert abs(len(bi_off) - len(bi_on)) <= 2
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#   TEST: REPOLARIZATION GATE (STADIO 2 — flat T-wave detection)
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestRepolarizationGate:
+    """Verify repolarization gate marks FPD as NaN when repol is absent."""
+
+    def test_no_repol_gives_nan_fpd(self):
+        """A signal with spikes but NO repolarization should yield NaN FPD."""
+        fs = 1000
+        # Generate beats with zero repolarization amplitude
+        signal, time, _, _, _ = make_synthetic_signal(
+            fs=fs, n_beats=12, beat_period_s=1.0,
+            spike_amp=0.002, repol_amp=0.0,  # NO repolarization!
+            noise_std=1e-5
+        )
+        bi, _, _ = detect_beats(signal, fs=fs)
+        beats_data, beats_time, valid = segment_beats(signal, time, bi, fs)
+        bi_valid = bi[np.array(valid)] if len(valid) > 0 else bi[:0]
+        all_params, summary = extract_all_parameters(
+            beats_data, beats_time, bi_valid, fs
+        )
+
+        # A significant fraction of beats should have NaN FPD.
+        # The gate won't catch 100% because the spike tail can create
+        # a small artefact in the repolarization search window, but
+        # it should catch a meaningful fraction (>30%).
+        n_nan = sum(1 for p in all_params if np.isnan(p['fpd_ms']))
+        pct_nan = n_nan / len(all_params) * 100 if all_params else 0
+        assert pct_nan > 30, (
+            f"Expected >30% NaN FPD for no-repol signal, got {pct_nan:.0f}%"
+        )
+
+        # pct_beats_no_repol should be reported in summary
+        assert 'pct_beats_no_repol' in summary
+        assert summary['pct_beats_no_repol'] > 30
+
+    def test_normal_repol_gives_valid_fpd(self):
+        """A signal with normal repolarization should yield valid FPD."""
+        fs = 1000
+        signal, time, _, _, true_fpd = make_synthetic_signal(
+            fs=fs, n_beats=12, beat_period_s=1.0,
+            spike_amp=0.002, repol_amp=0.0003,
+            noise_std=1e-5
+        )
+        bi, _, _ = detect_beats(signal, fs=fs)
+        beats_data, beats_time, valid = segment_beats(signal, time, bi, fs)
+        bi_valid = bi[np.array(valid)] if len(valid) > 0 else bi[:0]
+        all_params, summary = extract_all_parameters(
+            beats_data, beats_time, bi_valid, fs
+        )
+
+        # Most beats should have valid FPD
+        n_valid = sum(1 for p in all_params if not np.isnan(p['fpd_ms']))
+        pct_valid = n_valid / len(all_params) * 100 if all_params else 0
+        assert pct_valid > 60, (
+            f"Expected >60% valid FPD for normal signal, got {pct_valid:.0f}%"
+        )
+
+        assert summary.get('pct_beats_no_repol', 100) < 50

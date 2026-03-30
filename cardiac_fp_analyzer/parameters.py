@@ -283,6 +283,16 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
     summary['fpd_values'] = np.array([p['fpd_ms'] / 1000 for p in all_params if not np.isnan(p['fpd_ms'])])
     summary['fpdc_values'] = np.array([p['fpdc_ms'] / 1000 for p in all_params if not np.isnan(p['fpdc_ms'])])
 
+    # ─── Repolarization detectability statistics ───
+    # Count beats where FPD could not be measured (repolarization not detectable).
+    # This is a clinically meaningful parameter: a drug that abolishes visible
+    # repolarization is high-risk for proarrhythmic effects.
+    n_total_beats = len(all_params)
+    n_no_repol = sum(1 for p in all_params if np.isnan(p['fpd_ms']))
+    summary['n_beats_no_repol'] = n_no_repol
+    summary['pct_beats_no_repol'] = (n_no_repol / n_total_beats * 100
+                                      if n_total_beats > 0 else 0.0)
+
     # ─── FPD confidence score ───
     fpd_arr = np.array(fpd_vals)
     fpd_arr = fpd_arr[~np.isnan(fpd_arr)]

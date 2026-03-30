@@ -99,39 +99,40 @@ class ArrhythmiaReport:
         """Manual (expert) weights — default mode.
 
         Component weights (sum=100):
-          CV beat period:     20  (Thomsen 2004)
-          Premature/delayed:  10  (Hondeghem 2001)
-          Morphology:         20  (Visone 2023)
-          EAD incidence:      20  (Visone 2023)
-          Amplitude CV:       10  (Visone 2023)
-          Poincaré STV:       10  (Hondeghem 2001)
-          Cessation:          10  (binary)
+          CV beat period:          18  (Thomsen 2004)
+          Premature/delayed:        8  (Hondeghem 2001)
+          Morphology:              18  (Visone 2023)
+          EAD incidence:           18  (Visone 2023)
+          Amplitude CV:             8  (Visone 2023)
+          Poincaré STV:            10  (Hondeghem 2001)
+          Cessation:               10  (binary)
+          Repol not detectable:    10  (flat T-wave / drug effect)
         """
         score = 0.0
 
-        # 1. Rhythm irregularity: CV of beat period (0-20)
+        # 1. Rhythm irregularity: CV of beat period (0-18)
         cv_bp = d.get('cv_bp_pct', 0)
         if cv_bp > 10:
-            score += min(20, (cv_bp - 10) / 30 * 20)
+            score += min(18, (cv_bp - 10) / 30 * 18)
 
-        # 2. Premature/delayed beat incidence (0-10)
+        # 2. Premature/delayed beat incidence (0-8)
         n_prem = d.get('n_premature', 0)
         n_del = d.get('n_delayed', 0)
         prem_pct = (n_prem + n_del) / n_beats * 100
-        score += min(10, prem_pct * 1.0)
+        score += min(8, prem_pct * 0.8)
 
-        # 3. Morphology instability (0-1 → 0-20)
+        # 3. Morphology instability (0-1 → 0-18)
         morph = d.get('morphology_instability', 0)
-        score += morph * 20
+        score += morph * 18
 
-        # 4. EAD incidence (% → 0-20)
+        # 4. EAD incidence (% → 0-18)
         ead_pct = d.get('ead_incidence_pct', 0)
-        score += min(20, ead_pct * 2.0)
+        score += min(18, ead_pct * 1.8)
 
-        # 5. Amplitude instability (CV → 0-10)
+        # 5. Amplitude instability (CV → 0-8)
         amp_cv = d.get('amplitude_cv_pct', 0)
         if amp_cv > 10:
-            score += min(10, (amp_cv - 10) / 30 * 10)
+            score += min(8, (amp_cv - 10) / 30 * 8)
 
         # 6. Poincaré STV of FPDcF (ms → 0-10)
         stv = d.get('poincare_stv_fpdc_ms', 0)
@@ -141,6 +142,15 @@ class ArrhythmiaReport:
         # 7. Cessation / pauses (binary → 0-10)
         if d.get('has_pauses', False):
             score += 10
+
+        # 8. Repolarization not detectable (% beats → 0-10)
+        # A drug that abolishes visible repolarization in a significant
+        # fraction of beats is high-risk for proarrhythmic effects.
+        # This captures the clinical concept of "flat T-wave" which
+        # indicates severe ion channel disruption.
+        pct_no_repol = d.get('pct_beats_no_repol', 0)
+        if pct_no_repol > 5:  # >5% to ignore occasional noise
+            score += min(10, (pct_no_repol - 5) / 45 * 10)
 
         self.risk_score = int(min(100, round(score)))
 
@@ -251,6 +261,11 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs,
         'n_beats': len(beat_indices),
         'bpm': 60000 / mean_bp if mean_bp > 0 else 0,
     })
+
+    # ── Repolarization detectability from parameter summary ──
+    if summary:
+        report.details['pct_beats_no_repol'] = summary.get('pct_beats_no_repol', 0)
+        report.details['n_beats_no_repol'] = summary.get('n_beats_no_repol', 0)
 
     # ── Statistical analysis (original) ────────────────────────────────
 

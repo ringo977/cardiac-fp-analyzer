@@ -85,6 +85,32 @@ def plot_signal(result, key_suffix=""):
             opacity=0.5
         ))
 
+    # Repolarization peaks (same logic as PDF summary): aligned to QC beat_indices + all_params
+    bi_clean = np.asarray(result.get('beat_indices', []), dtype=int)
+    all_params = result.get('all_params') or []
+    bi_to_repol = {}
+    for k, bi_dep in enumerate(bi_clean):
+        if k >= len(all_params):
+            break
+        g = all_params[k].get('repol_peak_global_idx')
+        if g is not None:
+            bi_to_repol[int(bi_dep)] = int(g)
+    repol_gi = []
+    for bi in included_bi:
+        gi = bi_to_repol.get(int(bi))
+        if gi is not None and 0 <= gi < len(sig):
+            repol_gi.append(gi)
+    if repol_gi:
+        repol_gi = np.asarray(repol_gi, dtype=int)
+        fig.add_trace(go.Scatter(
+            x=t[repol_gi], y=sig[repol_gi],
+            mode='markers', name=T('repol_peak_markers'),
+            marker=dict(
+                color='#1b9e77', size=8, symbol='triangle-up',
+                line=dict(width=1, color='black'),
+            ),
+        ))
+
     fig.update_layout(
         xaxis_title=T('time_s'), yaxis_title=y_label,
         height=400, margin=dict(t=30, b=40),
