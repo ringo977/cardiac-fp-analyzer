@@ -110,6 +110,17 @@ TRANSLATIONS = {
         'cdisc_success': 'Pacchetto CDISC SEND generato: TS, DM, EX, EG, RISK + define.xml',
         'cdisc_error': 'Errore export CDISC',
         'cdisc_settings': 'Impostazioni CDISC SEND',
+        'cdisc_pyreadstat_missing': (
+            'pyreadstat non installato — l\'export CDISC produrrà file .xpt '
+            'in formato CSV (marker nell\'header), NON validi per la submission '
+            'regolatoria. Per l\'export .xpt reale: `pip install pyreadstat` '
+            'oppure `pip install -e ".[cdisc]"`.'
+        ),
+        'cdisc_fallback_used': (
+            'Export completato con fallback CSV: i file .xpt contengono CSV '
+            'con header di avviso e non sono regulatory-grade. Installa '
+            'pyreadstat e rilancia l\'export per output conforme.'
+        ),
         'study_id': 'Study ID',
         'study_id_help': 'Identificativo dello studio per i file CDISC SEND',
         'export_config': 'Esporta config',
@@ -293,6 +304,17 @@ TRANSLATIONS = {
         'cdisc_success': 'CDISC SEND package generated: TS, DM, EX, EG, RISK + define.xml',
         'cdisc_error': 'CDISC export error',
         'cdisc_settings': 'CDISC SEND Settings',
+        'cdisc_pyreadstat_missing': (
+            'pyreadstat is not installed — the CDISC export will write .xpt '
+            'files as CSV (with a warning header), which are NOT valid for '
+            'regulatory submission. For real .xpt output run: '
+            '`pip install pyreadstat` or `pip install -e ".[cdisc]"`.'
+        ),
+        'cdisc_fallback_used': (
+            'Export completed using the CSV fallback: the .xpt files contain '
+            'CSV with a warning header and are NOT regulatory-grade. Install '
+            'pyreadstat and re-run the export for a conformant package.'
+        ),
         'study_id': 'Study ID',
         'study_id_help': 'Study identifier for CDISC SEND files',
         'export_config': 'Export config',

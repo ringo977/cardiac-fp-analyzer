@@ -292,3 +292,95 @@ class TestCdiscExport:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = export_send_package([], tmpdir)
             assert isinstance(output, dict)
+
+    def test_backend_helpers_return_bool(self):
+        """has_pyreadstat() and has_xport() must return booleans
+        without crashing, regardless of the environment."""
+        from cardiac_fp_analyzer.cdisc_export import (
+            has_pyreadstat,
+            has_xport,
+            xpt_backend,
+        )
+        assert isinstance(has_pyreadstat(), bool)
+        assert isinstance(has_xport(), bool)
+        assert xpt_backend() in ('pyreadstat', 'xport', 'csv_fallback')
+
+    def test_xpt_backend_matches_helpers(self):
+        """xpt_backend() precedence must agree with the boolean helpers."""
+        from cardiac_fp_analyzer.cdisc_export import (
+            has_pyreadstat,
+            has_xport,
+            xpt_backend,
+        )
+        backend = xpt_backend()
+        if has_pyreadstat():
+            assert backend == 'pyreadstat'
+        elif has_xport():
+            assert backend == 'xport'
+        else:
+            assert backend == 'csv_fallback'
+
+    def test_export_returns_backend_used(self):
+        """export_send_package must include `backend_used` in the returned
+        dict, and the value must equal xpt_backend() for a non-empty run."""
+        from cardiac_fp_analyzer.cdisc_export import (
+            export_send_package,
+            xpt_backend,
+        )
+        results = make_minimal_results()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = export_send_package(results, tmpdir)
+            assert 'backend_used' in output
+            assert output['backend_used'] in (
+                'pyreadstat', 'xport', 'csv_fallback'
+            )
+            # Multi-domain export: the package-level backend should match
+            # what xpt_backend() reports for this environment (all domains
+            # use the same import, so no downgrade path exists here).
+            assert output['backend_used'] == xpt_backend()
+
+    def test_empty_export_reports_backend_from_environment(self):
+        """With empty results no domain is written, but backend_used must
+        still reflect what WOULD be used so the GUI can warn honestly."""
+        from cardiac_fp_analyzer.cdisc_export import (
+            export_send_package,
+            xpt_backend,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = export_send_package([], tmpdir)
+            assert output.get('backend_used') == xpt_backend()
+
+    def test_csv_fallback_writes_warning_header(self):
+        """When the CSV fallback is used, the .xpt files must carry an
+        explicit header marker so a human opening the file sees it is
+        NOT a real SAS Transport."""
+        from cardiac_fp_analyzer.cdisc_export import (
+            export_send_package,
+            xpt_backend,
+        )
+        if xpt_backend() != 'csv_fallback':
+            import pytest
+            pytest.skip("pyreadstat or xport installed — fallback not exercised")
+        results = make_minimal_results()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = export_send_package(results, tmpdir)
+            xpt_files = [p for p in output['files'] if str(p).endswith('.xpt')]
+            assert xpt_files, "export should have produced at least one .xpt"
+            with open(xpt_files[0]) as f:
+                header = f.readline()
+            assert header.startswith('#') and 'CSV fallback' in header
+
+    def test_summary_flags_fallback_package(self):
+        """The README summary must flag packages written via csv_fallback
+        so anyone sharing the zip downstream can see the status."""
+        from cardiac_fp_analyzer.cdisc_export import (
+            export_send_package,
+            xpt_backend,
+        )
+        if xpt_backend() != 'csv_fallback':
+            import pytest
+            pytest.skip("pyreadstat or xport installed — fallback not exercised")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = export_send_package(make_minimal_results(), tmpdir)
+            assert 'NOT regulatory-grade' in output['summary'] \
+                or 'CSV placeholders' in output['summary']

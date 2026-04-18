@@ -1,15 +1,31 @@
-# Core dependencies (always required)
+# Runtime dependencies for cardiac-fp-analyzer.
+#
+# This file is the "convenience bundle" — installing it gives you core +
+# GUI + Excel reports. It does NOT pull the regulatory CDISC SEND .xpt
+# backend, which is a separate opt-in (see the commented block below).
+#
+# For a fully granular install driven by pyproject.toml extras, use
+# `pip install -e ".[gui,reports]"`  or  `pip install -e ".[all]"` for
+# everything including CDISC.
+
+# ── Core (always required) ──
 numpy>=1.22,<2.0
 pandas>=1.4,<3.0
 scipy>=1.8,<2.0
 matplotlib>=3.5,<4.0
 
-# GUI (streamlit app.py)
+# ── GUI (streamlit app.py) ──
 streamlit>=1.24,<2.0
 plotly>=5.0,<6.0
 
-# Excel/PDF reports
+# ── Excel/PDF reports ──
 xlsxwriter>=3.0,<4.0
 
-# CDISC SEND export (.xpt)
-pyreadstat>=1.2,<2.0
+# ── CDISC SEND .xpt export (OPTIONAL — regulatory use only) ──
+#
+# Without pyreadstat installed, the CDISC export falls back to CSV with
+# an in-file warning header and the GUI surfaces a warning banner.
+# Uncomment to enable real SAS-Transport .xpt output, or install via:
+#     pip install -e ".[cdisc]"
+#
+# pyreadstat>=1.2,<2.0

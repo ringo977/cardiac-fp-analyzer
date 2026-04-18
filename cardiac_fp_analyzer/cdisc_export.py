@@ -42,6 +42,60 @@ from . import __version__
 logger = logging.getLogger(__name__)
 
 
+# ── XPT backend availability helpers ──────────────────────────────────
+# CDISC SEND submissions expect SAS Transport v5 (.xpt). We support two
+# backends — `pyreadstat` (preferred: writes column labels) and the
+# pure-Python `xport` library (no labels, but valid XPT). When neither is
+# installed the writer falls back to CSV with an in-file warning header,
+# which is non-conformant for regulatory submission but avoids hard
+# failure for users who never touch the CDISC export.
+#
+# These helpers are public so the GUI can warn the user BEFORE they
+# trigger an export that would silently degrade.
+
+
+def has_pyreadstat() -> bool:
+    """True if the `pyreadstat` package is importable.
+
+    `pyreadstat` is the preferred .xpt backend because it preserves
+    SENDIG variable labels. Without it the export still runs (via the
+    `xport` library or CSV fallback), but the output may not be
+    submission-grade.
+    """
+    try:
+        import pyreadstat  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def has_xport() -> bool:
+    """True if the pure-Python `xport` library is importable."""
+    try:
+        import xport  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def xpt_backend() -> str:
+    """Return the .xpt backend that will be used for the next export.
+
+    Returns
+    -------
+    str
+        - ``'pyreadstat'`` — preferred (writes labels)
+        - ``'xport'``      — fallback (no labels, valid XPT)
+        - ``'csv_fallback'`` — neither backend installed; export is
+          NOT regulatory-conformant
+    """
+    if has_pyreadstat():
+        return 'pyreadstat'
+    if has_xport():
+        return 'xport'
+    return 'csv_fallback'
+
+
 # ── SEND Controlled Terminology (NCI CT 2025-09-26) ─────────────────
 # Variable labels MUST match SENDIG 3.1 specification exactly.
 
@@ -1109,7 +1163,7 @@ def _write_xpt(df: pd.DataFrame, filepath: Path, dataset_name: str,
             )
         except TypeError:
             pyreadstat.write_xport(df_sas, filepath, table_name=dataset_name[:8])
-        return
+        return 'pyreadstat'
     except ImportError:
         pass
 
@@ -1118,19 +1172,33 @@ def _write_xpt(df: pd.DataFrame, filepath: Path, dataset_name: str,
         import xport
         with open(filepath, 'wb') as f:
             xport.from_dataframe(df_sas, f)
-        return
+        return 'xport'
     except ImportError:
         pass
 
-    # Final fallback: CSV
+    # Final fallback: CSV with explicit header marker.
+    # NOTE: keeps the .xpt filename so downstream packaging (zip filter
+    # in ui/reports.py) still picks the file up; the in-file header makes
+    # it obvious to a human reviewer that this is NOT a real SAS Transport
+    # file. The caller (`export_send_package`) propagates the
+    # 'csv_fallback' return value into its return dict so the GUI can
+    # surface a banner instead of letting the user submit a non-conformant
+    # package unknowingly.
     warnings.warn(
-        f"xport and pyreadstat not available. Writing {filepath.name} as CSV. "
-        "Install pyreadstat: pip install pyreadstat",
-        UserWarning
+        f"CDISC export: pyreadstat and xport are both unavailable. "
+        f"Writing {filepath.name} as CSV with a warning header — this "
+        f"file is NOT a valid SAS Transport (.xpt) and is unsuitable "
+        f"for regulatory submission. To enable real .xpt output: "
+        f"pip install pyreadstat   (or: pip install -e \".[cdisc]\")",
+        UserWarning,
+        stacklevel=2,
     )
     with open(filepath, 'w', encoding='utf-8') as f:
-        f.write("# WARNING: CSV fallback. pip install pyreadstat\n")
+        f.write("# WARNING: CSV fallback (NOT a real SAS Transport file).\n")
+        f.write("# Install pyreadstat for regulatory-grade output:\n")
+        f.write("#   pip install pyreadstat\n")
         df_sas.to_csv(f, index=False)
+    return 'csv_fallback'
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1166,6 +1234,10 @@ def export_send_package(
         'files' : list of Path — generated files
         'datasets' : dict of DataFrames
         'summary' : str — human-readable summary
+        'backend_used' : str — `'pyreadstat'`, `'xport'`, or
+            `'csv_fallback'`. When `'csv_fallback'` the .xpt files are
+            CSV placeholders (not regulatory-grade) — the GUI should
+            warn the user.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1302,11 +1374,22 @@ def export_send_package(
         'SUPPEG': 'Supplemental Qualifiers for EG',
     }
 
+    # Precedence when multiple domains report different backends:
+    # pyreadstat > xport > csv_fallback (report the weakest link so the
+    # user sees the worst-case status of the package).  Initialise from
+    # `xpt_backend()` so that the empty-results case still reflects the
+    # environment correctly (no domain ever calls _write_xpt → nothing
+    # would downgrade an optimistic default).
+    _backend_rank = {'pyreadstat': 0, 'xport': 1, 'csv_fallback': 2}
+    backend_used: str = xpt_backend()
+
     for domain, df in datasets.items():
         if df.empty:
             continue
         xpt_path = output_dir / f"{domain.lower()}.xpt"
-        _write_xpt(df, xpt_path, domain, labels.get(domain, domain))
+        domain_backend = _write_xpt(df, xpt_path, domain, labels.get(domain, domain))
+        if _backend_rank.get(domain_backend, 99) > _backend_rank[backend_used]:
+            backend_used = domain_backend
         files.append(xpt_path)
 
     # ── Write Define-XML ──
@@ -1346,7 +1429,19 @@ def export_send_package(
         f"",
         f"Files generated: {len(files)}",
         f"Output directory: {output_dir}",
+        f"XPT backend: {backend_used}",
     ])
+    if backend_used == 'csv_fallback':
+        summary_lines.extend([
+            "",
+            "*** WARNING: pyreadstat / xport are not installed.",
+            "*** The .xpt files in this package are CSV placeholders",
+            "*** with a warning header — they are NOT valid SAS Transport",
+            "*** files and are NOT suitable for regulatory submission.",
+            "*** To enable real .xpt output:",
+            "***     pip install pyreadstat",
+            "***   (or:  pip install -e \".[cdisc]\")",
+        ])
     summary = '\n'.join(summary_lines)
 
     (output_dir / 'README.txt').write_text(summary, encoding='utf-8')
@@ -1356,4 +1451,5 @@ def export_send_package(
         'files': files,
         'datasets': datasets,
         'summary': summary,
+        'backend_used': backend_used,
     }

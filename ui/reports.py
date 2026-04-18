@@ -70,13 +70,18 @@ def download_reports(results, config, data_dir):
         )
 
     with cols[3]:
+        # Pre-flight check: warn if pyreadstat is missing BEFORE the user
+        # triggers an export that would silently fall back to CSV.
+        from cardiac_fp_analyzer.cdisc_export import has_pyreadstat
+        if not has_pyreadstat():
+            st.warning(f"⚠️ {T('cdisc_pyreadstat_missing')}")
         if st.button("🏛️ Export CDISC SEND", use_container_width=True):
             with st.spinner("Generazione pacchetto CDISC SEND (.xpt + define.xml)..."):
                 try:
                     from cardiac_fp_analyzer.cdisc_export import export_send_package
                     cdisc_dir = tempfile.mkdtemp()
                     study_id = st.session_state.get('cdisc_study_id', 'CIPA001')
-                    export_send_package(results, cdisc_dir, study_id=study_id)
+                    result = export_send_package(results, cdisc_dir, study_id=study_id)
 
                     # Zip all .xpt and .xml files
                     buf = io.BytesIO()
@@ -92,7 +97,13 @@ def download_reports(results, config, data_dir):
                         mime="application/zip",
                         use_container_width=True
                     )
-                    st.success(f"{T('cdisc_success')} TS, DM, EX, EG, RISK + define.xml")
+                    # Post-flight: honest status about the backend that was
+                    # actually used.  `csv_fallback` means the .xpt files
+                    # are CSV placeholders and must not be submitted.
+                    if result.get('backend_used') == 'csv_fallback':
+                        st.warning(f"⚠️ {T('cdisc_fallback_used')}")
+                    else:
+                        st.success(f"{T('cdisc_success')} TS, DM, EX, EG, RISK + define.xml")
                 except (OSError, ValueError, KeyError, ImportError, RuntimeError) as e:
                     st.error(f"{T('error')} export CDISC: {e}")
                     st.code(traceback.format_exc())
