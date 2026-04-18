@@ -1,10 +1,21 @@
 # Assessment tecnico — Cardiac FP Analyzer v3.3.0
 
-**Data**: 18 aprile 2026 (revisione 1)
+**Data**: 18 aprile 2026 (revisione 2)
 **Autore assessment**: revisione indipendente del codebase
-**Stato test suite**: 138/138 passati, ruff clean
+**Stato test suite**: 150/150 passati, ruff clean
 **Scope**: tutto il pacchetto (`cardiac_fp_analyzer/`, `ui/`, `tests/`, packaging)
 
+> **Addendum revisione 2** — Sprint 1 items 2 e 3 completati:
+> - §3.1 (config duplicati) risolto: rename `cv_good/cv_fair/cv_marginal
+>   → *_frac` in `BeatDetectionConfig`, rimossi i dead field omonimi da
+>   `ChannelSelectionConfig`, migrazione legacy JSON in `from_dict`.
+>   Commit `47d203a`, 6 test di regressione.
+> - §3.3 (CDISC fallback) trattato in modalità "soft": `pyreadstat` resta
+>   optional extra, ma l'export espone `backend_used` nel return dict, la
+>   UI mostra banner pre-/post-flight se è stato usato `csv_fallback`, e
+>   il summary README flagga i pacchetti non-regulatory-grade. Commit
+>   `a4a346b`, 6 test di regressione.
+>
 > **Addendum revisione 1** — Dopo un'ispezione più approfondita, la sezione
 > 3.2 è stata riscritta: il "template truncation bug" segnalato inizialmente
 > si è rivelato un falso positivo (codice difensivo inoperante, non un bug
@@ -40,25 +51,53 @@ L'impressione complessiva è quella di un codice **scritto velocemente da un age
 
 ## 3. Problemi CRITICI verificati
 
-### 3.1 Parametri duplicati con unità incompatibili in config.py
-**File**: `cardiac_fp_analyzer/config.py`, righe 75–79 e 503–506
+### 3.1 Parametri duplicati con unità incompatibili in config.py ✅ FIXED
+**File**: `cardiac_fp_analyzer/config.py`
+**Stato**: risolto sul branch `fix/config-cv-good-rename`
+(commit `47d203a`, merged in `main`)
+
+**Diagnosi originale**:
 
 ```python
-# In BeatDetectionConfig:
+# In BeatDetectionConfig (righe 75–79):
 cv_good: float = 0.15        # frazione (15%)
 cv_fair: float = 0.30
 cv_marginal: float = 0.50
 bp_ideal_range_s: tuple = (0.4, 3.0)
 
-# In ChannelSelectionConfig:
+# In ChannelSelectionConfig (righe 503–506):
 cv_good: float = 20.0        # numero (20%) — UNITÀ DIVERSA
 cv_fair: float = 35.0
 bp_ideal_range_s: tuple = (0.3, 4.0)  # range diverso
 ```
 
-Stesso nome semantico, stessa entità fisica, **valori in unità diverse** (frazione vs percentuale) e **soglie diverse** (15% vs 20%). Modificare l'una non modifica l'altra; un utente che esporta/importa la config tramite JSON e ne tocca un campo si troverà comportamenti incoerenti fra `beat_detection` e `channel_selection`.
+Stesso nome semantico, stessa entità fisica, valori in unità diverse
+(frazione vs percentuale) e soglie diverse. Un utente che esporta/importa
+la config tramite JSON si sarebbe trovato comportamenti incoerenti fra
+`beat_detection` e `channel_selection`.
 
-**Intervento**: spostare i parametri condivisi in una `CommonThresholds` e referenziarli da entrambe; o almeno uniformare le unità (sempre frazione 0–1).
+**Intervento applicato**:
+
+1. **`BeatDetectionConfig`**: rinominati `cv_good/cv_fair/cv_marginal →
+   cv_good_frac/cv_fair_frac/cv_marginal_frac`. Il suffisso `_frac`
+   rende esplicita l'unità (frazione 0–1) direttamente nel nome del
+   campo, prevenendo futuri equivoci.
+2. **`ChannelSelectionConfig`**: rimossi interamente `cv_excellent/
+   cv_good/cv_fair`. Verifica con `grep`: nessun file del pacchetto
+   leggeva questi campi. Lo scoring di regolarità usa la formula lineare
+   `w_regularity_max - cv_pct * w_regularity_slope` (vedi
+   `channel_selection.select_best_channel`), non soglie a scalini.
+   Erano dead code E semantic trap.
+3. **Back-compat JSON**: aggiunta migrazione legacy in
+   `AnalysisConfig.from_dict` che riscrive i nomi vecchi su quelli
+   nuovi prima del loop generico; i config salvati con v3.3.0 o
+   precedenti continuano a caricarsi correttamente.
+4. **Callsites**: aggiornati i 3 punti in `beat_detection.py:388–390`
+   che leggevano i campi rinominati.
+5. **Test**: 6 nuovi test di regressione in `TestCvThresholdRename`
+   (`tests/test_config.py`) coprono i campi presenti/rimossi, la
+   migrazione legacy da JSON, il round-trip, e il caso "dict contiene
+   sia nome vecchio sia nuovo" (vince il nuovo).
 
 ### 3.2 Finestra di segmentazione troppo stretta per ritmi lenti ✅ FIXED
 **File**: `cardiac_fp_analyzer/analyze.py:113–116` e `channel_selection.py:71`
@@ -139,14 +178,55 @@ cerca le cause di problemi veri: va eliminato in un futuro refactor
 (o coperto da un invariante `assert all(len(b) == len(aligned[0]))`
 che lo documenti come precondizione).
 
-### 3.3 Fallback CDISC SEND non regulatory-compliant
-**File**: `cardiac_fp_analyzer/cdisc_export.py`, righe 1116–1133
+### 3.3 Fallback CDISC SEND non regulatory-compliant ✅ FIXED (soft)
+**File**: `cardiac_fp_analyzer/cdisc_export.py`, `ui/reports.py`
+**Stato**: risolto sul branch `fix/pyreadstat-soft-extra`
+(commit `a4a346b`, merged in `main`)
 
-Se `pyreadstat` e `xport` mancano, il codice scrive **CSV sotto un nome `.xpt`**, con un commento `# WARNING` come prima riga e un `UserWarning` Python. Una sottomissione CDISC con file CSV mascherati da XPORT v5 viene rifiutata da qualsiasi reviewer FDA.
+**Diagnosi originale**: se `pyreadstat` e `xport` mancano, il codice
+scriveva CSV sotto un nome `.xpt` con solo un `UserWarning` Python.
+Un utente poteva generare e condividere un pacchetto SEND convinto che
+fosse regulatory-grade senza mai vedere il warning (filtri `simplefilter`,
+ambiente production, ecc.).
 
-Il problema è strutturale: `pyreadstat` è dichiarato dipendenza opzionale (`extras_require=["cdisc"]`), ma una funzionalità "regulatory-grade" non può essere opzionale.
+**Intervento applicato** (modalità soft, su richiesta di Marco per non
+bloccare chi non usa CDISC):
 
-**Intervento**: rendere `pyreadstat` dipendenza obbligatoria del gruppo `cdisc`; in `export_send_package()` fare un check `try: import pyreadstat` all'inizio e sollevare `RuntimeError` chiaro se manca, **prima** di scrivere qualsiasi file.
+1. **Packaging**: `pyreadstat` resta optional extra in `pyproject.toml`
+   (`[cdisc]`); rimosso da `requirements.txt` core, con blocco
+   commented-out e istruzioni di install. La dipendenza è "obbligatoria
+   solo se usi l'export CDISC".
+2. **API pubblica**: tre helper in `cdisc_export` (`has_pyreadstat()`,
+   `has_xport()`, `xpt_backend()`) che la UI usa per introspection.
+3. **Return dict arricchito**: `export_send_package` restituisce
+   `backend_used ∈ {'pyreadstat', 'xport', 'csv_fallback'}`; la
+   precedenza è worst-case (il peggiore fra i domain); su dataset vuoti
+   riflette comunque l'ambiente.
+4. **Summary README**: se `backend_used == 'csv_fallback'` il file
+   `README.txt` del pacchetto include un blocco di warning multi-riga
+   "*** NOT regulatory-grade ***" — visibile anche quando il pacchetto
+   viene condiviso in seconda mano, non solo all'operatore che lo genera.
+5. **UI banner**: `ui/reports.py` fa pre-flight check con
+   `has_pyreadstat()` e mostra `st.warning` sopra il bottone CDISC se
+   manca; dopo l'export, se `backend_used == 'csv_fallback'`, sostituisce
+   il messaggio di successo con un `st.warning` post-flight (invece di
+   `st.success`).
+6. **Warning in-file**: aggiornato il marker CSV con 3 righe di commento
+   (pip install hint); warning Python con `stacklevel=2` per puntare al
+   caller.
+7. **i18n**: 2 nuove chiavi (IT+EN) `cdisc_pyreadstat_missing` e
+   `cdisc_fallback_used`.
+8. **Test**: 6 nuovi test di regressione in `TestCdiscExport`
+   (`tests/test_modules.py`) coprono helper, precedenza, presenza di
+   `backend_used` nel dict, header marker nei file CSV di fallback,
+   flag nel summary quando siamo in fallback.
+
+**Nota sul trade-off scelto**: la versione "hard" (RuntimeError se
+`pyreadstat` manca) sarebbe stata più regulatory-strict ma avrebbe
+imposto un import onerous a chi non usa CDISC. La versione "soft"
+garantisce che **nessun utente possa submittere un pacchetto CSV
+pensando che sia .xpt**: tre gate (banner pre-flight + warning
+post-flight + README flag) lo rendono impossibile da mancare.
 
 ### 3.4 Nessuna cache Streamlit nella UI
 **Verifica**: `grep -r "@st.cache" .` → 0 occorrenze.
@@ -229,9 +309,9 @@ Diversi test usano pattern tautologici tipo `assert spike_amplitude_mV > 0` o `a
 In ordine di rapporto valore/sforzo decrescente:
 
 **Sprint 1 — risolvere i bug silenti (1–2 giorni)**
-1. ✅ Fix search-window truncation in `analyze.py`/`channel_selection.py` (CRITICO 3.2 — commit `04ecb23`)
-2. Uniformare parametri duplicati in `config.py` (CRITICO 3.1)
-3. Rendere `pyreadstat` obbligatorio per CDISC + check upfront (CRITICO 3.3, spostato da Sprint 2)
+1. ✅ Fix search-window truncation in `analyze.py`/`channel_selection.py` (CRITICO 3.2 — commit `04ecb23` + UI cap `275efbe`)
+2. ✅ Uniformare parametri duplicati in `config.py` (CRITICO 3.1 — commit `47d203a`)
+3. ✅ Gestione `pyreadstat` per CDISC — approccio soft con banner UI (CRITICO 3.3 — commit `a4a346b`)
 4. Aggiungere `@st.cache_data` su `load_csv`, `analyze_single_file`, `minmax_downsample` (CRITICO 3.4)
 5. Estendere try/except del batch e includere errori pandas (4.1)
 6. Aggiungere `assert` di invariante o rimuovere il pattern `min_len` inoperante in `parameters.py:111`, `quality_control.py:191`, `residual_analysis.py:28` (cleanup non critico documentato in 3.2)
