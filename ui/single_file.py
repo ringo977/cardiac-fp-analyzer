@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from cardiac_fp_analyzer.config import AnalysisConfig
+from cardiac_fp_analyzer.rhythm_integration import render_rhythm_badge_html
 from ui.cache import analyze_single_file_cached
 from ui.display import plot_beats, plot_signal, show_arrhythmia, show_params_table
 from ui.i18n import T
@@ -100,6 +101,12 @@ def _display_single_channel(result, config):
     cols[2].metric("QC Grade", qc.grade if qc else '?')
     cols[3].metric(T('fpdc'), f"{summary.get('fpdc_ms_mean', 0):.1f} ± {summary.get('fpdc_ms_std', 0):.1f}")
     cols[4].metric(T('risk_score'), f"{ar.risk_score}/100" if ar else '?')
+
+    # ── Rhythm topology badge (Sprint 2 #3 integration) ──
+    rc = (result.get('detection_info') or {}).get('rhythm_classification') or {}
+    badge_html = render_rhythm_badge_html(rc.get('rhythm_type'), rc.get('flags'))
+    if badge_html:
+        st.markdown(badge_html, unsafe_allow_html=True)
 
     # ── Tabs ──
     tab_signal, tab_beats, tab_params, tab_arrhythmia = st.tabs([

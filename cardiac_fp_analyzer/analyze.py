@@ -24,6 +24,11 @@ from cardiac_fp_analyzer.loader import load_csv, parse_filename
 from cardiac_fp_analyzer.parameters import extract_all_parameters
 from cardiac_fp_analyzer.quality_control import validate_beats
 from cardiac_fp_analyzer.report import generate_excel_report, generate_pdf_report
+from cardiac_fp_analyzer.rhythm_integration import (
+    apply_rhythm_filter,
+    apply_rhythm_qc_downgrade,
+    build_rhythm_summary_fields,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -215,9 +220,42 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
             for note in qc_report.notes:
                 print(f"    >> {note}")
 
-        # Use cleaned beats for parameter extraction (FPD, spike amplitude, etc.)
-        all_p, summary = extract_all_parameters(bd_clean, btm_clean, bi_clean, fs,
+        # ─── Rhythm-topology-aware beat filtering (Sprint 2 #3) ───
+        # For rhythm types where the "secondary" / "noise" amplitude
+        # clusters would contaminate the template (alternans 2:1,
+        # ectopics, noise, trimodal), restrict parameter extraction to
+        # the dominant cluster only. Regular/chaotic/ambiguous signals
+        # pass through unchanged.
+        rc = det.get('rhythm_classification', {}) if isinstance(det, dict) else {}
+        bd_fpd, btm_fpd, bi_fpd, rhythm_filter_info = apply_rhythm_filter(
+            bd_clean, btm_clean, bi_clean, bi,
+            rhythm_classification=rc,
+            enable=getattr(config.beat_detection, 'enable_rhythm_aware_fpd', True),
+        )
+        if verbose and rhythm_filter_info.get('filter_applied'):
+            print(f"  Rhythm filter ({rhythm_filter_info['rhythm_type']}): "
+                  f"kept {rhythm_filter_info['n_kept']}/{rhythm_filter_info['n_input']} "
+                  f"beats ({rhythm_filter_info['kept_role']} cluster only)")
+
+        # Apply QC downgrade for noise-contaminated signals (mutates qc_report.grade).
+        _qc_downgrade_info = apply_rhythm_qc_downgrade(
+            qc_report, rc,
+            downgrade_threshold=getattr(config.beat_detection,
+                                         'rhythm_qc_downgrade_threshold', 0.30),
+            downgrade_steps=getattr(config.beat_detection,
+                                     'rhythm_qc_downgrade_steps', 1),
+            enable=getattr(config.beat_detection, 'enable_rhythm_aware_fpd', True),
+        )
+        if verbose and _qc_downgrade_info.get('applied'):
+            print(f"  QC downgrade: {_qc_downgrade_info['grade_before']} → "
+                  f"{_qc_downgrade_info['grade_after']} "
+                  f"(noise_ratio={_qc_downgrade_info['noise_ratio']:.2f})")
+
+        # Use (possibly filtered) beats for parameter extraction.
+        all_p, summary = extract_all_parameters(bd_fpd, btm_fpd, bi_fpd, fs,
                                                  cfg=rep_cfg)
+        # Merge rhythm-classification-derived fields into summary (additive).
+        summary.update(build_rhythm_summary_fields(rc, rhythm_filter_info))
 
         # Beat period from ALL detected beats (timing is reliable even for
         # morphologically marginal beats) — avoids artificial gaps from QC rejection.
