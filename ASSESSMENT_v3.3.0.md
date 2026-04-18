@@ -1,10 +1,29 @@
 # Assessment tecnico — Cardiac FP Analyzer v3.3.0
 
-**Data**: 18 aprile 2026 (revisione 3)
+**Data**: 18 aprile 2026 (revisione 4)
 **Autore assessment**: revisione indipendente del codebase
-**Stato test suite**: 158/158 passati, ruff clean
+**Stato test suite**: 177/177 passati, ruff clean
 **Scope**: tutto il pacchetto (`cardiac_fp_analyzer/`, `ui/`, `tests/`, packaging)
 
+> **Addendum revisione 4** — Sprint 1 item 5 completato:
+> - §4.1 (gestione errori asimmetrica nel batch) risolto: introdotto
+>   `_BATCH_SAFE_EXCEPTIONS` come tupla module-level che include
+>   `pd.errors.ParserError`, `pd.errors.EmptyDataError`, `UnicodeError`
+>   oltre alle eccezioni legacy (`KeyError`, `ValueError`, `IndexError`,
+>   `RuntimeError`, `AssertionError`, `FileNotFoundError`, `OSError`).
+>   La stessa whitelist è ora usata in tre punti (l'`except` interno di
+>   `analyze_single_file`, il loop seriale di `batch_analyze`, il
+>   `future.result()` del ramo parallelo) eliminando l'asimmetria.
+>   Nuovo wrapper `_safe_analyze()` centralizza il contratto di ritorno
+>   `(result, error_str)` consumato dal ramo seriale, che prima non
+>   aveva alcun `try/except`. Commit `b977c45`, 19 test di regressione
+>   in `tests/test_batch_error_handling.py` (whitelist shape,
+>   `_safe_analyze` su 5 fixture di CSV rotti incluso binario non-UTF8,
+>   resilience del ramo seriale, single-bad-file shortcut con
+>   `n_workers>1`, widening dell'eccezione su `analyze_single_file`
+>   parametrizzato sui 4 writer, fixture-drift guard sui tipi di errore
+>   pandas).
+>
 > **Addendum revisione 3** — Sprint 1 item 4 completato:
 > - §3.4 (nessuna cache Streamlit) risolto: nuovo modulo `ui/cache.py`
 >   con wrapper thin `load_csv_cached` e `analyze_single_file_cached`
@@ -290,14 +309,20 @@ quello load protegge dalla crescita illimitata della memoria.
 
 ## 4. Problemi IMPORTANTI
 
-### 4.1 Gestione errori asimmetrica nel batch
-**File**: `cardiac_fp_analyzer/analyze.py`, righe 280–298
+### 4.1 Gestione errori asimmetrica nel batch ✅ FIXED (rev 4, commit `b977c45`)
+**File**: `cardiac_fp_analyzer/analyze.py`, righe 280–298 (pre-fix)
 
-Nel ramo **parallelo** (`ProcessPoolExecutor`) c'è un `try/except (KeyError, ValueError, IndexError, RuntimeError, OSError)` che cattura e logga. Nel ramo **seriale** (chiamato quando `n_workers=1` o `len(csv_files)==1`) **non c'è alcun try/except**: una `pd.errors.ParserError` o un file con encoding strano fa crashare l'intero batch.
+**Diagnosi originaria**: nel ramo **parallelo** (`ProcessPoolExecutor`) c'era un `try/except (KeyError, ValueError, IndexError, RuntimeError, OSError)` che catturava e loggava. Nel ramo **seriale** (chiamato quando `n_workers=1` o `len(csv_files)==1`) **non c'era alcun try/except**: una `pd.errors.ParserError` o un file con encoding strano faceva crashare l'intero batch. Inoltre `pd.errors.ParserError` non è sottoclasse di nessuna delle eccezioni catturate nel ramo parallelo, quindi crashava anche lì.
 
-Inoltre `pd.errors.ParserError` non è sottoclasse di nessuna delle eccezioni catturate nel ramo parallelo, quindi crasha anche lì.
+**Intervento applicato**:
+1. Definita whitelist module-level `_BATCH_SAFE_EXCEPTIONS` come tupla canonica:
+   `(KeyError, ValueError, IndexError, RuntimeError, AssertionError, FileNotFoundError, OSError, UnicodeError, pd.errors.ParserError, pd.errors.EmptyDataError)`.
+2. Riscritto l'`except` interno di `analyze_single_file` per usare la whitelist (prima escludeva pandas errors e UnicodeError → propagavano fuori dall'helper).
+3. Aggiunto wrapper `_safe_analyze(filepath, ...)` che ritorna `(result, error_str)` — `error_str` è `None` in caso di successo, una stringa `"<ExceptionType>: <msg>"` in caso di failure, e `"analysis_returned_none"` quando l'analizzatore ritorna `None` senza eccezioni.
+4. Il loop seriale di `batch_analyze` ora instrada **ogni** file attraverso `_safe_analyze()` (prima nessun try/except: un solo file rotto crashava l'intero batch).
+5. Il `future.result()` del ramo parallelo usa la stessa `_BATCH_SAFE_EXCEPTIONS` (NB: non si può sottomettere `_safe_analyze` a `ProcessPoolExecutor` per il vincolo di pickle su closure stato; il pattern `submit(analyze_single_file)` resta + whitelist applicata al `.result()` lato consumer — semantica equivalente, documentata nei commenti).
 
-**Intervento**: estrarre la gestione errori in un wrapper `_safe_analyze()` chiamato da entrambi i rami, e includere `pd.errors.ParserError`, `pd.errors.EmptyDataError`, `UnicodeError`.
+**Validazione**: 19 test di regressione (`tests/test_batch_error_handling.py`) coprono: shape della whitelist (parser/empty/unicode/legacy), `_safe_analyze` su 5 fixture (missing/empty/header-only/malformed/binary-garbage), resilience del ramo seriale (dir vuota, tutta-malformata, mista good+bad), single-bad-file shortcut con `n_workers>1`, widening dell'eccezione su `analyze_single_file` parametrizzato sui 4 writer, e fixture-drift guard che verifica che pandas continui a sollevare i tipi di errore attesi.
 
 ### 4.2 Doppia validazione di qualità in cascata
 **File**: `beat_detection.py:431` (`validate_beats_morphology`) + `analyze.py:131` (chiamata a `quality_control.validate_beats`)
@@ -364,7 +389,7 @@ In ordine di rapporto valore/sforzo decrescente:
 2. ✅ Uniformare parametri duplicati in `config.py` (CRITICO 3.1 — commit `47d203a`)
 3. ✅ Gestione `pyreadstat` per CDISC — approccio soft con banner UI (CRITICO 3.3 — commit `a4a346b`)
 4. ✅ Aggiungere `@st.cache_data` su `load_csv`, `analyze_single_file` (CRITICO 3.4 — commit `b97e552`; `minmax_downsample` non cachato per audit negativo)
-5. Estendere try/except del batch e includere errori pandas (4.1)
+5. ✅ Estendere try/except del batch e includere errori pandas (4.1 — commit `b977c45`; `_BATCH_SAFE_EXCEPTIONS` + wrapper `_safe_analyze` simmetrico serial/parallel)
 6. Aggiungere `assert` di invariante o rimuovere il pattern `min_len` inoperante in `parameters.py:111`, `quality_control.py:191`, `residual_analysis.py:28` (cleanup non critico documentato in 3.2)
 
 **Sprint 2 — robustezza algoritmica (3–5 giorni)**

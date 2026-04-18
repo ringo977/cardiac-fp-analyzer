@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from cardiac_fp_analyzer.arrhythmia import analyze_arrhythmia
 from cardiac_fp_analyzer.beat_detection import compute_beat_periods, detect_beats, segment_beats
@@ -30,6 +31,59 @@ logger = logging.getLogger(__name__)
 # Back-compat alias for internal callers
 _select_best_channel = select_best_channel
 _apply_inclusion_criteria = apply_inclusion_criteria
+
+
+# ──────────────────────────────────────────────────────────────────
+#  Batch error-handling whitelist
+#
+#  These are exceptions that a single bad CSV should *not* be allowed
+#  to abort the whole batch over.  ``analyze_single_file`` catches
+#  these internally and returns ``None``; ``_safe_analyze`` is a thin
+#  outer guard that handles the corner case where an error escapes
+#  from a path the inner ``try`` doesn't cover (e.g. a child import
+#  fault), so that the serial and parallel batch loops have a single,
+#  unified safety net.
+#
+#  Pandas-specific entries (``ParserError``, ``EmptyDataError``) and
+#  ``UnicodeError`` are explicitly listed because pandas raises them
+#  when the CSV header is malformed, the file is empty, or the file's
+#  encoding doesn't match the expected one — and prior to this fix
+#  those would propagate uncaught from the serial branch and crash
+#  the whole batch.
+# ──────────────────────────────────────────────────────────────────
+_BATCH_SAFE_EXCEPTIONS: tuple = (
+    KeyError, ValueError, IndexError, RuntimeError, AssertionError,
+    FileNotFoundError, OSError, UnicodeError,
+    pd.errors.ParserError, pd.errors.EmptyDataError,
+)
+
+
+def _safe_analyze(filepath, channel='auto', verbose=True, config=None):
+    """Run :func:`analyze_single_file` with batch-level error handling.
+
+    Returns
+    -------
+    (result, error_message) : tuple
+        ``result`` is the analyze_single_file return value (a dict on
+        success, ``None`` on failure).  ``error_message`` is ``None`` on
+        success, otherwise a short string suitable for the batch error
+        log.
+
+    This is the single entry point used by both the serial and parallel
+    batch loops, so error semantics stay symmetric across the two.
+    """
+    try:
+        result = analyze_single_file(
+            filepath, channel=channel, verbose=verbose, config=config
+        )
+    except _BATCH_SAFE_EXCEPTIONS as e:
+        logger.warning("Batch item failed %s: %s", filepath, e, exc_info=True)
+        return None, f"{type(e).__name__}: {e}"
+    if result is None:
+        # analyze_single_file caught an error internally and logged it
+        # already; no extra detail to surface here.
+        return None, "analysis_returned_none"
+    return result, None
 
 
 def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
@@ -217,8 +271,7 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
                     print(f"  Spectral: {', '.join(parts)}")
 
         return result
-    except (KeyError, ValueError, IndexError, RuntimeError, AssertionError,
-            FileNotFoundError, OSError) as e:
+    except _BATCH_SAFE_EXCEPTIONS as e:
         logger.error("Analysis failed for %s: %s", filepath, e, exc_info=True)
         if verbose:
             print(f"  ERROR: {e}")
@@ -279,7 +332,12 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
     channels_to_run = ['el1', 'el2'] if channel == 'both' else [channel]
 
     if n_workers > 1 and len(csv_files) > 1:
-        # Parallel pass 1: each file is independent
+        # Parallel pass 1: each file is independent.  We submit the
+        # bare analyze_single_file (it cannot be a closure because
+        # ProcessPoolExecutor pickles it), and apply the _safe_analyze
+        # exception whitelist when awaiting .result() — this keeps the
+        # parallel branch's error semantics aligned with the serial
+        # branch without forcing _safe_analyze itself to be picklable.
         import multiprocessing as _mp
         from concurrent.futures import ProcessPoolExecutor, as_completed
         n_workers = min(n_workers, len(csv_files), _mp.cpu_count() or 4)
@@ -300,13 +358,18 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
                     print(f"\n[{i+1}/{total}] {f.name}{ch_tag}")
                 try:
                     r = future.result()
-                    if r: results.append(r)
-                    else: errors.append(f"{f}{ch_tag}")
-                except (KeyError, ValueError, IndexError, RuntimeError,
-                        OSError) as e:
+                    if r:
+                        results.append(r)
+                    else:
+                        errors.append(f"{f}{ch_tag}")
+                except _BATCH_SAFE_EXCEPTIONS as e:
                     logger.warning("Batch item failed %s%s: %s", f, ch_tag, e)
-                    errors.append(f"{f}{ch_tag}: {e}")
+                    errors.append(f"{f}{ch_tag}: {type(e).__name__}: {e}")
     else:
+        # Serial branch: route every file through _safe_analyze so that
+        # a malformed CSV (pandas ParserError, encoding mismatch, empty
+        # file, etc.) becomes a logged error entry instead of crashing
+        # the whole batch.
         total = len(csv_files) * len(channels_to_run)
         idx = 0
         for f in csv_files:
@@ -314,9 +377,12 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
                 idx += 1
                 ch_tag = f" ({ch})" if channel == 'both' else ""
                 print(f"\n[{idx}/{total}] {f.name}{ch_tag}")
-                r = analyze_single_file(f, channel=ch, verbose=verbose, config=config)
-                if r: results.append(r)
-                else: errors.append(f"{f}{ch_tag}")
+                r, err = _safe_analyze(f, channel=ch, verbose=verbose,
+                                        config=config)
+                if r:
+                    results.append(r)
+                else:
+                    errors.append(f"{f}{ch_tag}: {err}" if err else f"{f}{ch_tag}")
 
     # ─── Baseline risk reset ───
     # Baselines are reference recordings (no drug applied). The arrhythmia
