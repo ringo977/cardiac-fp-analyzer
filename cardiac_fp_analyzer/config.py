@@ -451,6 +451,18 @@ class QualityConfig:
     # Set to 0 to use the full segment (original behavior).
     morphology_corr_region_ms: float = 150.0  # first 150 ms of beat segment
 
+    # Strict on-rhythm re-admission for morphology rejections:
+    # when a morph-rejected beat is very tightly on-rhythm (timing residual
+    # below *strict_rhythm_residual_ratio* × median RR) AND its amplitude
+    # ratio is robust (≥ *strict_rhythm_amp_ratio*), admit it even if its
+    # morphology correlation is below the marginal floor.  Rationale: on
+    # bradycardic signals in 3D constructs, a missed beat may retain normal
+    # amplitude but present a degraded / decorrelated shape; without this
+    # path the QC loses genuinely real beats (observed on Exp6 Ti08 EL2).
+    # Set *strict_rhythm_amp_ratio* ≥ 1 to disable the strict-rhythm path.
+    strict_rhythm_residual_ratio: float = 0.10  # ±10% of median RR
+    strict_rhythm_amp_ratio: float = 0.50       # ≥ 50% of reference amplitude
+
     # Minimum accepted beats
     min_beats_for_analysis: int = 3       # below → Grade F
 
