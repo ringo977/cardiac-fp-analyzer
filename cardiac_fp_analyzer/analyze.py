@@ -111,9 +111,30 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
             print(f"     Recovery: {rec_info.get('n_recovered', 0)} recovered")
 
         rep_cfg = config.repolarization
+        # Adaptive post_ms for segmentation — MUST cover BOTH the fixed
+        # search_end_ms AND the adaptive search_end_pct_rr × RR window
+        # applied downstream in repolarization.py. Otherwise segment_beats
+        # produces a template shorter than the adaptive search window,
+        # and repolarization.py silently clips `search_end = len(template)`,
+        # missing the real T-wave on slow rhythms (e.g. dofetilide, long BP).
+        _bp_pre = compute_beat_periods(bi, fs)
+        _median_bp_s = float(np.median(_bp_pre)) if len(_bp_pre) > 0 else 0.0
+        _pct_rr = getattr(rep_cfg, 'search_end_pct_rr', 0.0)
+        _adaptive_end_ms = (_pct_rr * _median_bp_s * 1000.0
+                            if (_pct_rr > 0 and _median_bp_s > 0) else 0.0)
+        # 50 ms margin after the effective search end so the repolarization
+        # tail is never clipped at the template boundary.
+        _post_ms = max(850.0,
+                       rep_cfg.search_end_ms + 50.0,
+                       _adaptive_end_ms + 50.0)
         bd, btm, vi = segment_beats(filtered, df['time'].values, bi, fs,
                                      pre_ms=rep_cfg.segment_pre_ms,
-                                     post_ms=max(850, rep_cfg.search_end_ms + 50))
+                                     post_ms=_post_ms)
+        if verbose and _adaptive_end_ms > rep_cfg.search_end_ms:
+            print(f"     Segmentation: adaptive post_ms={_post_ms:.0f} ms "
+                  f"(median BP={_median_bp_s*1000:.0f} ms, "
+                  f"{_pct_rr*100:.0f}% RR={_adaptive_end_ms:.0f} ms "
+                  f"> fixed search_end_ms={rep_cfg.search_end_ms:.0f})")
 
         # Use only successfully segmented beats (edge-truncated beats removed).
         # vi contains indices into bi of beats that fit the pre/post window.
