@@ -158,6 +158,26 @@ class BeatDetectionConfig:
     cluster_gap_ratio: float = 3.0         # min sorted-adjacent ratio to fire
     cluster_min_dominant_count: int = 3    # min peaks in dominant cluster
     cluster_window_ms: float = 50.0        # window around peak for max-abs
+    # ── Safeguards (Sprint 2 #1b) ──
+    # Before applying the filter, verify that the low-amp cluster looks
+    # like an artefact pattern (T-wave residuals interlaced between beats)
+    # rather than a legitimate cluster of real beats.
+    #   (a) Topology: at least ``cluster_topology_min_interlaced`` fraction
+    #       of the low-cluster peaks must sit *between* two adjacent
+    #       high-cluster peaks (i.e. have a high peak immediately before
+    #       and immediately after, with no other low peak of the same
+    #       cluster in that high-RR interval required). A cluster of 3+
+    #       weak beats at the start/end of the recording (contiguous) will
+    #       fail this check and the filter aborts.
+    #   (b) Alternans: if n_low / n_high falls in
+    #       ``cluster_alternans_ratio_band`` the pattern is likely an
+    #       alternance (big/small/big/small…) — applying the filter would
+    #       halve the real beat count. Abort.
+    # On abort, the diagnostics report ``'aborted_topology'`` or
+    # ``'aborted_alternans'`` and the original beat set is returned.
+    cluster_topology_min_interlaced: float = 0.7
+    cluster_alternans_ratio_low: float = 0.85   # lower edge of alt band
+    cluster_alternans_ratio_high: float = 1.15  # upper edge of alt band
 
     # Beat recovery: after initial detection, use the estimated beat period
     # to search for missed beats at expected locations with a lower threshold.

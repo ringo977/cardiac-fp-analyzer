@@ -556,19 +556,80 @@ def _reject_amplitude_cluster(data, fs, bi, cfg=None):
     # Geometric mean of the two adjacent amps flanking the gap — robust
     # threshold that does not depend on absolute scale.
     threshold = float(np.sqrt(srt[gap_idx] * srt[gap_idx + 1]))
-    mask = amps >= threshold
-    bi_kept = bi[mask]
+    mask = amps >= threshold  # provisional — before safeguards
+    n_low = int((~mask).sum())
+    n_high = int(mask.sum())
 
-    info = {
-        'cluster_filter': 'applied',
+    base_diag = {
         'n_input': n_in,
-        'n_kept': int(mask.sum()),
-        'n_rejected': int((~mask).sum()),
         'max_gap_ratio': round(max_ratio, 3),
         'gap_low_v': round(float(srt[gap_idx]), 4),
         'gap_high_v': round(float(srt[gap_idx + 1]), 4),
         'threshold_v': round(threshold, 4),
         'n_dominant': n_dominant,
+        'n_low_cluster': n_low,
+        'n_high_cluster': n_high,
+    }
+
+    # ── Safeguard (a): alternans check ──
+    # If n_low ≈ n_high the low cluster is likely the "small" beat of a
+    # severe amplitude alternance, NOT an artefact sub-rhythm. Applying
+    # the filter would halve the true beat count.
+    alt_lo = float(getattr(c, 'cluster_alternans_ratio_low', 0.85))
+    alt_hi = float(getattr(c, 'cluster_alternans_ratio_high', 1.15))
+    if n_high > 0:
+        ratio_low_over_high = n_low / n_high
+        if alt_lo <= ratio_low_over_high <= alt_hi:
+            return bi, {
+                'cluster_filter': 'aborted_alternans',
+                'n_kept': n_in,
+                'low_over_high_ratio': round(ratio_low_over_high, 3),
+                **base_diag,
+            }
+
+    # ── Safeguard (b): topology check ──
+    # A low-cluster peak is "interlaced" iff it sits between two ADJACENT
+    # high-cluster peaks (i.e. a high peak immediately before AND
+    # immediately after, in time order). Contiguous low-only regions at
+    # the edges of the recording (weak beats at start/end) or inside a
+    # fade-out fail this test and the filter aborts.
+    bi_sorted_t = np.argsort(bi)
+    order = np.empty_like(bi_sorted_t)
+    order[bi_sorted_t] = np.arange(n_in)
+    # Positional mask in time order
+    time_sorted_mask = mask[bi_sorted_t]   # True where high, False where low
+    # For each peak in time order, check if its neighbours are high.
+    interlaced_count = 0
+    low_count = 0
+    for pos, is_high in enumerate(time_sorted_mask):
+        if is_high:
+            continue
+        low_count += 1
+        # Is there a high peak immediately before (in time)?
+        has_high_before = np.any(time_sorted_mask[:pos])
+        # Is there a high peak immediately after (in time)?
+        has_high_after = np.any(time_sorted_mask[pos + 1:])
+        if has_high_before and has_high_after:
+            interlaced_count += 1
+
+    interlaced_frac = (interlaced_count / low_count) if low_count > 0 else 1.0
+    min_interlaced = float(getattr(c, 'cluster_topology_min_interlaced', 0.7))
+    if interlaced_frac < min_interlaced:
+        return bi, {
+            'cluster_filter': 'aborted_topology',
+            'n_kept': n_in,
+            'interlaced_frac': round(interlaced_frac, 3),
+            **base_diag,
+        }
+
+    # All safeguards passed — apply the filter.
+    bi_kept = bi[mask]
+    info = {
+        'cluster_filter': 'applied',
+        'n_kept': n_high,
+        'n_rejected': n_low,
+        'interlaced_frac': round(interlaced_frac, 3),
+        **base_diag,
     }
     return bi_kept, info
 

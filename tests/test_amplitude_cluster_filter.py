@@ -284,10 +284,14 @@ class TestRejectAmplitudeClusterUnit:
         from cardiac_fp_analyzer.beat_detection import _reject_amplitude_cluster
 
         fs = 2000.0
-        n = int(10.0 * fs)
+        n = int(12.0 * fs)
         data = np.zeros(n)
+        # 5 big + 8 small interlaced (same as test_bimodal_two_clusters_applied
+        # topology — safely in the "apply" regime: ratio 8/5=1.6 avoids the
+        # alternans band, and smalls are between bigs → interlaced).
         big_idxs = np.array([1000, 3000, 5000, 7000, 9000])
-        small_idxs = np.array([500, 1500, 2500, 3500, 4500])
+        small_idxs = np.array([1500, 2500, 3500, 4500,
+                               5500, 6500, 7500, 8500])
         for i in big_idxs:
             data[i] = 1.4
         for i in small_idxs:
@@ -296,6 +300,7 @@ class TestRejectAmplitudeClusterUnit:
 
         _, info_pos = _reject_amplitude_cluster(data, fs, bi)
         _, info_neg = _reject_amplitude_cluster(-data, fs, bi)
+        assert info_pos['cluster_filter'] == 'applied'
         assert info_pos['cluster_filter'] == info_neg['cluster_filter']
         assert info_pos['n_kept'] == info_neg['n_kept']
         assert info_pos['n_rejected'] == info_neg['n_rejected']
@@ -358,7 +363,8 @@ class TestDiagnostics:
         c = info['amplitude_cluster']
         assert c['cluster_filter'] == 'applied'
         for k in ('n_input', 'n_kept', 'n_rejected', 'max_gap_ratio',
-                  'gap_low_v', 'gap_high_v', 'threshold_v', 'n_dominant'):
+                  'gap_low_v', 'gap_high_v', 'threshold_v', 'n_dominant',
+                  'n_low_cluster', 'n_high_cluster', 'interlaced_frac'):
             assert k in c, f"missing diagnostic key {k!r} in {c}"
 
     def test_threshold_between_gap_boundaries(self):
@@ -381,7 +387,139 @@ class TestDiagnostics:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#   6. Does not interfere with slow-rhythm detection
+#   6. Safeguards — filter must abort on these patterns
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestSafeguardAlternans:
+    """Severe amplitude alternans (ratio >3× between odd and even beats)
+    must NOT be filtered — the "low" cluster is the small beat of the
+    alternance, not an artefact. Safeguard: n_low ≈ n_high triggers
+    ``aborted_alternans``."""
+
+    def test_severe_alternans_aborts(self):
+        from cardiac_fp_analyzer.beat_detection import _reject_amplitude_cluster
+
+        fs = 2000.0
+        n = int(22.0 * fs)
+        data = np.zeros(n)
+        # 20 regular beats, big/small alternating (ratio 4×)
+        indices = np.arange(1, 21) * int(fs)
+        for k, idx in enumerate(indices):
+            data[idx] = 1.0 if k % 2 == 0 else 0.25
+        bi_out, info = _reject_amplitude_cluster(data, fs, indices)
+        assert info['cluster_filter'] == 'aborted_alternans'
+        assert len(bi_out) == len(indices)
+        assert 0.85 <= info['low_over_high_ratio'] <= 1.15
+
+    def test_alternans_boundary_still_applies(self):
+        """If n_low / n_high just outside the alternans band (e.g. 1.3:1),
+        the filter must still be able to apply."""
+        from cardiac_fp_analyzer.beat_detection import _reject_amplitude_cluster
+
+        fs = 2000.0
+        # 5 big interlaced with 7 small (ratio 7/5 = 1.4, outside band)
+        big_idxs = np.array([2000, 4000, 6000, 8000, 10000])
+        small_idxs = np.array([1000, 3000, 5000, 5500, 7000, 8500, 9500])
+        n = 12000
+        data = np.zeros(n)
+        for i in big_idxs:
+            data[i] = 1.5
+        for i in small_idxs:
+            data[i] = 0.2
+        bi = np.sort(np.concatenate([big_idxs, small_idxs]))
+        bi_out, info = _reject_amplitude_cluster(data, fs, bi)
+        assert info['cluster_filter'] == 'applied', info
+
+
+class TestSafeguardTopology:
+    """Low-amplitude peaks that are TEMPORALLY contiguous at the edges
+    (weak beats at start/end, fade-out) must NOT be filtered — they are
+    real beats in a low-SNR region, not interspersed artefacts.
+    Safeguard: interlaced_frac < 0.7 triggers ``aborted_topology``."""
+
+    def test_weak_beats_at_start_aborts(self):
+        from cardiac_fp_analyzer.beat_detection import _reject_amplitude_cluster
+
+        fs = 2000.0
+        n = int(25.0 * fs)
+        data = np.zeros(n)
+        # 3 weak beats at start (amp 0.03) + 17 normal beats (amp 0.15)
+        times = [1.0 + i * 1.0 for i in range(20)]
+        for k, t in enumerate(times):
+            idx = int(t * fs)
+            data[idx] = 0.03 if k < 3 else 0.15
+        bi = np.array([int(t * fs) for t in times])
+        bi_out, info = _reject_amplitude_cluster(data, fs, bi)
+        assert info['cluster_filter'] == 'aborted_topology'
+        assert info['interlaced_frac'] == 0.0
+        assert len(bi_out) == len(bi)
+
+    def test_weak_beats_at_end_aborts(self):
+        from cardiac_fp_analyzer.beat_detection import _reject_amplitude_cluster
+
+        fs = 2000.0
+        n = int(25.0 * fs)
+        data = np.zeros(n)
+        times = [1.0 + i * 1.0 for i in range(20)]
+        for k, t in enumerate(times):
+            idx = int(t * fs)
+            data[idx] = 0.03 if k >= 17 else 0.15  # weak at end
+        bi = np.array([int(t * fs) for t in times])
+        bi_out, info = _reject_amplitude_cluster(data, fs, bi)
+        assert info['cluster_filter'] == 'aborted_topology'
+        assert len(bi_out) == len(bi)
+
+    def test_single_weak_beat_in_middle_still_applies(self):
+        """A lone weak peak surrounded by many strong ones is likely an
+        actual artefact/glitch — the filter may remove it. This pins
+        that the topology safeguard does NOT over-fire."""
+        from cardiac_fp_analyzer.beat_detection import _reject_amplitude_cluster
+
+        fs = 2000.0
+        # 10 strong peaks at 1 s intervals, 1 weak peak inserted in the middle
+        big_idxs = np.array([int(i * fs) for i in range(1, 11)])
+        weak_idx = int(5.5 * fs)  # between 5th and 6th big peak
+        n = int(12.0 * fs)
+        data = np.zeros(n)
+        for i in big_idxs:
+            data[i] = 1.5
+        data[weak_idx] = 0.2
+        bi = np.sort(np.concatenate([big_idxs, [weak_idx]]))
+        bi_out, info = _reject_amplitude_cluster(data, fs, bi)
+        # Single low peak, surrounded by bigs → interlaced = 1/1 = 1.0
+        # But n_dominant = 10, n_low = 1 → ratio 0.1 → not alternans
+        # → filter applies, removes 1 peak
+        assert info['cluster_filter'] == 'applied', info
+        assert info['n_kept'] == 10
+        assert weak_idx not in bi_out
+
+    def test_weak_beats_end_to_end_via_detect_beats(self):
+        """Full pipeline: 3 weak beats at start must survive through
+        detect_beats (i.e. the cluster filter must abort, not silently
+        eat the low cluster)."""
+        from cardiac_fp_analyzer.beat_detection import detect_beats
+
+        fs = 2000.0
+        n = int(21.0 * fs)
+        data = np.zeros(n)
+        from tests.test_amplitude_cluster_filter import _biphasic_spike
+        for k, t in enumerate([1.0 + i * 1.0 for i in range(20)]):
+            idx = int(t * fs)
+            amp = 0.03 if k < 3 else 0.15
+            data += _biphasic_spike(n, idx, amp, int(0.005 * fs))
+        data += np.random.default_rng(0).standard_normal(n) * 0.001
+        idxs, _, info = detect_beats(data, fs, method='auto')
+        ci = info.get('amplitude_cluster', {})
+        # The filter must NOT delete the 3 weak beats — either abort or
+        # leave all peaks through.
+        assert ci.get('cluster_filter') in (
+            'aborted_topology', 'aborted_alternans', 'unimodal',
+            'dominant_too_small', 'too_few_peaks',
+        ), f"filter applied when it should have aborted: {ci}"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#   7. Does not interfere with slow-rhythm detection
 # ═══════════════════════════════════════════════════════════════════════
 
 class TestSlowRhythmCompatibility:
