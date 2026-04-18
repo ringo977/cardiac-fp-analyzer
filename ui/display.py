@@ -119,13 +119,40 @@ def plot_signal(result, key_suffix=""):
     st.plotly_chart(fig, use_container_width=True)
 
     # Stats (from current included beats)
-    bp = result['beat_periods']
+    bp = result.get('beat_periods', np.array([]))
     cols = st.columns(4)
     cols[0].metric(T('n_beats_qc'), f"{len(result['beat_indices'])}")
     cols[1].metric(T('n_beats_raw'), f"{len(all_bi)}")
     if len(bp) > 0:
         cols[2].metric(T('beat_period'), f"{np.mean(bp)*1000:.0f} ms")
         cols[3].metric("BPM", f"{60/np.mean(bp):.1f}")
+
+    # ── Detection pipeline diagnostics ──
+    det_info = result.get('detection_info', {})
+    val_info = det_info.get('beat_validation', {})
+    rec_info = det_info.get('beat_recovery', {})
+    qc_rep = result.get('qc_report', None)
+    with st.expander("🔍 Detection diagnostics", expanded=False):
+        st.markdown("**Beat detection pipeline**")
+        dcols = st.columns(5)
+        dcols[0].metric("Method", det_info.get('method', '?'))
+        dcols[1].metric("Rej. amplitude", val_info.get('n_rejected_amplitude', '?'))
+        dcols[2].metric("Rej. morphology", val_info.get('n_rejected_morphology', '?'))
+        dcols[3].metric("Re-admitted", val_info.get('n_readmitted', 0))
+        dcols[4].metric("Recovered", rec_info.get('n_recovered', 0))
+        if qc_rep is not None:
+            st.markdown("**Quality control (post-segmentation)**")
+            qcols = st.columns(6)
+            qcols[0].metric("QC input", qc_rep.n_beats_input)
+            qcols[1].metric("QC accepted", qc_rep.n_beats_accepted)
+            qcols[2].metric("QC rej. amp", qc_rep.n_beats_rejected_snr)
+            qcols[3].metric("QC rej. morph", qc_rep.n_beats_rejected_morphology)
+            qcols[4].metric("QC re-admitted", getattr(qc_rep, 'n_readmitted', 0))
+            qcols[5].metric("Grade / SNR",
+                            f"{qc_rep.grade} / {qc_rep.global_snr:.1f}")
+            if qc_rep.notes:
+                for note in qc_rep.notes:
+                    st.caption(f"ℹ️ {note}")
 
     # ── Beat editor ──
     with st.expander(f"✏️ {T('beat_editor')}", expanded=False):
@@ -253,7 +280,7 @@ def plot_beats(result):
     st.plotly_chart(fig, use_container_width=True)
 
     # FPD annotation
-    summary = result['summary']
+    summary = result.get('summary', {})
     cols = st.columns(4)
     cols[0].metric(T('fpd'), f"{summary.get('fpd_ms_mean', 0):.1f} ± {summary.get('fpd_ms_std', 0):.1f}")
     cols[1].metric(T('fpdc'), f"{summary.get('fpdc_ms_mean', 0):.1f} ± {summary.get('fpdc_ms_std', 0):.1f}")
@@ -284,7 +311,7 @@ def show_params_table(result):
     st.dataframe(df, use_container_width=True, height=400)
 
     # Summary stats
-    summary = result['summary']
+    summary = result.get('summary', {})
     st.subheader(T('summary'))
     summary_rows = []
     for key in ['spike_amplitude_mV', 'fpd_ms', 'fpdc_ms', 'rise_time_ms', 'rr_interval_ms']:
@@ -302,7 +329,10 @@ def show_params_table(result):
 
 def show_arrhythmia(result):
     """Show arrhythmia analysis results."""
-    ar = result['arrhythmia_report']
+    ar = result.get('arrhythmia_report')
+    if ar is None:
+        st.warning(T('no_params'))
+        return
 
     # Classification banner
     risk_color = "🟢" if ar.risk_score < 30 else ("🟡" if ar.risk_score < 60 else "🔴")

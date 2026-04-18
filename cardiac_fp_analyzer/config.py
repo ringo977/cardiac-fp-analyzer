@@ -89,6 +89,15 @@ class BeatDetectionConfig:
     score_rate_excess: float = -20.0   # too many beats (likely noise)
     score_too_few: float = -10.0       # <3 beats
 
+    # Derivative method bonus: dV/dt is the physiologically correct way to
+    # identify depolarisation (fastest deflection, regardless of polarity or
+    # amplitude).  Prominence can confuse large repolarisation waves with
+    # depolarisation spikes — especially in 3D constructs where the
+    # repolarisation amplitude often exceeds the depolarisation spike.
+    # Literature basis: CiPA MEA analysis uses dV/dt as primary criterion;
+    # CardioMDA (Clements 2013) and EFP Analyzer (Patel 2025) confirm.
+    score_derivative_bonus: float = 15.0
+
     # ── Post-detection morphological validation (CardioMDA approach) ──
     # After initial beat detection, build a template from the strongest
     # candidates and reject beats whose correlation with the template
@@ -106,6 +115,38 @@ class BeatDetectionConfig:
     # With fewer beats, morphological validation is skipped (amplitude
     # validation still applies).
     morphology_min_beats: int = 5
+    # Accept inverted beats in morphology validation.
+    # When True, use abs(correlation) so that beats with inverted polarity
+    # (negative spike where template has positive spike, or vice versa)
+    # still pass the morphology gate.  Physiological basis: FP polarity
+    # depends on electrode-tissue geometry and can switch within a
+    # recording (biphasic FP with alternating phase dominance).
+    morphology_accept_inverted: bool = True
+    # Jitter correction: before computing template correlation, shift each
+    # beat by ±jitter_max_shift samples to find the lag that maximises
+    # cross-correlation with the template.  This compensates for alignment
+    # errors that destroy Pearson r on narrow spikes.
+    # Standard practice in neural spike sorting.
+    enable_jitter_correction: bool = True
+    # Adaptive jitter: estimate spike half-width from the template and set
+    # the jitter window to `jitter_adaptive_fraction` × half-width.
+    # This scales automatically: ~2–3 ms for classic MEA (spike ~1–3 ms),
+    # ~10–15 ms for 3D constructs (spike ~30–50 ms).
+    # When False (or template width estimation fails), falls back to the
+    # fixed `jitter_max_shift_ms` value.
+    jitter_adaptive: bool = True
+    jitter_adaptive_fraction: float = 0.5  # jitter = 50% of spike half-width
+    jitter_max_shift_ms: float = 5.0       # fixed fallback (±ms)
+
+    # Beat recovery: after initial detection, use the estimated beat period
+    # to search for missed beats at expected locations with a lower threshold.
+    # Recovered candidates are validated against the template before acceptance.
+    # This improves detection on low-SNR signals where beat amplitude varies.
+    enable_beat_recovery: bool = True
+    recovery_search_tolerance: float = 0.25    # ±25% of median beat period
+    recovery_min_corr: float = 0.15            # min template correlation (low: noisy signals)
+    recovery_min_amplitude_ratio: float = 0.20 # OR accept if amplitude ≥ 20% of ref
+    recovery_min_dvdt_ratio: float = 0.25      # OR accept if dV/dt ≥ 25% of ref
 
     # Derivative method
     deriv_smooth_ms: float = 2.0       # smoothing window for derivative (ms)
@@ -147,6 +188,42 @@ class RepolarizationConfig:
     search_start_ms: float = 150.0      # start searching N ms after spike
     search_end_ms: float = 900.0        # stop searching N ms after spike
 
+    # --- Adaptive search window extension ---
+    # For signals with long beat periods (e.g. dofetilide-induced bradycardia),
+    # the fixed search_end_ms may be too short to reach the real T-wave.
+    # When median_bp is available, the effective search end is:
+    #   max(search_end_ms, search_end_pct_rr × RR_ms)
+    # 70% of RR is safe because the T-wave always ends well before the next beat.
+    # Set to 0.0 to disable (use fixed search_end_ms only).
+    search_end_pct_rr: float = 0.70
+
+    # --- Minimum FPD constraint ---
+    # Physiological floor: FPD below this is almost certainly an
+    # afterpotential (post-spike rebound), not the actual T-wave.
+    # hiPSC-CM FPD is typically 200–500 ms; even fast cells rarely
+    # go below 120 ms.  Any candidate peak yielding FPD < min_fpd_ms
+    # is excluded from selection.
+    min_fpd_ms: float = 120.0
+
+    # --- Adaptive minimum FPD based on beat period ---
+    # FPD must be at least this fraction of the RR interval.
+    # Physiological basis: action potential duration is always a
+    # substantial fraction of the cycle length (typically 30–60%
+    # in hiPSC-CM).  An FPD < 20% of RR is almost certainly the
+    # afterpotential or a baseline artefact, not the true T-wave.
+    # The effective floor is max(min_fpd_ms, min_fpd_pct_rr × RR).
+    # Set to 0.0 to disable (use fixed min_fpd_ms only).
+    min_fpd_pct_rr: float = 0.20
+
+    # --- Minimum signal amplitude for FPD analysis ---
+    # If the median spike amplitude across all beats is below this threshold,
+    # the signal is considered too weak for reliable repolarization detection
+    # and FPD is set to NaN for all beats (repol_confidence = 0).
+    # This prevents the pipeline from producing meaningless FPD values on
+    # signals that are essentially noise (e.g. chipC_ch3_MEXIL_1uM).
+    # Unit: µV (microvolts).  0 = disabled.
+    min_signal_amplitude_uV: float = 10.0
+
     # --- Signal conditioning for repolarization ---
     repol_lowpass_hz: float = 20.0       # low-pass cutoff for repol region
     repol_filter_order: int = 3
@@ -164,6 +241,7 @@ class RepolarizationConfig:
     per_beat_tolerance_ms: float = 150.0  # search window ±tolerance around template FPD
     per_beat_peak_distance_ms: float = 30.0
     per_beat_distance_penalty_ms: float = 50.0  # distance penalty scale
+    per_beat_prominence_factor: float = 0.15  # same as template; sensitivity comes from MAD-based noise estimate
 
     # --- Repolarization detectability gate ---
     # If the best repolarization candidate has prominence < gate_min_snr × noise,
@@ -172,8 +250,9 @@ class RepolarizationConfig:
     # Reference: EFP Analyzer (Patel et al., Sci Rep 2025) excludes traces
     # with non-detectable repolarization rather than forcing a value.
     enable_repol_gate: bool = True
-    repol_gate_min_snr: float = 2.5    # min prominence / noise_std for template
-    repol_gate_min_snr_beat: float = 2.0  # min for per-beat (more lenient)
+    repol_gate_min_snr: float = 2.0    # min prominence / noise_std for template
+    repol_gate_min_snr_beat: float = 1.5  # min for template-guided per-beat (lowered from original via noise exclusion)
+    repol_gate_min_snr_beat_unguided: float = 1.5  # min for unguided per-beat (stricter)
 
     # --- Confidence scoring ---
     confidence_prominence_scale: float = 3.0  # prominence / (scale × noise) → saturates at 1
@@ -223,6 +302,14 @@ class QualityConfig:
     # Template building for morphology QC
     morphology_max_beats: int = 30
     morphology_window_ms: float = 20.0    # amplitude computation window
+
+    # Depolarization-focused morphology correlation: restrict the correlation
+    # to the first N ms of the beat segment (covering the depolarization spike
+    # and early repolarization).  The full beat segment (800+ ms) includes the
+    # entire repolarization wave, which varies a lot in 3D constructs and drags
+    # down correlation even when the depolarization spike is perfectly clear.
+    # Set to 0 to use the full segment (original behavior).
+    morphology_corr_region_ms: float = 150.0  # first 150 ms of beat segment
 
     # Minimum accepted beats
     min_beats_for_analysis: int = 3       # below → Grade F

@@ -97,6 +97,19 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
             )
             if verbose: print(f"  Retry: {det['n_beats']} beats")
 
+        # ── Detailed pipeline tracing ──
+        val_info = det.get('beat_validation', {})
+        rec_info = det.get('beat_recovery', {})
+        if verbose:
+            print(f"  ── Pipeline trace ──")
+            print(f"     Detection output: {len(bi)} beats")
+            print(f"     Validation: input={val_info.get('n_input', '?')}, "
+                  f"accepted={val_info.get('n_accepted', '?')}, "
+                  f"rej_amp={val_info.get('n_rejected_amplitude', '?')}, "
+                  f"rej_morph={val_info.get('n_rejected_morphology', '?')}, "
+                  f"readmitted={val_info.get('n_readmitted', 0)}")
+            print(f"     Recovery: {rec_info.get('n_recovered', 0)} recovered")
+
         rep_cfg = config.repolarization
         bd, btm, vi = segment_beats(filtered, df['time'].values, bi, fs,
                                      pre_ms=rep_cfg.segment_pre_ms,
@@ -105,6 +118,10 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
         # Use only successfully segmented beats (edge-truncated beats removed).
         # vi contains indices into bi of beats that fit the pre/post window.
         bi_seg = bi[np.array(vi)] if len(vi) > 0 else bi[:0]
+        n_seg_dropped = len(bi) - len(bi_seg)
+        if verbose and n_seg_dropped > 0:
+            print(f"     Segmentation: {n_seg_dropped} edge beats dropped "
+                  f"({len(bi)} → {len(bi_seg)})")
         assert len(bi_seg) == len(bd) == len(btm), (
             f"Segmentation alignment error: bi_seg={len(bi_seg)}, "
             f"beats_data={len(bd)}, beats_time={len(btm)}"
@@ -146,7 +163,8 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
                 'raw_signal': raw_signal,
                 'time_vector': df['time'].values,
                 'beats_data': bd_clean, 'beats_time': btm_clean,
-                'qc_report': qc_report}
+                'qc_report': qc_report,
+                'detection_info': det}
 
         # ─── Cessation detection ───
         if config.enable_cessation:

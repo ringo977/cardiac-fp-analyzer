@@ -146,17 +146,27 @@ def plot_analysis_summary(df_time, filtered, beat_indices, params, metadata,
         n_show = min(5, len(beat_indices) - mid + 1)
         end_idx = min(len(t) - 1, beat_indices[min(mid + n_show, len(beat_indices) - 1)] + int(0.3 * fs_val))
         ax2.plot(t[start_idx:end_idx], y[start_idx:end_idx] * 1000, linewidth=0.8, color='#1f77b4')
-        for bi in beat_indices:
-            if start_idx <= bi <= end_idx:
-                ax2.axvline(t[bi], color='red', alpha=0.35, linewidth=0.6, linestyle='-')
+        # Depolarization triangles (red ▼)
+        zoom_bi = [bi for bi in beat_indices if start_idx <= bi <= end_idx]
+        if zoom_bi:
+            zoom_bi_arr = np.array(zoom_bi)
+            ax2.plot(t[zoom_bi_arr], y[zoom_bi_arr] * 1000, 'rv', markersize=5,
+                     alpha=0.8, zorder=5, label='Depolarization')
+        # Repolarization triangles (green △)
         if all_params is not None and len(all_params) == len(beat_indices):
+            zoom_rg = []
             for p in all_params:
                 g = p.get('repol_peak_global_idx')
-                if g is None:
-                    continue
-                gi = int(g)
-                if start_idx <= gi <= end_idx:
-                    ax2.axvline(t[gi], color='#1b9e77', alpha=0.45, linewidth=0.7, linestyle=':')
+                if g is not None and isinstance(g, (int, float)):
+                    gi = int(g)
+                    if start_idx <= gi <= end_idx:
+                        zoom_rg.append(gi)
+            if zoom_rg:
+                zoom_rg_arr = np.array(zoom_rg)
+                ax2.plot(t[zoom_rg_arr], y[zoom_rg_arr] * 1000, linestyle='none',
+                         marker='^', color='#1b9e77', markersize=5, alpha=0.8,
+                         zorder=5, markeredgecolor='black', markeredgewidth=0.3,
+                         label='Repolarization peak')
     ax2.set_ylabel('Voltage (mV)'); ax2.set_xlabel('Time (s)')
     ax2.set_title('Zoomed View (~5 beats)', fontsize=9); ax2.grid(True, alpha=0.3)
 

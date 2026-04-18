@@ -196,32 +196,63 @@ def compute_beat_template(beats_data, amplitudes=None, max_beats=50):
     return np.median(aligned, axis=0)
 
 
-def morphology_correlation(beat_data, template):
+def morphology_correlation(beat_data, template, max_samples=0, jitter_max=0):
     """
     Compute correlation between a beat and the template.
     Uses Pearson correlation — 1.0 = identical shape, 0 = no similarity.
+
+    Parameters
+    ----------
+    beat_data : array — single beat waveform
+    template : array — median template
+    max_samples : int — if > 0, restrict correlation to the first N samples
+        (depolarization-focused).  This prevents variable repolarization
+        morphology from dragging down correlation for genuine beats.
+    jitter_max : int — if > 0, try shifting the beat by ±jitter_max samples
+        and return the best (highest) correlation.  This compensates for
+        sub-sample alignment errors that destroy Pearson r, especially on
+        wide spikes (3D constructs, 30-50 ms FWHM).
     """
     if template is None or len(beat_data) == 0:
         return 0.0
 
     # Align lengths
     n = min(len(beat_data), len(template))
-    b = beat_data[:n]
+    # Restrict to depolarization region if requested
+    if max_samples > 0:
+        n = min(n, max_samples)
+
+    # Pre-compute centred template
     t = template[:n]
-
-    # Guard against NaN propagation
-    if np.any(np.isnan(b)) or np.any(np.isnan(t)):
+    if np.any(np.isnan(t)):
         return 0.0
-
-    # Pearson correlation
-    b_c = b - np.mean(b)
     t_c = t - np.mean(t)
-    denom = np.sqrt(np.sum(b_c**2) * np.sum(t_c**2))
-
-    if denom == 0:
+    t_c_ss = np.sum(t_c**2)
+    if t_c_ss == 0:
         return 0.0
 
-    return np.sum(b_c * t_c) / denom
+    best_corr = -1.0
+    jitter_range = range(-jitter_max, jitter_max + 1) if jitter_max > 0 else [0]
+
+    for lag in jitter_range:
+        start = max(0, lag)
+        end = start + n
+        if end > len(beat_data):
+            continue
+        b = beat_data[start:end]
+        if len(b) < n:
+            continue
+        if np.any(np.isnan(b)):
+            continue
+        b_c = b - np.mean(b)
+        denom = np.sqrt(np.sum(b_c**2) * t_c_ss)
+        if denom == 0:
+            continue
+        corr = np.sum(b_c * t_c) / denom
+        if corr > best_corr:
+            best_corr = corr
+
+    return best_corr if best_corr > -1.0 else 0.0
 
 
 def validate_beats(data, beat_indices, beats_data, beats_time, fs,
@@ -303,10 +334,35 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
         # amplitudes and beats_data are guaranteed same length by alignment assert above
         template = compute_beat_template(beats_data, amplitudes=amplitudes, max_beats=c.morphology_max_beats)
 
+        # Depolarization-focused correlation: restrict to first N ms of beat
+        # segment.  The full segment (800+ ms) includes the repolarization wave
+        # which varies a lot in 3D constructs — genuine beats get low corr
+        # even when the depolarization spike is perfectly clear.
+        corr_region_ms = getattr(c, 'morphology_corr_region_ms', 0)
+        corr_region_samples = int(corr_region_ms / 1000.0 * fs) if corr_region_ms > 0 else 0
+
+        # Jitter correction: estimate adaptive jitter from the template's
+        # spike width, then try shifting each beat ±jitter samples.
+        # This compensates for sub-sample alignment errors that destroy
+        # Pearson r on wide spikes (3D constructs: 30-50 ms FWHM).
+        jitter_max = 0
+        if template is not None:
+            try:
+                from .beat_detection import _estimate_jitter_from_template
+                # Use fraction=0.5 of spike half-width as jitter window
+                jitter_max = _estimate_jitter_from_template(template, fs, 0.5)
+                if jitter_max < 1:
+                    # Fallback: ±5 ms
+                    jitter_max = max(1, int(5.0 / 1000.0 * fs))
+            except (ImportError, ValueError):
+                jitter_max = max(1, int(5.0 / 1000.0 * fs))
+
         if template is not None:
             morphology_corrs = []
             for bd in beats_data:
-                corr = morphology_correlation(bd, template)
+                corr = morphology_correlation(bd, template,
+                                              max_samples=corr_region_samples,
+                                              jitter_max=jitter_max)
                 morphology_corrs.append(corr)
             qc.per_beat_corr = morphology_corrs
 
@@ -339,6 +395,26 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
             marginal = getattr(c, 'morphology_marginal', 0.10)
             effective_morph_threshold = max(adaptive_thresh, marginal)
 
+    # ── Log QC morphology details (visible in terminal) ──
+    import logging as _qc_log
+    _qc_logger = _qc_log.getLogger(__name__)
+    corr_region_ms_used = getattr(c, 'morphology_corr_region_ms', 0)
+    _qc_logger.info("QC morph: corr_region_ms=%.0f, threshold=%.2f, "
+                     "effective=%.2f, n_beats=%d",
+                     corr_region_ms_used, morphology_threshold,
+                     effective_morph_threshold, len(morphology_corrs))
+    if len(morphology_corrs) > 0:
+        corr_arr = np.array(morphology_corrs)
+        _qc_logger.info("QC morph corrs: min=%.3f, p5=%.3f, p25=%.3f, "
+                         "median=%.3f, mean=%.3f",
+                         np.min(corr_arr), np.percentile(corr_arr, 5),
+                         np.percentile(corr_arr, 25), np.median(corr_arr),
+                         np.mean(corr_arr))
+        print(f"     QC morph: region={corr_region_ms_used:.0f}ms, "
+              f"threshold={effective_morph_threshold:.2f}, "
+              f"corrs: min={np.min(corr_arr):.3f} p5={np.percentile(corr_arr, 5):.3f} "
+              f"median={np.median(corr_arr):.3f}")
+
     # ─── Step 4: Accept/Reject decisions ───
     accepted_mask = []
     n_rej_amp = 0
@@ -364,11 +440,59 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
         else:
             accepted_mask.append(True)
 
+    # ─── Step 4b: Period-aware re-admission ───
+    # Morphologically rejected beats that sit at expected rhythm positions
+    # are likely real beats with slightly variable shape (common in 3D
+    # constructs).  Re-admit them if their correlation is above the marginal
+    # floor and their timing fits the clean rhythm.
+    n_readmitted_qc = 0
+    accepted_indices_tmp = [beat_indices[i] for i, a in enumerate(accepted_mask) if a]
+    if len(accepted_indices_tmp) >= 4 and n_rej_morph > 0:
+        acc_arr = np.array(accepted_indices_tmp)
+        clean_bp = np.diff(acc_arr)
+        clean_median_bp = np.median(clean_bp)
+        if clean_median_bp > 0:
+            tol = clean_median_bp * 0.3  # ±30% of median period
+            marginal = getattr(c, 'morphology_marginal', 0.10)
+            min_gap = clean_median_bp * 0.3  # don't re-admit if too close
+
+            for i in range(len(accepted_mask)):
+                if accepted_mask[i]:
+                    continue  # already accepted
+                # Only re-admit morphology rejections (not amplitude)
+                if i < len(amp_ratios) and amp_ratios[i] < amplitude_threshold:
+                    continue
+                # Must be above marginal floor
+                if i < len(morphology_corrs) and morphology_corrs[i] < marginal:
+                    continue
+                # Check rhythmic position relative to accepted beats
+                bi_val = beat_indices[i]
+                dists = np.abs(acc_arr.astype(float) - float(bi_val))
+                min_dist_val = np.min(dists)
+                if min_dist_val < min_gap:
+                    continue  # too close to an accepted beat
+                n_periods = min_dist_val / clean_median_bp
+                residual = abs(n_periods - round(n_periods)) * clean_median_bp
+                if residual < tol and round(n_periods) >= 1:
+                    accepted_mask[i] = True
+                    n_readmitted_qc += 1
+                    n_rej_morph -= 1
+                    # Update accepted array for subsequent distance checks
+                    acc_arr = np.sort(np.append(acc_arr, bi_val))
+
+            if n_readmitted_qc > 0:
+                print(f"     QC re-admitted {n_readmitted_qc} beats "
+                      f"(period-aware, marginal corr ≥ {marginal:.2f})")
+
     qc.accepted_mask = accepted_mask
     qc.n_beats_rejected_snr = n_rej_amp  # "snr" label kept for report compat
     qc.n_beats_rejected_morphology = n_rej_morph
     qc.n_beats_accepted = sum(accepted_mask)
+    qc.n_readmitted = n_readmitted_qc
     qc.rejection_rate = 1 - qc.n_beats_accepted / qc.n_beats_input if qc.n_beats_input > 0 else 0
+    print(f"     QC result: {qc.n_beats_accepted}/{qc.n_beats_input} accepted "
+          f"(rej_amp={n_rej_amp}, rej_morph={n_rej_morph}, "
+          f"readmitted={n_readmitted_qc})")
 
     # Mean stats for accepted beats only
     accepted_ratios = [r for r, a in zip(amp_ratios, accepted_mask) if a]

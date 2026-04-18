@@ -57,14 +57,8 @@ def main():
     config = build_config_from_sidebar()
     st.session_state['_analysis_config'] = config
 
-    # Navigation
-    st.sidebar.divider()
-    page = st.sidebar.radio(
-        f"📑 {T('nav')}",
-        [f"🔬 {T('single_file')}", f"📊 {T('batch')}", f"💊 {T('drug_comparison')}"],
-    )
-
-    # Language selector — bottom of sidebar
+    # Language selector — must be BEFORE navigation so that T() labels
+    # are already in the correct language when the radio is built.
     st.sidebar.divider()
     lang = st.sidebar.selectbox(
         "🌐 Language",
@@ -74,11 +68,26 @@ def main():
     )
     st.session_state['lang'] = lang.lower()
 
-    if page == f"🔬 {T('single_file')}":
+    # Navigation — use a stable index so language switches don't lose
+    # the selected page (label strings change, index doesn't).
+    st.sidebar.divider()
+    page_labels = [
+        f"🔬 {T('single_file')}",
+        f"📊 {T('batch')}",
+        f"💊 {T('drug_comparison')}",
+    ]
+    page_idx = st.sidebar.radio(
+        f"📑 {T('nav')}",
+        range(len(page_labels)),
+        format_func=lambda i: page_labels[i],
+        key='nav_page',
+    )
+
+    if page_idx == 0:
         page_single_file(config)
-    elif page == f"📊 {T('batch')}":
+    elif page_idx == 1:
         page_batch_analysis(config)
-    elif page == f"💊 {T('drug_comparison')}":
+    elif page_idx == 2:
         page_drug_comparison(config)
 
 

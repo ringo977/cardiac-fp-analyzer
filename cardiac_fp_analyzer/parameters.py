@@ -119,7 +119,8 @@ def build_beat_template(beats_data, fs, cfg=None):
 
 def extract_beat_parameters(beat_data, beat_time, fs, rr_interval=None,
                            template_fpd_samples=None, template_peak_samples=None,
-                           template_repol_sign=1, cfg=None):
+                           template_repol_sign=1, cfg=None,
+                           beat_period_s=None):
     """
     Extract parameters from a single segmented beat.
 
@@ -155,7 +156,8 @@ def extract_beat_parameters(beat_data, beat_time, fs, rr_interval=None,
         template_fpd_samples=template_fpd_samples,
         template_peak_samples=template_peak_samples,
         template_repol_sign=template_repol_sign,
-        cfg=cfg
+        cfg=cfg,
+        beat_period_s=beat_period_s
     )
     params['fpd_ms'] = fpd * 1000 if fpd is not None else np.nan
     params['repol_amplitude_mV'] = repol_amp * 1000 if not np.isnan(repol_amp) else np.nan
@@ -194,10 +196,16 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
     from .beat_detection import compute_beat_periods
 
     # Alignment guard: beats_data, beats_time and beat_indices must be in sync
-    assert len(beats_data) == len(beats_time) == len(beat_indices), (
-        f"Parameter extraction alignment error: beats_data={len(beats_data)}, "
-        f"beats_time={len(beats_time)}, beat_indices={len(beat_indices)}"
-    )
+    if not (len(beats_data) == len(beats_time) == len(beat_indices)):
+        raise ValueError(
+            f"Parameter extraction alignment error: beats_data={len(beats_data)}, "
+            f"beats_time={len(beats_time)}, beat_indices={len(beat_indices)}"
+        )
+
+    # Guard against empty input
+    if len(beats_data) == 0:
+        logger.warning("extract_all_parameters: no beats to process")
+        return [], {}
 
     beat_periods = compute_beat_periods(beat_indices, fs)
 
@@ -210,9 +218,37 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
     template_peak_samples = None
 
     consensus_info = None
-    if template is not None:
+    # Compute median beat period for adaptive min FPD
+    median_bp_s = None
+    if len(beat_periods) > 0:
+        median_bp_s = float(np.median(beat_periods))
+
+    # ─── Minimal signal amplitude gate ───
+    # If median spike amplitude is below threshold, skip FPD detection entirely.
+    min_amp_uV = getattr(rc, 'min_signal_amplitude_uV', 0.0)
+    signal_too_weak = False
+    if min_amp_uV > 0 and len(beats_data) > 0:
+        pre_samples = int(rc.segment_pre_ms / 1000 * fs)
+        spike_amps = []
+        for bd in beats_data:
+            sp = max(0, pre_samples - int(rc.spike_pre_ms / 1000 * fs))
+            ep = min(len(bd), pre_samples + int(rc.spike_post_ms / 1000 * fs))
+            if ep > sp:
+                spike_region = bd[sp:ep]
+                spike_amps.append((np.max(spike_region) - np.min(spike_region)) * 1e6)  # V → µV
+        if spike_amps:
+            median_amp_uV = float(np.median(spike_amps))
+            if median_amp_uV < min_amp_uV:
+                signal_too_weak = True
+                logger.info("Signal amplitude gate: median %.1f µV < %.1f µV → "
+                            "FPD analysis skipped (signal too weak)",
+                            median_amp_uV, min_amp_uV)
+
+    if template is not None and not signal_too_weak:
         pre_ms = rc.segment_pre_ms
-        fpd_result = _find_repolarization_on_template(template, fs, pre_ms=pre_ms, cfg=cfg)
+        fpd_result = _find_repolarization_on_template(
+            template, fs, pre_ms=pre_ms, cfg=cfg,
+            median_bp_s=median_bp_s)
         if fpd_result[0] is not None:
             template_fpd_samples = fpd_result[0]
             template_repol_sign = fpd_result[1]
@@ -224,16 +260,61 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
     # ─── Per-beat extraction ───
     all_params = []
     fpd_vals, fpdc_vals, fpdc_bazett_vals, amp_vals = [], [], [], []
+    rise_time_vals, rr_interval_vals = [], []
     pre_samples = int(rc.segment_pre_ms / 1000 * fs)
+
+    # Detect template spike polarity for per-beat inversion detection.
+    # If the template's depolarization spike is positive, and a beat's spike
+    # is negative, the repolarization sign must be flipped for that beat.
+    template_spike_positive = True
+    if template is not None:
+        t_pre = int(rc.segment_pre_ms / 1000 * fs)
+        t_sp = max(0, t_pre - int(rc.spike_pre_ms / 1000 * fs))
+        t_ep = min(len(template), t_pre + int(rc.spike_post_ms / 1000 * fs))
+        t_spike = template[t_sp:t_ep]
+        if len(t_spike) > 0:
+            t_baseline = np.median(template)
+            template_spike_positive = (
+                abs(np.max(t_spike) - t_baseline) >= abs(np.min(t_spike) - t_baseline)
+            )
 
     for i, (bd, bt) in enumerate(zip(beats_data, beats_time)):
         rr = beat_periods[i-1] if i > 0 and i-1 < len(beat_periods) else None
+        # Use per-beat RR for adaptive min FPD; fall back to median
+        bp_for_beat = rr if rr is not None else median_bp_s
+
+        # Per-beat polarity detection: check if this beat's spike is inverted
+        # relative to the template.  If so, flip the repol sign and drop the
+        # template guidance (peak position) since the morphology differs.
+        beat_repol_sign = template_repol_sign
+        beat_tpl_fpd = template_fpd_samples
+        beat_tpl_peak = template_peak_samples
+        zero_i = np.argmin(np.abs(np.array(bt)))
+        b_sp = max(0, zero_i - int(rc.spike_pre_ms / 1000 * fs))
+        b_ep = min(len(bd), zero_i + int(rc.spike_post_ms / 1000 * fs))
+        b_spike = bd[b_sp:b_ep]
+        if len(b_spike) > 0:
+            b_baseline = np.median(bd)
+            beat_spike_positive = (
+                abs(np.max(b_spike) - b_baseline) >= abs(np.min(b_spike) - b_baseline)
+            )
+            if beat_spike_positive != template_spike_positive:
+                # Inverted beat: flip repol sign but KEEP template FPD
+                # timing as a guide — the repolarization timing is similar
+                # even when the morphology is inverted.  Drop peak_samples
+                # (exact peak position depends on morphology) but keep
+                # fpd_samples (approximate timing window).
+                beat_repol_sign = -template_repol_sign
+                beat_tpl_peak = None
+                # beat_tpl_fpd stays as template_fpd_samples
+
         params = extract_beat_parameters(
             bd, bt, fs, rr_interval=rr,
-            template_fpd_samples=template_fpd_samples,
-            template_peak_samples=template_peak_samples,
-            template_repol_sign=template_repol_sign,
-            cfg=cfg
+            template_fpd_samples=beat_tpl_fpd,
+            template_peak_samples=beat_tpl_peak,
+            template_repol_sign=beat_repol_sign,
+            cfg=cfg,
+            beat_period_s=bp_for_beat
         )
         params['beat_number'] = i + 1
         params['rr_interval_ms'] = rr * 1000 if rr is not None else np.nan
@@ -256,13 +337,33 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
         if not np.isnan(params.get('fpdc_bazett_ms', np.nan)):
             fpdc_bazett_vals.append(params['fpdc_bazett_ms'])
         amp_vals.append(params['spike_amplitude_mV'])
+        if not np.isnan(params.get('rise_time_ms', np.nan)):
+            rise_time_vals.append(params['rise_time_ms'])
+        if not np.isnan(params.get('rr_interval_ms', np.nan)):
+            rr_interval_vals.append(params['rr_interval_ms'])
+
+    # ── Repolarization diagnostic trace ──
+    n_repol_ok = sum(1 for p in all_params if not np.isnan(p['fpd_ms']))
+    n_repol_fail = sum(1 for p in all_params if np.isnan(p['fpd_ms']))
+    fpd_measured = [p['fpd_ms'] for p in all_params if not np.isnan(p['fpd_ms'])]
+    fpd_stats = ""
+    if fpd_measured:
+        fpd_arr_diag = np.array(fpd_measured)
+        fpd_stats = (f", FPD: median={np.median(fpd_arr_diag):.0f}ms "
+                     f"range={np.min(fpd_arr_diag):.0f}-{np.max(fpd_arr_diag):.0f}ms")
+    print(f"     Repol: {n_repol_ok}/{len(all_params)} detected, "
+          f"{n_repol_fail} not detectable"
+          f" (template FPD={'%.0f ms' % (template_fpd_samples / fs * 1000) if template_fpd_samples else 'None'}"
+          f"{fpd_stats})")
 
     # ─── Summary statistics ───
     summary = {}
     bp_ms = beat_periods * 1000 if len(beat_periods) > 0 else np.array([])
     for name, vals in [('beat_period_ms', bp_ms), ('spike_amplitude_mV', amp_vals),
                        ('fpd_ms', fpd_vals), ('fpdc_ms', fpdc_vals),
-                       ('fpdc_bazett_ms', fpdc_bazett_vals)]:
+                       ('fpdc_bazett_ms', fpdc_bazett_vals),
+                       ('rise_time_ms', rise_time_vals),
+                       ('rr_interval_ms', rr_interval_vals)]:
         v = np.array(vals)
         v = v[~np.isnan(v)]
         if len(v) > 0:

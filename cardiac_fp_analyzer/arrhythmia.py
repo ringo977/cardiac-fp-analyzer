@@ -40,6 +40,13 @@ _compute_template = compute_template
 
 
 class ArrhythmiaReport:
+    """Container for arrhythmia analysis results.
+
+    Aggregates diagnostic flags, per-beat events, a classification label,
+    a 0-100 risk score, and detailed metrics from both statistical and
+    residual-based analysis approaches.
+    """
+
     def __init__(self):
         self.flags = []
         self.events = []
@@ -86,7 +93,7 @@ class ArrhythmiaReport:
         """
         d = self.details
         n_beats = d.get('n_beats', 0)
-        if n_beats < 3:
+        if not isinstance(n_beats, (int, float)) or n_beats < 3:
             self.risk_score = 0
             return
 
@@ -408,6 +415,8 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs,
     # ── Combine EAD counts from both approaches ──
     n_ead_total = max(n_ead_stat, n_ead_resid)
     ead_pct = report.details.get('ead_incidence_pct', 0)
+    if ead_pct is None or (isinstance(ead_pct, float) and np.isnan(ead_pct)):
+        ead_pct = 0
     if n_ead_total > 0:
         source = 'residual' if n_ead_resid >= n_ead_stat else 'statistical'
         report.add_flag('ead_events',

@@ -336,8 +336,8 @@ def _show_batch_summary(results):
             'Baseline': '✓' if is_baseline(r) else '',
             'QC': qc.grade if qc else '',
             'Inclusione': '✓' if inc.get('passed', True) else '✗',
-            'BP (ms)': f"{s.get('beat_period_ms_mean', np.nan):.0f}",
-            'FPDcF (ms)': f"{s.get('fpdc_ms_mean', np.nan):.0f}",
+            'BP (ms)': f"{np.mean(r.get('beat_periods', [np.nan]))*1000:.0f}",
+            'FPDcF (ms)': f"{s.get('fpdc_ms_mean', np.nan):.1f}",
             'Conf FPD': f"{s.get('fpd_confidence', np.nan):.2f}",
             'ΔFPDcF%': f"{norm.get('pct_fpdc_change', np.nan):.1f}" if norm.get('has_baseline') else '—',
             'TdP Score': norm.get('tdp_score', '—'),
@@ -362,16 +362,16 @@ def _show_batch_details(results):
     idx = labels.index(selected)
     result = results[idx]
 
-    fi = result['file_info']
-    summary = result['summary']
-    qc = result['qc_report']
-    ar = result['arrhythmia_report']
+    fi = result.get('file_info', {})
+    summary = result.get('summary', {})
+    qc = result.get('qc_report')
+    ar = result.get('arrhythmia_report')
 
     cols = st.columns(5)
     cols[0].metric(T('chip_channel'), f"{fi.get('chip', '?')} / {fi.get('analyzed_channel', '?')}")
     cols[1].metric(T('drug'), fi.get('drug', 'N/A'))
     cols[2].metric("QC Grade", qc.grade if qc else '?')
-    cols[3].metric(T('fpdc'), f"{summary.get('fpdc_ms_mean', 0):.0f}")
+    cols[3].metric(T('fpdc'), f"{summary.get('fpdc_ms_mean', 0):.1f}")
     cols[4].metric(T('risk_score'), f"{ar.risk_score}/100" if ar else '?')
 
     tab_sig, tab_params, tab_arr = st.tabs([
@@ -388,7 +388,7 @@ def _show_batch_details(results):
         # Beat overlay (using beat_template if beats_data was freed)
         tmpl = result.get('beat_template')
         if tmpl is not None and 'beats_data' not in result:
-            fs = result['metadata']['sample_rate']
+            fs = result.get('metadata', {}).get('sample_rate', 2000)
             scale, y_label = amplitude_scale(tmpl)
             fig = go.Figure()
             t_ms = np.arange(len(tmpl)) / fs * 1000

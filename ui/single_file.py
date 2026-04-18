@@ -79,18 +79,18 @@ def page_single_file(config: AnalysisConfig):
 
 def _display_single_channel(result, config):
     """Display results for a single channel analysis."""
-    fi = result['file_info']
-    summary = result['summary']
-    qc = result['qc_report']
-    ar = result['arrhythmia_report']
+    fi = result.get('file_info', {})
+    summary = result.get('summary', {})
+    qc = result.get('qc_report')
+    ar = result.get('arrhythmia_report')
 
     # ── Info cards ──
     cols = st.columns(5)
     cols[0].metric(T('chip_channel'), f"{fi.get('chip', '?')} / {fi.get('analyzed_channel', '?')}")
     cols[1].metric(T('drug'), fi.get('drug', 'N/A'))
-    cols[2].metric("QC Grade", qc.grade)
-    cols[3].metric(T('fpdc'), f"{summary.get('fpdc_ms_mean', 0):.0f} ± {summary.get('fpdc_ms_std', 0):.0f}")
-    cols[4].metric(T('risk_score'), f"{ar.risk_score}/100")
+    cols[2].metric("QC Grade", qc.grade if qc else '?')
+    cols[3].metric(T('fpdc'), f"{summary.get('fpdc_ms_mean', 0):.1f} ± {summary.get('fpdc_ms_std', 0):.1f}")
+    cols[4].metric(T('risk_score'), f"{ar.risk_score}/100" if ar else '?')
 
     # ── Tabs ──
     tab_signal, tab_beats, tab_params, tab_arrhythmia = st.tabs([
@@ -122,16 +122,28 @@ def _display_both_channels(results_both, config):
     comp_rows = []
     for ch in channels:
         r = results_both[ch]
-        s, qc, ar = r['summary'], r['qc_report'], r['arrhythmia_report']
+        s = r.get('summary', {})
+        qc = r.get('qc_report')
+        ar = r.get('arrhythmia_report')
+        # Use beat_periods from all detected beats (not QC-cleaned) for
+        # accurate rhythm stats; beat count = number of QC-accepted beats.
+        bp_all = r.get('beat_periods', np.array([]))
+        n_beats = len(r.get('beat_indices', []))
+        if len(bp_all) > 0:
+            bp_str = f"{np.mean(bp_all)*1000:.0f} ± {np.std(bp_all)*1000:.0f}"
+            cv_bp = np.std(bp_all) / np.mean(bp_all) * 100 if np.mean(bp_all) > 0 else 0
+        else:
+            bp_str = '?'
+            cv_bp = 0
         comp_rows.append({
             T('channel'): ch.upper(),
-            'QC Grade': qc.grade,
-            'Beats': s.get('beat_period_ms_n', 0),
-            'BP (ms)': f"{s.get('beat_period_ms_mean', 0):.0f} ± {s.get('beat_period_ms_std', 0):.0f}",
-            'CV BP%': f"{s.get('beat_period_ms_cv', 0):.1f}",
-            'FPDcF (ms)': f"{s.get('fpdc_ms_mean', 0):.0f} ± {s.get('fpdc_ms_std', 0):.0f}",
+            'QC Grade': qc.grade if qc else '?',
+            'Beats': n_beats,
+            'BP (ms)': bp_str,
+            'CV BP%': f"{cv_bp:.1f}",
+            'FPDcF (ms)': f"{s.get('fpdc_ms_mean', 0):.1f} ± {s.get('fpdc_ms_std', 0):.1f}",
             'Spike (mV)': f"{s.get('spike_amplitude_mV_mean', 0):.4f}",
-            'Risk': f"{ar.risk_score}/100",
+            'Risk': f"{ar.risk_score}/100" if ar else '?',
         })
     st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)
 
@@ -141,18 +153,18 @@ def _display_both_channels(results_both, config):
     selected_ch = selected_label.lower()
     result = results_both[selected_ch]
 
-    fi = result['file_info']
-    summary = result['summary']
-    qc = result['qc_report']
-    ar = result['arrhythmia_report']
+    fi = result.get('file_info', {})
+    summary = result.get('summary', {})
+    qc = result.get('qc_report')
+    ar = result.get('arrhythmia_report')
 
     # ── Info cards ──
     cols = st.columns(5)
     cols[0].metric(T('chip_channel'), f"{fi.get('chip', '?')} / {selected_label}")
     cols[1].metric(T('drug'), fi.get('drug', 'N/A'))
-    cols[2].metric("QC Grade", qc.grade)
-    cols[3].metric(T('fpdc'), f"{summary.get('fpdc_ms_mean', 0):.0f} ± {summary.get('fpdc_ms_std', 0):.0f}")
-    cols[4].metric(T('risk_score'), f"{ar.risk_score}/100")
+    cols[2].metric("QC Grade", qc.grade if qc else '?')
+    cols[3].metric(T('fpdc'), f"{summary.get('fpdc_ms_mean', 0):.1f} ± {summary.get('fpdc_ms_std', 0):.1f}")
+    cols[4].metric(T('risk_score'), f"{ar.risk_score}/100" if ar else '?')
 
     # ── Analysis tabs for selected channel ──
     tab_signal, tab_beats, tab_params, tab_arrhythmia = st.tabs([
@@ -184,10 +196,10 @@ def _single_file_exports(result, config):
     st.divider()
     st.subheader(f"📥 {T('export_section')}")
 
-    fi = result['file_info']
-    summary = result['summary']
-    qc = result['qc_report']
-    ar = result['arrhythmia_report']
+    fi = result.get('file_info', {})
+    summary = result.get('summary', {})
+    qc = result.get('qc_report')
+    ar = result.get('arrhythmia_report')
     all_p = result.get('all_params', [])
     fname_base = fi.get('filename', 'recording').replace('.csv', '')
 
@@ -227,7 +239,7 @@ def _single_file_exports(result, config):
             'Electrode': fi.get('analyzed_channel', ''),
             'Drug': fi.get('drug', 'N/A'),
             'Concentration': fi.get('concentration', ''),
-            'QC_Grade': qc.grade,
+            'QC_Grade': qc.grade if qc else '?',
             'Beats_accepted': summary.get('beat_period_ms_n', 0),
             'Mean_BP_ms': summary.get('beat_period_ms_mean', np.nan),
             'CV_BP_pct': summary.get('beat_period_ms_cv', np.nan),
@@ -237,8 +249,8 @@ def _single_file_exports(result, config):
             'SD_FPDcF_ms': summary.get('fpdc_ms_std', np.nan),
             'STV_FPDcF_ms': summary.get('stv_fpdc_ms', np.nan),
             'Mean_spike_mV': summary.get('spike_amplitude_mV_mean', np.nan),
-            'Risk_score': ar.risk_score,
-            'Classification': ar.classification,
+            'Risk_score': ar.risk_score if ar else np.nan,
+            'Classification': ar.classification if ar else '?',
         }
         df_summary = pd.DataFrame([summary_row])
         csv_summary = df_summary.to_csv(index=False).encode('utf-8')

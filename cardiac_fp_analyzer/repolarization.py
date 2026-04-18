@@ -196,7 +196,8 @@ def consensus_fpd(seg_det, best_pk, best_sign, fs, search_start, spike_idx, cfg=
     return selected_fpd, method_details
 
 
-def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None):
+def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None,
+                                    median_bp_s=None):
     """
     Find the repolarization wave on a clean averaged template.
 
@@ -220,7 +221,20 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None):
 
     # Search for repolarization
     search_start = spike_idx + int(rc.search_start_ms / 1000 * fs)
-    search_end = spike_idx + int(rc.search_end_ms / 1000 * fs)
+    # Adaptive search end: extend window for slow rhythms (e.g. dofetilide)
+    fixed_end_ms = rc.search_end_ms
+    pct_rr_end = getattr(rc, 'search_end_pct_rr', 0.0)
+    if pct_rr_end > 0 and median_bp_s is not None and median_bp_s > 0:
+        adaptive_end_ms = pct_rr_end * median_bp_s * 1000
+        effective_end_ms = max(fixed_end_ms, adaptive_end_ms)
+        if adaptive_end_ms > fixed_end_ms:
+            logger.debug("Template search_end: adaptive %.0f ms > fixed %.0f ms "
+                         "(%.0f%% of RR=%.0f ms)",
+                         adaptive_end_ms, fixed_end_ms,
+                         pct_rr_end * 100, median_bp_s * 1000)
+    else:
+        effective_end_ms = fixed_end_ms
+    search_end = spike_idx + int(effective_end_ms / 1000 * fs)
 
     if search_end > len(template):
         search_end = len(template)
@@ -243,6 +257,27 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None):
     seg_det = linear_detrend_endpoints(seg_smooth, margin_frac=rc.detrend_margin_frac)
 
     # ─── Step 1: Find the repolarization peak ───
+    # Minimum FPD constraint: exclude peaks that would yield FPD below
+    # the physiological floor (afterpotential rebound, not real T-wave).
+    # Effective floor = max(fixed min_fpd_ms, adaptive min_fpd_pct_rr × RR).
+    fixed_min_fpd_ms = getattr(rc, 'min_fpd_ms', 0)
+    adaptive_min_fpd_ms = 0.0
+    pct_rr = getattr(rc, 'min_fpd_pct_rr', 0.0)
+    if pct_rr > 0 and median_bp_s is not None and median_bp_s > 0:
+        adaptive_min_fpd_ms = pct_rr * median_bp_s * 1000  # convert to ms
+    effective_min_fpd_ms = max(fixed_min_fpd_ms, adaptive_min_fpd_ms)
+    min_fpd_samples = int(effective_min_fpd_ms / 1000 * fs)
+    if adaptive_min_fpd_ms > fixed_min_fpd_ms:
+        logger.debug("Template min_fpd: adaptive %.0f ms > fixed %.0f ms "
+                     "(%.0f%% of RR=%.0f ms)",
+                     adaptive_min_fpd_ms, fixed_min_fpd_ms,
+                     pct_rr * 100, median_bp_s * 1000)
+    # Convert to minimum peak index within the search segment:
+    # peak_idx in seg → FPD_samples = search_start + peak_idx - spike_idx
+    # We want FPD_samples >= min_fpd_samples, i.e.
+    # peak_idx >= min_fpd_samples - (search_start - spike_idx)
+    min_pk_idx = max(0, min_fpd_samples - (search_start - spike_idx))
+
     best_pk = None
     best_prom = 0
     best_sign = 1
@@ -254,17 +289,28 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None):
                                      prominence=threshold,
                                      distance=peak_dist)
         if len(pks) > 0:
-            idx = np.argmax(props['prominences'])
-            if props['prominences'][idx] > best_prom:
-                best_prom = props['prominences'][idx]
-                best_pk = pks[idx]
-                best_sign = sign
+            # Exclude peaks that would give FPD < min_fpd_ms
+            for j in range(len(pks)):
+                if pks[j] < min_pk_idx:
+                    continue
+                if props['prominences'][j] > best_prom:
+                    best_prom = props['prominences'][j]
+                    best_pk = pks[j]
+                    best_sign = sign
 
     if best_pk is None:
-        # No peak found by find_peaks — try argmax as last resort
-        best_pk = np.argmax(np.abs(seg_det))
-        best_sign = 1 if seg_det[best_pk] > 0 else -1
-        best_prom = np.abs(seg_det[best_pk])
+        # No peak found by find_peaks — try argmax as last resort,
+        # but still respect min FPD constraint
+        valid_region = seg_det[min_pk_idx:] if min_pk_idx < len(seg_det) else seg_det
+        if len(valid_region) > 0:
+            local_idx = np.argmax(np.abs(valid_region))
+            best_pk = min_pk_idx + local_idx
+            best_sign = 1 if seg_det[best_pk] > 0 else -1
+            best_prom = np.abs(seg_det[best_pk])
+        else:
+            best_pk = np.argmax(np.abs(seg_det))
+            best_sign = 1 if seg_det[best_pk] > 0 else -1
+            best_prom = np.abs(seg_det[best_pk])
 
     # ─── Repolarization detectability gate ───
     # If the best candidate's prominence is too low relative to noise,
@@ -272,7 +318,19 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None):
     # Return None instead of forcing a spurious FPD measurement.
     # Reference: EFP Analyzer (Patel et al., Sci Rep 2025) — traces with
     # non-detectable repolarization are excluded, not force-measured.
-    noise_level_gate = np.std(seg_det)
+    # Noise is estimated excluding the peak region so the repol bump
+    # itself doesn't inflate the noise estimate.
+    if best_pk is not None:
+        pk_excl_s = max(0, best_pk - int(0.030 * fs))
+        pk_excl_e = min(len(seg_det), best_pk + int(0.030 * fs))
+        noise_region_t = np.concatenate([
+            seg_det[:pk_excl_s], seg_det[pk_excl_e:]
+        ]) if pk_excl_s > 5 or pk_excl_e < len(seg_det) - 5 else seg_det
+        noise_level_gate = np.std(noise_region_t) if len(noise_region_t) > 10 else np.std(seg_det)
+    else:
+        noise_level_gate = np.std(seg_det)
+    if np.isnan(noise_level_gate) or noise_level_gate <= 0:
+        noise_level_gate = 0.0
     if rc.enable_repol_gate and noise_level_gate > 0:
         repol_snr = best_prom / noise_level_gate
         if repol_snr < rc.repol_gate_min_snr:
@@ -332,7 +390,8 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
                                  template_fpd_samples=None,
                                  template_peak_samples=None,
                                  template_repol_sign=1,
-                                 cfg=None):
+                                 cfg=None,
+                                 beat_period_s=None):
     """
     Find repolarization in a single beat, optionally guided by template.
 
@@ -363,7 +422,15 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
         peak_search_end = spike_idx + template_fpd_samples + search_tolerance + int(0.100 * fs)
     else:
         peak_search_start = spike_idx + int(rc.search_start_ms / 1000 * fs)
-        peak_search_end = spike_idx + int(rc.search_end_ms / 1000 * fs)
+        # Adaptive search end for unguided per-beat search
+        fixed_end_ms = rc.search_end_ms
+        pct_rr_end = getattr(rc, 'search_end_pct_rr', 0.0)
+        if pct_rr_end > 0 and beat_period_s is not None and beat_period_s > 0:
+            adaptive_end_ms = pct_rr_end * beat_period_s * 1000
+            effective_end_ms = max(fixed_end_ms, adaptive_end_ms)
+        else:
+            effective_end_ms = fixed_end_ms
+        peak_search_end = spike_idx + int(effective_end_ms / 1000 * fs)
 
     if peak_search_end > len(data):
         peak_search_end = len(data)
@@ -388,50 +455,105 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
     seg_det = linear_detrend_endpoints(seg_smooth, margin_frac=rc.detrend_margin_frac)
 
     # ─── Step 1: Find the repolarization peak ───
+    # Minimum FPD constraint: exclude peaks in the afterpotential zone.
+    # Effective floor = max(fixed min_fpd_ms, adaptive min_fpd_pct_rr × RR).
+    fixed_min_fpd_ms = getattr(rc, 'min_fpd_ms', 0)
+    adaptive_min_fpd_ms = 0.0
+    pct_rr = getattr(rc, 'min_fpd_pct_rr', 0.0)
+    if pct_rr > 0 and beat_period_s is not None and beat_period_s > 0:
+        adaptive_min_fpd_ms = pct_rr * beat_period_s * 1000
+    effective_min_fpd_ms = max(fixed_min_fpd_ms, adaptive_min_fpd_ms)
+    min_fpd_samples = int(effective_min_fpd_ms / 1000 * fs)
+    min_pk_idx = max(0, min_fpd_samples - (peak_search_start - spike_idx))
+
     best_idx = None
     best_score = 0
     peak_dist = int(rc.per_beat_peak_distance_ms / 1000 * fs)
     dist_penalty_scale = rc.per_beat_distance_penalty_ms / 1000 * fs
 
+    # Use MAD-based noise estimate for the prominence threshold.
+    # MAD is more robust than std to outliers (depol remnants, artifacts)
+    # that inflate the noise estimate and cause find_peaks to miss real
+    # repolarization bumps.  Use the lower of MAD-based and std-based to
+    # be more sensitive, but keep a floor so that truly flat (no-repol)
+    # signals don't trigger on pure noise.
+    std_noise = np.std(seg_det)
+    mad_noise = np.median(np.abs(seg_det - np.median(seg_det)))
+    robust_noise = 1.4826 * mad_noise if mad_noise > 0 else std_noise
+    # Use the lower estimate (more sensitive) but not less than 40% of std
+    effective_noise = max(min(robust_noise, std_noise), 0.4 * std_noise)
+    # Per-beat uses a lower prominence factor than template (noisier)
+    prom_factor = getattr(rc, 'per_beat_prominence_factor', rc.peak_prominence_factor)
+    repol_prom_threshold = effective_noise * prom_factor
+
     for sign in [template_repol_sign, -template_repol_sign]:
         pks, props = sig.find_peaks(sign * seg_det,
-                                     prominence=np.std(seg_det) * rc.peak_prominence_factor,
+                                     prominence=repol_prom_threshold,
                                      distance=peak_dist)
         if len(pks) > 0:
+            # Filter out peaks that would give FPD < min_fpd_ms
+            valid = pks >= min_pk_idx
+            pks = pks[valid]
+            proms = props['prominences'][valid]
+            if len(pks) == 0:
+                continue
+
             if template_peak_samples is not None:
                 expected_local = template_peak_samples - (peak_search_start - spike_idx)
                 distances = np.abs(pks - expected_local)
-                scores = props['prominences'] / (1 + distances / dist_penalty_scale)
+                scores = proms / (1 + distances / dist_penalty_scale)
                 best_pk = pks[np.argmax(scores)]
                 score = np.max(scores)
             elif template_fpd_samples is not None:
                 expected_local = template_fpd_samples - int(0.050 * fs) - (peak_search_start - spike_idx)
                 distances = np.abs(pks - expected_local)
-                scores = props['prominences'] / (1 + distances / dist_penalty_scale)
+                scores = proms / (1 + distances / dist_penalty_scale)
                 best_pk = pks[np.argmax(scores)]
                 score = np.max(scores)
             else:
-                best_pk = pks[np.argmax(props['prominences'])]
-                score = np.max(props['prominences'])
+                best_pk = pks[np.argmax(proms)]
+                score = np.max(proms)
 
             if score > best_score:
                 best_score = score
                 best_idx = best_pk
 
     if best_idx is None:
-        best_idx = np.argmax(np.abs(seg_det))
+        # Fallback: argmax but respect min FPD
+        valid_region = seg_det[min_pk_idx:] if min_pk_idx < len(seg_det) else seg_det
+        if len(valid_region) > 0:
+            best_idx = min_pk_idx + np.argmax(np.abs(valid_region))
+        else:
+            best_idx = np.argmax(np.abs(seg_det))
 
     # ─── Repolarization detectability gate (per-beat) ───
-    # Same logic as template gate but with more lenient threshold,
-    # since individual beats are noisier than the averaged template.
+    # Prominence: use the best_score from find_peaks if it came from
+    # find_peaks (actual prominence), otherwise fall back to abs(peak value).
+    # Noise is estimated excluding ±50ms around the peak.
+    # When the search is template-guided, use the lenient threshold (1.2)
+    # because the template gives confidence the repol exists. When unguided,
+    # use a stricter threshold (midpoint towards template gate) to avoid
+    # accepting noise peaks on flat signals.
     if rc.enable_repol_gate:
-        noise_level_beat = np.std(seg_det)
+        excl_half = int(0.050 * fs)
+        peak_excl_start = max(0, best_idx - excl_half)
+        peak_excl_end = min(len(seg_det), best_idx + excl_half)
+        beat_prom = best_score if best_score > 0 else np.abs(seg_det[best_idx])
+        noise_region = np.concatenate([
+            seg_det[:peak_excl_start],
+            seg_det[peak_excl_end:]
+        ]) if (peak_excl_start > 5 and peak_excl_end < len(seg_det) - 5) else seg_det
+        noise_level_beat = np.std(noise_region) if len(noise_region) > 10 else np.std(seg_det)
         if noise_level_beat > 0:
-            beat_prom = np.abs(seg_det[best_idx])
+            # Template-guided → lenient; unguided → stricter
+            is_guided = (template_fpd_samples is not None or template_peak_samples is not None)
+            snr_threshold = rc.repol_gate_min_snr_beat if is_guided else (
+                getattr(rc, 'repol_gate_min_snr_beat_unguided', rc.repol_gate_min_snr_beat)
+            )
             beat_repol_snr = beat_prom / noise_level_beat
-            if beat_repol_snr < rc.repol_gate_min_snr_beat:
-                logger.debug("Per-beat repol gate: SNR=%.2f < %.1f → not detectable",
-                             beat_repol_snr, rc.repol_gate_min_snr_beat)
+            if beat_repol_snr < snr_threshold:
+                logger.debug("Per-beat repol gate: SNR=%.2f < %.1f (guided=%s) → not detectable",
+                             beat_repol_snr, snr_threshold, is_guided)
                 return None, np.nan, None, None
 
     # ─── Step 2: Apply configured FPD method ───
