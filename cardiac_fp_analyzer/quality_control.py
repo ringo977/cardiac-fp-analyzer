@@ -187,11 +187,19 @@ def compute_beat_template(beats_data, amplitudes=None, max_beats=50):
         else:
             selected = list(beats_data[:n])
 
-    # Ensure all beats have the same length
-    min_len = min(len(b) for b in selected)
-    if min_len < 10:
+    # Invariant: ``segment_beats`` produces beats that all share the
+    # same length (``data[idx-pre : idx+post]`` with fixed pre/post).
+    # The per-beat slice used to appear here as a defensive no-op; it
+    # has been replaced by an assertion that documents the precondition
+    # while keeping the functional ``< 10``-sample sanity check below.
+    beat_len = len(selected[0])
+    assert all(len(b) == beat_len for b in selected), (
+        "compute_beat_template: beats must share the same length; got " +
+        repr({len(b) for b in selected})
+    )
+    if beat_len < 10:
         return None
-    aligned = np.array([b[:min_len] for b in selected])
+    aligned = np.asarray(selected)
 
     return np.median(aligned, axis=0)
 

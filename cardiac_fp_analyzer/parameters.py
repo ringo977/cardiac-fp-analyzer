@@ -108,8 +108,20 @@ def build_beat_template(beats_data, fs, cfg=None):
     if not aligned:
         return None
 
-    min_len = min(len(b) for b in aligned)
-    mat = np.array([b[:min_len] for b in aligned])
+    # Invariant: _align_beats_xcorr returns beats that all share the same
+    # length as its input (it truncates to min_len internally and each
+    # aligned beat is re-sliced to that length at its return site).  The
+    # per-beat slice that used to appear here was therefore a no-op.
+    # Kept as an assertion so the precondition is documented and
+    # enforced (and so np.array() doesn't silently produce an object
+    # array if the invariant ever breaks under a future refactor).
+    beat_len = len(aligned[0])
+    assert all(len(b) == beat_len for b in aligned), (
+        "build_beat_template: _align_beats_xcorr must return "
+        "equal-length beats; got lengths " +
+        repr({len(b) for b in aligned})
+    )
+    mat = np.asarray(aligned)
 
     template = np.median(mat, axis=0)
     return template
