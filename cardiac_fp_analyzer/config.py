@@ -179,6 +179,36 @@ class BeatDetectionConfig:
     cluster_alternans_ratio_low: float = 0.85   # lower edge of alt band
     cluster_alternans_ratio_high: float = 1.15  # upper edge of alt band
 
+    # ── Rhythm topology classifier (Sprint 2 #3) ──
+    # Characterises the detected beats into one of:
+    #   'regular'                 — one amplitude cluster, CV(RR) low
+    #   'chaotic'                 — one amplitude cluster, CV(RR) high
+    #   'alternans_2_to_1'        — two clusters, low beats at phase 0.5 ±ε
+    #                                of each high-high cycle (bigeminy-like)
+    #   'regular_with_ectopics'   — two clusters, low cluster amplitudes
+    #                                uniform (likely biological ectopic beats)
+    #   'regular_with_noise'      — two clusters, low cluster amplitudes
+    #                                disperse (likely noise spikes)
+    #   'trimodal'                — three clusters (dominant + secondary + noise)
+    #   'unimodal_insufficient'   — fewer than required beats
+    #   'degenerate'              — zero-amplitude windows present
+    # This is a PURE classifier: it never modifies the beat list. Downstream
+    # code reads info['rhythm_classification'] to decide how to interpret
+    # beats (e.g. FPD only on dominant cluster when alternans, flag ectopics
+    # for manual review, etc.).
+    enable_rhythm_topology: bool = True
+    topology_gap_ratio: float = 2.5           # absolute-floor ratio to always split
+    topology_secondary_gap_ratio: float = 1.3 # min ratio for statistical gap
+    topology_gap_zscore: float = 3.0          # z-score on log-ratio for significance
+    topology_noise_gap_ratio: float = 5.0     # stronger gap → noise cluster candidate
+    topology_regular_cv_max: float = 0.15     # CV(RR) below → regular
+    topology_chaotic_cv_min: float = 0.25     # CV(RR) above → chaotic
+    topology_alternans_phase_band: float = 0.1  # |phase_low - 0.5| must be ≤ this
+    topology_alternans_phase_std_max: float = 0.08  # phase std must be ≤ this
+    topology_amp_cv_biological_max: float = 0.25    # amp CV ≤ this → biological
+    topology_amp_cv_noise_min: float = 0.40         # amp CV ≥ this → noise
+    topology_min_beats: int = 5                     # minimum beats to classify
+
     # Beat recovery: after initial detection, use the estimated beat period
     # to search for missed beats at expected locations with a lower threshold.
     # Recovered candidates are validated against the template before acceptance.
