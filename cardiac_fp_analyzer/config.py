@@ -222,6 +222,21 @@ class BeatDetectionConfig:
     rhythm_qc_downgrade_threshold: float = 0.30
     rhythm_qc_downgrade_steps: int = 1
 
+    # Rhythm filter safety bail (Sprint 3 #3 — bradycardia trimodal fix)
+    # If "dominant cluster only" filtering would retain fewer than
+    # ``rhythm_filter_min_retention_ratio × len(bi_clean)`` beats OR fewer
+    # than ``rhythm_filter_min_retention_beats`` in absolute terms, skip
+    # the filter and keep all QC-accepted beats. This prevents the
+    # trimodal/ectopic classifier from throwing away the majority of a
+    # bradycardic recording when the R+T double-spike pattern confuses
+    # the amplitude-cluster assignment (observed on
+    # Exp6_chipD_ch1 EL1 where 34 QC-accepted beats were reduced to 7 by
+    # the "trimodal" branch). A rhythm whose dominant cluster carries
+    # less than half the QC-accepted signal is almost certainly a
+    # classification artefact rather than a true ectopy pattern.
+    rhythm_filter_min_retention_ratio: float = 0.5
+    rhythm_filter_min_retention_beats: int = 3
+
     # RR-outlier filter (Sprint 3 #1 — bradycardia robustness)
     # Drops beats whose preceding RR exceeds ``max_rr_outlier_ratio ×
     # median RR``. Catches dropout-followed-by-reactivation artefacts

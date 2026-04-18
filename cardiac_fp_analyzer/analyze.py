@@ -232,11 +232,21 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
             bd_clean, btm_clean, bi_clean, bi,
             rhythm_classification=rc,
             enable=getattr(config.beat_detection, 'enable_rhythm_aware_fpd', True),
+            min_retention_ratio=getattr(config.beat_detection,
+                                         'rhythm_filter_min_retention_ratio', 0.5),
+            min_retention_beats=getattr(config.beat_detection,
+                                         'rhythm_filter_min_retention_beats', 5),
         )
         if verbose and rhythm_filter_info.get('filter_applied'):
             print(f"  Rhythm filter ({rhythm_filter_info['rhythm_type']}): "
                   f"kept {rhythm_filter_info['n_kept']}/{rhythm_filter_info['n_input']} "
                   f"beats ({rhythm_filter_info['kept_role']} cluster only)")
+        elif verbose and rhythm_filter_info.get('reason') == 'safety_bail_low_retention':
+            sb = rhythm_filter_info.get('safety_bail', {})
+            print(f"  Rhythm filter ({rhythm_filter_info['rhythm_type']}): "
+                  f"SAFETY BAIL — would keep {sb.get('n_would_keep')}/{rhythm_filter_info['n_input']} "
+                  f"({sb.get('retention_ratio', 0)*100:.0f}% < "
+                  f"{sb.get('min_retention_ratio', 0)*100:.0f}%), passthrough")
 
         # Apply QC downgrade for noise-contaminated signals (mutates qc_report.grade).
         _qc_downgrade_info = apply_rhythm_qc_downgrade(

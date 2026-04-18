@@ -169,6 +169,99 @@ class TestApplyRhythmFilterDominantOnly:
         assert info['reason'] == 'no_dominant_cluster'
 
 
+class TestApplyRhythmFilterSafetyBail:
+    """Sprint 3 #3 — bradycardia trimodal safety bail.
+
+    Protects against the Exp6_chipD_ch1 EL1 failure mode where a trimodal
+    classifier reduced 34 QC-accepted beats to 7 (20% retention), throwing
+    away the majority of a bradycardic recording. When the dominant
+    cluster would carry <50% of the QC signal, the filter must fall back
+    to passthrough and annotate the reason.
+    """
+
+    def test_bails_when_retention_ratio_below_default(self):
+        # 20 QC beats, trimodal dominant only 4 → 20% retention, below 50%
+        bd, btm, bi = _fake_beats(20)
+        dom_idx = [0, 5, 10, 15]
+        rc = {'rhythm_type': 'trimodal',
+              'clusters': [
+                  {'role': 'dominant', 'indices_in_bi': dom_idx, 'n': 4},
+                  {'role': 'secondary',
+                   'indices_in_bi': list(range(1, 20)),
+                   'n': 16},
+              ]}
+        bd_f, btm_f, bi_f, info = apply_rhythm_filter(bd, btm, bi, bi, rc)
+        assert info['filter_applied'] is False
+        assert info['reason'] == 'safety_bail_low_retention'
+        assert info['rhythm_type'] == 'trimodal'
+        assert info['safety_bail']['n_would_keep'] == 4
+        assert info['safety_bail']['retention_ratio'] == 0.2
+        assert np.array_equal(bi_f, bi)
+        assert bd_f.shape == bd.shape  # unchanged
+
+    def test_does_not_bail_at_exactly_fifty_percent(self):
+        """50% retention is the boundary — `<` not `<=` — no bail."""
+        bd, btm, bi = _fake_beats(10)
+        dom_idx = [0, 2, 4, 6, 8]  # 5/10 = 50%
+        rc = {'rhythm_type': 'alternans_2_to_1',
+              'clusters': [
+                  {'role': 'dominant', 'indices_in_bi': dom_idx, 'n': 5},
+                  {'role': 'secondary',
+                   'indices_in_bi': [1, 3, 5, 7, 9], 'n': 5},
+              ]}
+        _, _, bi_f, info = apply_rhythm_filter(bd, btm, bi, bi, rc)
+        assert info['filter_applied'] is True
+        assert info['n_kept'] == 5
+        assert info['reason'] == 'kept_dominant_only'
+
+    def test_bails_below_absolute_min_beats(self):
+        # 6 QC → 2 kept: ratio 33% would bail on ratio anyway, but also
+        # n_kept=2 < min_retention_beats=3 absolute bail fires.
+        bd, btm, bi = _fake_beats(6)
+        dom_idx = [0, 3]
+        rc = {'rhythm_type': 'trimodal',
+              'clusters': [
+                  {'role': 'dominant', 'indices_in_bi': dom_idx, 'n': 2},
+                  {'role': 'secondary',
+                   'indices_in_bi': [1, 2, 4, 5], 'n': 4},
+              ]}
+        _, _, bi_f, info = apply_rhythm_filter(bd, btm, bi, bi, rc)
+        assert info['filter_applied'] is False
+        assert info['reason'] == 'safety_bail_low_retention'
+        assert len(bi_f) == 6  # full passthrough
+
+    def test_custom_retention_ratio_param(self):
+        # 10 QC → 7 dominant (70% retention). Default bail=0.5 so no
+        # bail; with stricter bail=0.8 it should fire.
+        bd, btm, bi = _fake_beats(10)
+        dom_idx = list(range(7))
+        rc = {'rhythm_type': 'trimodal',
+              'clusters': [
+                  {'role': 'dominant', 'indices_in_bi': dom_idx, 'n': 7},
+                  {'role': 'secondary',
+                   'indices_in_bi': [7, 8, 9], 'n': 3},
+              ]}
+        _, _, _, info_default = apply_rhythm_filter(bd, btm, bi, bi, rc)
+        assert info_default['filter_applied'] is True
+        _, _, _, info_strict = apply_rhythm_filter(
+            bd, btm, bi, bi, rc, min_retention_ratio=0.8)
+        assert info_strict['filter_applied'] is False
+        assert info_strict['reason'] == 'safety_bail_low_retention'
+
+    def test_safety_bail_preserves_rhythm_type_for_ui(self):
+        """Downstream UI/summary needs the rhythm_type to render the
+        badge even when the filter bailed — verify it's preserved."""
+        bd, btm, bi = _fake_beats(10)
+        dom_idx = [0, 5]  # 20% retention
+        rc = {'rhythm_type': 'trimodal',
+              'clusters': [
+                  {'role': 'dominant', 'indices_in_bi': dom_idx, 'n': 2}]}
+        _, _, _, info = apply_rhythm_filter(bd, btm, bi, bi, rc)
+        assert info['filter_applied'] is False
+        assert info['rhythm_type'] == 'trimodal'
+        assert 'safety_bail' in info
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  2. build_rhythm_summary_fields
 # ═══════════════════════════════════════════════════════════════════════

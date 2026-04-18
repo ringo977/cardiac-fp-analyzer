@@ -140,6 +140,8 @@ def apply_rhythm_filter(
     bi_raw: np.ndarray,
     rhythm_classification: dict[str, Any] | None,
     enable: bool = True,
+    min_retention_ratio: float = 0.5,
+    min_retention_beats: int = 3,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
     """Filter QC-cleaned beats so FPD / amplitude statistics use only the
     dominant amplitude cluster when the rhythm topology calls for it.
@@ -157,6 +159,16 @@ def apply_rhythm_filter(
         ``info['rhythm_classification']`` from ``detect_beats``.
     enable : bool
         Master switch. When False, returns inputs unchanged.
+    min_retention_ratio : float, default 0.5
+        Safety bail: if applying "dominant cluster only" would keep
+        fewer than ``min_retention_ratio × len(bi_clean)`` beats, fall
+        back to passthrough. A rhythm whose dominant cluster carries
+        less than half the QC-accepted signal is almost certainly a
+        trimodal/ectopic classification artefact (observed on
+        Exp6_chipD_ch1 EL1: 34 QC beats → 7 trimodal-kept).
+    min_retention_beats : int, default 3
+        Safety bail: also fall back to passthrough if the absolute
+        number of kept beats would be below this threshold.
 
     Returns
     -------
@@ -205,6 +217,33 @@ def apply_rhythm_filter(
         # Fall back to passthrough rather than returning an empty beat
         # set that would crash parameter extraction.
         info['reason'] = 'qc_removed_all_dominant'
+        return bd_clean, btm_clean, bi_clean, info
+
+    # Safety bail (Sprint 3 #3 — bradycardia trimodal fix):
+    # if keeping only the dominant cluster would discard too much of
+    # the QC-accepted signal, the classification is almost certainly a
+    # trimodal artefact of bradycardic R+T double-spikes (Exp6_chipD_ch1
+    # EL1: 34 → 7 beats). Fall back to passthrough and annotate the
+    # diagnostic dict so downstream UI / summary can still report the
+    # rhythm type.
+    n_input = int(len(bi_clean))
+    min_ratio = float(min_retention_ratio) if min_retention_ratio is not None else 0.0
+    min_abs = int(min_retention_beats) if min_retention_beats is not None else 0
+    retention_ratio = n_kept / n_input if n_input > 0 else 1.0
+    if retention_ratio < min_ratio or n_kept < min_abs:
+        info.update({
+            'filter_applied': False,
+            'n_kept': n_input,
+            'n_dropped': 0,
+            'kept_role': None,
+            'reason': 'safety_bail_low_retention',
+            'safety_bail': {
+                'n_would_keep': n_kept,
+                'retention_ratio': round(retention_ratio, 4),
+                'min_retention_ratio': min_ratio,
+                'min_retention_beats': min_abs,
+            },
+        })
         return bd_clean, btm_clean, bi_clean, info
 
     info.update({
