@@ -385,9 +385,9 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
                     score += c.score_bp_ideal
                 elif c.bp_extended_range_s[0] <= mean_bp <= c.bp_extended_range_s[1]:
                     score += c.score_bp_extended
-                if cv_bp < c.cv_good: score += c.score_cv_good
-                elif cv_bp < c.cv_fair: score += c.score_cv_fair
-                elif cv_bp < c.cv_marginal: score += c.score_cv_marginal
+                if cv_bp < c.cv_good_frac: score += c.score_cv_good
+                elif cv_bp < c.cv_fair_frac: score += c.score_cv_fair
+                elif cv_bp < c.cv_marginal_frac: score += c.score_cv_marginal
                 duration_s = len(data) / fs
                 if duration_s/3 <= len(bi) <= duration_s/0.3:
                     score += c.score_rate_ok

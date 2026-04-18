@@ -74,9 +74,13 @@ class BeatDetectionConfig:
     # Physiological plausibility scoring (thresholds)
     bp_ideal_range_s: tuple[float, float] = (0.4, 3.0)
     bp_extended_range_s: tuple[float, float] = (0.3, 5.0)
-    cv_good: float = 0.15        # CV < 15% → good score
-    cv_fair: float = 0.30        # CV < 30% → fair
-    cv_marginal: float = 0.50    # CV < 50% → marginal
+    # CV thresholds as FRACTIONS (0.15 = 15%). The `_frac` suffix is
+    # intentional: ChannelSelectionConfig previously declared identically-
+    # named fields in percent units, which was a semantic trap. Those
+    # fields were dead code and have been removed.
+    cv_good_frac: float = 0.15        # CV < 15% → good score
+    cv_fair_frac: float = 0.30        # CV < 30% → fair
+    cv_marginal_frac: float = 0.50    # CV < 50% → marginal
 
     # Auto-method scoring weights (points awarded per criterion)
     score_bp_ideal: float = 30.0       # beat period in ideal range
@@ -501,9 +505,13 @@ class ChannelSelectionConfig:
     """Parameters for automatic channel selection."""
 
     bp_ideal_range_s: tuple[float, float] = (0.3, 4.0)
-    cv_excellent: float = 10.0    # CV < 10% → +40 score
-    cv_good: float = 20.0        # CV < 20% → +30
-    cv_fair: float = 35.0        # CV < 35% → +15
+    # NOTE: `cv_excellent/cv_good/cv_fair` (in percent units) were declared
+    # here historically but never read by any channel-selection code.
+    # Regularity scoring is computed via the linear formula
+    # `w_regularity_max - cv_pct * w_regularity_slope` (see
+    # channel_selection.select_best_channel), so these threshold fields
+    # were dead code AND a semantic trap because BeatDetectionConfig has
+    # fields with identical names but in FRACTION units. Removed.
     rate_range_per_s: tuple[float, float] = (0.3, 3.5)
     snr_good: float = 5.0        # +20
     snr_fair: float = 3.0        # +10
@@ -594,6 +602,24 @@ class AnalysisConfig:
             'arrhythmia': (ArrhythmiaConfig, 'arrhythmia'),
             'channel_selection': (ChannelSelectionConfig, 'channel_selection'),
         }
+        # Legacy field name migrations — applied BEFORE the generic loop
+        # so values written by older versions still take effect instead of
+        # being silently dropped by the `hasattr` guard below.
+        _legacy_renames = {
+            # BeatDetectionConfig: cv thresholds got `_frac` suffix
+            # (they are fractions, not percentages).
+            'beat_detection': {
+                'cv_good': 'cv_good_frac',
+                'cv_fair': 'cv_fair_frac',
+                'cv_marginal': 'cv_marginal_frac',
+            },
+        }
+        for sect_name, renames in _legacy_renames.items():
+            if sect_name in d and isinstance(d[sect_name], dict):
+                for old, new in renames.items():
+                    if old in d[sect_name] and new not in d[sect_name]:
+                        d[sect_name][new] = d[sect_name].pop(old)
+
         for key, (klass, attr) in section_map.items():
             if key in d:
                 section = getattr(cfg, attr)
