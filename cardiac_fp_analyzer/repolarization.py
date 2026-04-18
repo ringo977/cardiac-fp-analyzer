@@ -300,17 +300,30 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None,
 
     if best_pk is None:
         # No peak found by find_peaks — try argmax as last resort,
-        # but still respect min FPD constraint
-        valid_region = seg_det[min_pk_idx:] if min_pk_idx < len(seg_det) else seg_det
-        if len(valid_region) > 0:
-            local_idx = np.argmax(np.abs(valid_region))
+        # but still respect min FPD constraint.
+        #
+        # Bug guard: when min_pk_idx >= len(seg_det) we cannot add
+        # min_pk_idx to the argmax offset (would give an out-of-bounds
+        # index). See the matching guard in find_repolarization_per_beat.
+        if min_pk_idx < len(seg_det):
+            valid_region = seg_det[min_pk_idx:]
+            local_idx = int(np.argmax(np.abs(valid_region)))
             best_pk = min_pk_idx + local_idx
             best_sign = 1 if seg_det[best_pk] > 0 else -1
             best_prom = np.abs(seg_det[best_pk])
-        else:
-            best_pk = np.argmax(np.abs(seg_det))
+        elif len(seg_det) > 0:
+            # Min-FPD constraint past segment end: ignore it and argmax
+            # over the full segment.
+            best_pk = int(np.argmax(np.abs(seg_det)))
             best_sign = 1 if seg_det[best_pk] > 0 else -1
             best_prom = np.abs(seg_det[best_pk])
+        else:
+            # Degenerate (empty seg_det): nothing to search.
+            return None, 1, 0.0, 0.0, None, None
+
+    # Defensive sanity: best_pk must be a valid index into seg_det by now.
+    if best_pk < 0 or best_pk >= len(seg_det):
+        return None, 1, 0.0, 0.0, None, None
 
     # ─── Repolarization detectability gate ───
     # If the best candidate's prominence is too low relative to noise,
@@ -519,12 +532,29 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
                 best_idx = best_pk
 
     if best_idx is None:
-        # Fallback: argmax but respect min FPD
-        valid_region = seg_det[min_pk_idx:] if min_pk_idx < len(seg_det) else seg_det
-        if len(valid_region) > 0:
-            best_idx = min_pk_idx + np.argmax(np.abs(valid_region))
+        # Fallback: argmax but respect min FPD.
+        #
+        # Bug guard: when min_pk_idx >= len(seg_det) (the minimum-FPD floor
+        # is past the end of the search segment — happens on very short
+        # templates or slow rhythms where min_fpd_pct_rr × RR exceeds the
+        # post-ms window), we must NOT add min_pk_idx to argmax() of the
+        # full segment, or best_idx ends up out-of-bounds and crashes the
+        # downstream seg_det[best_idx] access.
+        if min_pk_idx < len(seg_det):
+            valid_region = seg_det[min_pk_idx:]
+            best_idx = min_pk_idx + int(np.argmax(np.abs(valid_region)))
+        elif len(seg_det) > 0:
+            # Min-FPD constraint is beyond segment length: ignore the
+            # constraint and use the full segment argmax.
+            best_idx = int(np.argmax(np.abs(seg_det)))
         else:
-            best_idx = np.argmax(np.abs(seg_det))
+            # Degenerate: empty segment — no repolarization to find.
+            return None, np.nan, None, None
+
+    # Defensive sanity: any path that produced best_idx out-of-bounds
+    # means the repolarization search is not reliable for this beat.
+    if best_idx < 0 or best_idx >= len(seg_det):
+        return None, np.nan, None, None
 
     # ─── Repolarization detectability gate (per-beat) ───
     # Prominence: use the best_score from find_peaks if it came from
