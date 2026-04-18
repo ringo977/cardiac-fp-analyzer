@@ -435,6 +435,21 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
     bt = bi / fs if len(bi) > 0 else np.array([], dtype=float)
     info['amplitude_cluster'] = cluster_info
 
+    # ── Rhythm topology classification (Sprint 2 #3) ──
+    # Pure analysis: categorises the rhythm (regular / alternans_2_to_1 /
+    # trimodal / chaotic / …) and reports per-cluster metrics. Does NOT
+    # modify `bi`. Downstream code consults info['rhythm_classification']
+    # to decide how to interpret the beats (e.g. restrict FPD to dominant
+    # cluster in alternans, flag ectopics for review).
+    try:
+        info['rhythm_classification'] = _classify_rhythm_topology(data, fs, bi, cfg=cfg)
+    except (ValueError, IndexError, RuntimeError) as e:
+        logger.debug("Rhythm topology classification failed: %s", e)
+        info['rhythm_classification'] = {
+            'rhythm_type': 'error', 'n_beats': len(bi),
+            'clusters': [], 'metrics': {}, 'flags': [], 'error': str(e),
+        }
+
     # ── Post-detection morphological validation ──
     # Remove noise spikes before they reach segmentation/parameter extraction.
     # Pass detected polarity so validation can adapt for mixed-polarity signals.
@@ -632,6 +647,292 @@ def _reject_amplitude_cluster(data, fs, bi, cfg=None):
         **base_diag,
     }
     return bi_kept, info
+
+
+def _classify_rhythm_topology(data, fs, bi, cfg=None):
+    """Pure rhythm topology classifier — does NOT modify the beat list.
+
+    Categorises detected beats into one of:
+      - 'regular'                — single amplitude cluster, CV(RR) low
+      - 'chaotic'                — single amplitude cluster, CV(RR) high
+      - 'alternans_2_to_1'       — two clusters, low beats locked at
+                                    phase ≈ 0.5 of each high–high cycle
+                                    (bigeminy-like), |n_low − n_high| small
+      - 'regular_with_ectopics'  — two clusters, low cluster amplitudes
+                                    uniform (likely biological ectopic beats)
+      - 'regular_with_noise'     — two clusters, low cluster amplitudes
+                                    disperse (likely noise/artefact)
+      - 'trimodal'               — three clusters (dominant + secondary +
+                                    noise) — produced when both gaps in the
+                                    sorted amplitude distribution exceed
+                                    ``topology_gap_ratio``.
+      - 'unimodal_insufficient'  — fewer than ``topology_min_beats`` peaks
+      - 'degenerate'             — at least one zero-amplitude window
+      - 'ambiguous'              — bimodal but cluster is neither clearly
+                                    biological nor clearly noise
+
+    Returns
+    -------
+    classification : dict with keys
+        'rhythm_type': str (one of the labels above)
+        'n_beats':     int
+        'clusters':    list of dicts, each {role, n, amp_lo, amp_hi,
+                                            amp_median, amp_cv, indices_in_bi}
+        'metrics':     dict (bpm_dominant, cv_rr_dominant, bpm_effective,
+                             alternans_phase_*, ratio_low_high, ...)
+        'flags':       list of str (e.g. 'arrhythmia_candidate',
+                                    'manual_review_required')
+
+    Notes
+    -----
+    - Polarity-agnostic: uses ``max(|x|)`` in ±``topology_window_ms``.
+    - This function is intentionally side-effect free; downstream code
+      may consult ``info['rhythm_classification']`` to decide whether to
+      reject low-amp peaks, restrict FPD/HRV calculations to dominant
+      beats, or flag the recording for manual review.
+    """
+    c = _get_bd_cfg(cfg)
+    n_in = len(bi)
+
+    # Reuse the existing cluster_window_ms (same physical meaning).
+    win_ms = float(getattr(c, 'cluster_window_ms', 50.0))
+    win = max(1, int(win_ms / 1000.0 * fs))
+
+    base = {'n_beats': n_in, 'clusters': [], 'metrics': {}, 'flags': []}
+
+    if not getattr(c, 'enable_rhythm_topology', True):
+        return {**base, 'rhythm_type': 'disabled'}
+
+    min_beats = int(getattr(c, 'topology_min_beats', 5))
+    if n_in < min_beats:
+        return {**base, 'rhythm_type': 'unimodal_insufficient',
+                'reason': f'fewer than {min_beats} beats'}
+
+    # ── Step 1: per-peak amplitude (polarity-agnostic) ──
+    L = len(data)
+    bi_arr = np.asarray(bi, dtype=int)
+    amps = np.empty(n_in, dtype=float)
+    for i, idx in enumerate(bi_arr):
+        lo = max(0, int(idx) - win)
+        hi = min(L, int(idx) + win)
+        amps[i] = float(np.max(np.abs(data[lo:hi]))) if hi > lo else 0.0
+
+    if np.any(amps <= 1e-12):
+        return {**base, 'rhythm_type': 'degenerate',
+                'reason': 'zero-amplitude window present'}
+
+    # ── Step 2: cluster the amplitudes via gap analysis ──
+    # Strategy: find "significant" gaps in the sorted amplitude distribution.
+    # A gap is significant if EITHER
+    #   (a) the adjacent ratio ≥ ``topology_gap_ratio`` (absolute floor —
+    #       catches clean bimodal distributions like Exp6_ChipD_ch2), OR
+    #   (b) the log-ratio is a statistical outlier (z-score ≥
+    #       ``topology_gap_zscore`` on the log-ratio distribution) AND the
+    #       absolute ratio exceeds ``topology_secondary_gap_ratio``. This
+    #       catches the trimodal Exp6_ch3 case where the SMALL→MED gap is
+    #       only 1.34× but stands out against the intra-cluster ratios of
+    #       ~1.02–1.05×.
+    # Using the z-score makes the classifier robust across amplitude
+    # scales (V vs mV) and to signals with very tight or very loose
+    # within-cluster variability.
+    order = np.argsort(amps)
+    srt = amps[order]
+    ratios = srt[1:] / srt[:-1]
+    primary_threshold = float(getattr(c, 'topology_gap_ratio', 2.5))
+    secondary_threshold = float(getattr(c, 'topology_secondary_gap_ratio', 1.3))
+    z_threshold = float(getattr(c, 'topology_gap_zscore', 3.0))
+
+    primary_mask = ratios >= primary_threshold
+    # z-score on log-ratios (robust to extreme outliers via median/MAD)
+    log_ratios = np.log(ratios)
+    med_lr = float(np.median(log_ratios))
+    mad_lr = float(np.median(np.abs(log_ratios - med_lr)))
+    # 1.4826 * MAD ≈ std under normality; fall back to std if MAD is 0
+    sigma_lr = max(1.4826 * mad_lr, float(np.std(log_ratios)), 1e-9)
+    z_lr = (log_ratios - med_lr) / sigma_lr
+    statistical_mask = (z_lr >= z_threshold) & (ratios >= secondary_threshold)
+
+    sig_gap_mask = primary_mask | statistical_mask
+    sig_gaps = np.where(sig_gap_mask)[0]
+
+    # Cluster boundaries in sorted order (inclusive).
+    boundaries = []
+    start = 0
+    for g in sig_gaps:
+        boundaries.append((start, int(g)))
+        start = int(g) + 1
+    boundaries.append((start, n_in - 1))
+
+    raw_clusters = []
+    for lo, hi in boundaries:
+        sorted_slice = np.arange(lo, hi + 1)
+        bi_indices = sorted(order[sorted_slice].tolist())
+        amps_cl = srt[lo:hi + 1]
+        mean_amp = float(np.mean(amps_cl))
+        amp_cv = float(np.std(amps_cl) / mean_amp) if mean_amp > 0 else 0.0
+        raw_clusters.append({
+            'indices_in_bi': bi_indices,
+            'amp_lo': round(float(amps_cl.min()), 4),
+            'amp_hi': round(float(amps_cl.max()), 4),
+            'amp_median': round(float(np.median(amps_cl)), 4),
+            'amp_cv': round(amp_cv, 3),
+            'n': len(bi_indices),
+        })
+    # Sort clusters by amp_median ascending; the highest-amplitude one
+    # is always the "dominant" candidate.
+    raw_clusters.sort(key=lambda d: d['amp_median'])
+    n_clusters = len(raw_clusters)
+
+    # ── Step 3: helper — RR/CV/BPM on a subset of bi indices ──
+    def _rr_metrics(idx_list):
+        if len(idx_list) < 2:
+            return {'rr_median_ms': None, 'cv_rr': None, 'bpm': None}
+        t_sub = np.sort(bi_arr[np.asarray(idx_list, dtype=int)]) / fs
+        rr = np.diff(t_sub)
+        if np.mean(rr) <= 0:
+            return {'rr_median_ms': None, 'cv_rr': None, 'bpm': None}
+        return {
+            'rr_median_ms': round(float(np.median(rr)) * 1000.0, 1),
+            'cv_rr': round(float(np.std(rr) / np.mean(rr)), 3),
+            'bpm': round(60.0 / float(np.mean(rr)), 2),
+        }
+
+    # ── Step 4: classify by cluster count ──
+    cv_reg = float(getattr(c, 'topology_regular_cv_max', 0.15))
+    cv_chao = float(getattr(c, 'topology_chaotic_cv_min', 0.25))
+    phase_band = float(getattr(c, 'topology_alternans_phase_band', 0.10))
+    phase_std_max = float(getattr(c, 'topology_alternans_phase_std_max', 0.08))
+    cv_bio = float(getattr(c, 'topology_amp_cv_biological_max', 0.25))
+    cv_noise = float(getattr(c, 'topology_amp_cv_noise_min', 0.40))
+    alt_lo = float(getattr(c, 'cluster_alternans_ratio_low', 0.85))
+    alt_hi = float(getattr(c, 'cluster_alternans_ratio_high', 1.15))
+
+    flags = []
+    metrics = {}
+
+    if n_clusters == 1:
+        raw_clusters[0]['role'] = 'dominant'
+        m = _rr_metrics(raw_clusters[0]['indices_in_bi'])
+        metrics['bpm_dominant'] = m['bpm']
+        metrics['cv_rr_dominant'] = m['cv_rr']
+        metrics['rr_dominant_ms'] = m['rr_median_ms']
+        if m['cv_rr'] is None:
+            rhythm_type = 'regular'  # only 1 beat — degenerate but not fatal
+        elif m['cv_rr'] <= cv_reg:
+            rhythm_type = 'regular'
+        elif m['cv_rr'] >= cv_chao:
+            rhythm_type = 'chaotic'
+            flags.append('manual_review_required')
+        else:
+            rhythm_type = 'regular'  # borderline: lean to regular
+
+    elif n_clusters == 2:
+        low, high = raw_clusters[0], raw_clusters[1]
+        high['role'] = 'dominant'
+        n_low, n_high = low['n'], high['n']
+        ratio_lh = (n_low / n_high) if n_high > 0 else float('inf')
+
+        # Phase analysis: where do low beats sit within the high-high cycle?
+        t_high = np.sort(bi_arr[np.asarray(high['indices_in_bi'])]) / fs
+        t_low = np.sort(bi_arr[np.asarray(low['indices_in_bi'])]) / fs
+        phases = []
+        for tl in t_low:
+            bef = t_high[t_high < tl]
+            aft = t_high[t_high > tl]
+            if len(bef) > 0 and len(aft) > 0:
+                rr = aft[0] - bef[-1]
+                if rr > 0:
+                    phases.append((tl - bef[-1]) / rr)
+        phases = np.asarray(phases, dtype=float)
+        phase_med = float(np.median(phases)) if len(phases) > 0 else float('nan')
+        phase_std = float(np.std(phases)) if len(phases) > 0 else float('nan')
+
+        # Alternans 2:1 — count balance + phase locked at 0.5
+        is_alternans = (
+            len(phases) > 0
+            and alt_lo <= ratio_lh <= alt_hi
+            and abs(phase_med - 0.5) <= phase_band
+            and phase_std <= phase_std_max
+        )
+        low_amp_cv = low['amp_cv']
+
+        if is_alternans:
+            rhythm_type = 'alternans_2_to_1'
+            low['role'] = 'secondary'
+            flags.append('alternans_pattern')
+        elif low_amp_cv <= cv_bio:
+            # Biologically uniform low cluster
+            rhythm_type = 'regular_with_ectopics'
+            low['role'] = 'secondary'
+            flags.append('arrhythmia_candidate')
+        elif low_amp_cv >= cv_noise:
+            rhythm_type = 'regular_with_noise'
+            low['role'] = 'noise'
+        else:
+            rhythm_type = 'ambiguous'
+            low['role'] = 'review'
+            flags.append('manual_review_required')
+
+        # Metrics
+        m_dom = _rr_metrics(high['indices_in_bi'])
+        metrics['bpm_dominant'] = m_dom['bpm']
+        metrics['cv_rr_dominant'] = m_dom['cv_rr']
+        metrics['rr_dominant_ms'] = m_dom['rr_median_ms']
+        metrics['ratio_low_high'] = round(ratio_lh, 3) if np.isfinite(ratio_lh) else None
+        metrics['alternans_phase_median'] = (
+            round(phase_med, 3) if not np.isnan(phase_med) else None
+        )
+        metrics['alternans_phase_std'] = (
+            round(phase_std, 3) if not np.isnan(phase_std) else None
+        )
+        metrics['secondary_amp_cv'] = low_amp_cv
+        if rhythm_type == 'alternans_2_to_1':
+            m_all = _rr_metrics(list(range(n_in)))
+            metrics['bpm_effective'] = m_all['bpm']
+
+    else:
+        # n_clusters >= 3 → trimodal (or richer). Map highest=dominant,
+        # lowest=noise; merge any middles into a single 'secondary'.
+        dominant = raw_clusters[-1]
+        noise = raw_clusters[0]
+        middle = raw_clusters[1:-1]  # one or more
+        dominant['role'] = 'dominant'
+        noise['role'] = 'noise'
+        merged_secondary = {
+            'indices_in_bi': sorted(sum((c['indices_in_bi'] for c in middle), [])),
+            'role': 'secondary',
+        }
+        sec_amps = amps[np.asarray(merged_secondary['indices_in_bi'])]
+        merged_secondary.update({
+            'n': len(merged_secondary['indices_in_bi']),
+            'amp_lo': round(float(sec_amps.min()), 4),
+            'amp_hi': round(float(sec_amps.max()), 4),
+            'amp_median': round(float(np.median(sec_amps)), 4),
+            'amp_cv': round(float(np.std(sec_amps) / np.mean(sec_amps)), 3)
+                       if np.mean(sec_amps) > 0 else 0.0,
+        })
+        # Repack clusters in canonical order: noise, secondary, dominant
+        raw_clusters = [noise, merged_secondary, dominant]
+        rhythm_type = 'trimodal'
+        flags.append('arrhythmia_candidate')
+        flags.append('noise_contamination')
+
+        m_dom = _rr_metrics(dominant['indices_in_bi'])
+        metrics['bpm_dominant'] = m_dom['bpm']
+        metrics['cv_rr_dominant'] = m_dom['cv_rr']
+        metrics['rr_dominant_ms'] = m_dom['rr_median_ms']
+        metrics['secondary_amp_cv'] = merged_secondary['amp_cv']
+        metrics['n_dominant'] = dominant['n']
+        metrics['n_secondary'] = merged_secondary['n']
+        metrics['n_noise'] = noise['n']
+
+    return {
+        'rhythm_type': rhythm_type,
+        'n_beats': n_in,
+        'clusters': raw_clusters,
+        'metrics': metrics,
+        'flags': flags,
+    }
 
 
 def _fix_bimodal_bp(data, fs, bi, bt, info, threshold_factor, cfg=None):
