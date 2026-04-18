@@ -87,8 +87,13 @@ def build_config_from_sidebar() -> AnalysisConfig:
                 T('cfg_repol_start'), value=150.0, min_value=50.0, max_value=400.0,
                 key='cfg_repol_start'
             )
+            # Upper bound 5000 ms — the adaptive `search_end_pct_rr` path
+            # (0.70 × RR) already extends the effective window for slow
+            # rhythms, so the fixed cap only matters for users who want
+            # a wider absolute floor independent of BP.
             config.repolarization.search_end_ms = st.number_input(
-                T('cfg_repol_end'), value=900.0, min_value=400.0, max_value=1500.0,
+                T('cfg_repol_end'), value=900.0, min_value=400.0, max_value=5000.0,
+                help=T('cfg_repol_end_help'),
                 key='cfg_repol_end'
             )
 

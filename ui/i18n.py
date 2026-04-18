@@ -141,6 +141,13 @@ TRANSLATIONS = {
         'cfg_qt_help': 'Fridericia raccomandata per hiPSC-CM',
         'cfg_repol_start': 'Inizio ricerca ripol. (ms)',
         'cfg_repol_end': 'Fine ricerca ripol. (ms)',
+        'cfg_repol_end_help': (
+            "Limite fisso della finestra di ricerca della T-wave. "
+            "Per ritmi lenti la finestra viene ESTESA automaticamente al "
+            "70% del beat period (search_end_pct_rr), anche se lasci qui "
+            "un valore basso. Alza questo valore solo se vuoi una finestra "
+            "assoluta più larga indipendente dal BP."
+        ),
         'cfg_arrhythmia': 'Aritmie / EAD',
         'cfg_ead_prominence': 'EAD prominenza (×σ)',
         'cfg_ead_min_amp': 'EAD ampiezza min (% template)',
@@ -317,6 +324,13 @@ TRANSLATIONS = {
         'cfg_qt_help': 'Fridericia recommended for hiPSC-CM',
         'cfg_repol_start': 'Repol. search start (ms)',
         'cfg_repol_end': 'Repol. search end (ms)',
+        'cfg_repol_end_help': (
+            "Fixed upper bound for the T-wave search window. "
+            "For slow rhythms the window is EXTENDED automatically to "
+            "70% of the beat period (search_end_pct_rr), even when this "
+            "value is small. Raise this only if you want a wider absolute "
+            "window independent of BP."
+        ),
         'cfg_arrhythmia': 'Arrhythmia / EAD',
         'cfg_ead_prominence': 'EAD prominence (×σ)',
         'cfg_ead_min_amp': 'EAD min amplitude (% template)',
