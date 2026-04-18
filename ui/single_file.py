@@ -2,14 +2,15 @@
 Single File Analysis page — upload, analyze, display, export.
 """
 
+import os
 import tempfile
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-from cardiac_fp_analyzer.analyze import analyze_single_file
 from cardiac_fp_analyzer.config import AnalysisConfig
+from ui.cache import analyze_single_file_cached
 from ui.display import plot_beats, plot_signal, show_arrhythmia, show_params_table
 from ui.i18n import T
 
@@ -26,10 +27,18 @@ def page_single_file(config: AnalysisConfig):
         st.info(T('upload_csv_info'))
         return
 
-    # Save to temp
-    with tempfile.NamedTemporaryFile(suffix='.csv', delete=False) as tmp:
-        tmp.write(uploaded.read())
-        tmp_path = tmp.name
+    # Save to temp ONCE per uploaded file (keyed by file_id), so that the
+    # cache key `(tmp_path, mtime)` stays stable across Streamlit reruns.
+    # Writing a fresh NamedTemporaryFile on every rerun would change the
+    # path and defeat @st.cache_data.
+    file_key = f'_single_file_tmp_{uploaded.file_id}'
+    if file_key not in st.session_state:
+        with tempfile.NamedTemporaryFile(suffix='.csv', delete=False) as tmp:
+            tmp.write(uploaded.getvalue())
+            st.session_state[file_key] = tmp.name
+    tmp_path = st.session_state[file_key]
+    mtime = os.path.getmtime(tmp_path)
+    config_json = config.to_json()
 
     channel = st.radio(T('channel'),
                        ['auto', 'el1', 'el2', T('both_channels')],
@@ -41,7 +50,7 @@ def page_single_file(config: AnalysisConfig):
             results_both = {}
             for ch in ['el1', 'el2']:
                 with st.spinner(T('analyzing_ch', ch=ch.upper())):
-                    r = analyze_single_file(tmp_path, channel=ch, verbose=False, config=config)
+                    r = analyze_single_file_cached(tmp_path, mtime, ch, config_json)
                 if r is not None:
                     results_both[ch] = r
                 else:
@@ -55,7 +64,7 @@ def page_single_file(config: AnalysisConfig):
             st.success(f"{T('analysis_complete')} — {', '.join(c.upper() for c in channels_ok)}")
         else:
             with st.spinner(T('analyzing')):
-                result = analyze_single_file(tmp_path, channel=channel, verbose=False, config=config)
+                result = analyze_single_file_cached(tmp_path, mtime, channel, config_json)
             if result is None:
                 st.error(T('analysis_error'))
                 return
