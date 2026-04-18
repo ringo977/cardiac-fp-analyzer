@@ -222,6 +222,17 @@ class BeatDetectionConfig:
     rhythm_qc_downgrade_threshold: float = 0.30
     rhythm_qc_downgrade_steps: int = 1
 
+    # RR-outlier filter (Sprint 3 #1 — bradycardia robustness)
+    # Drops beats whose preceding RR exceeds ``max_rr_outlier_ratio ×
+    # median RR``. Catches dropout-followed-by-reactivation artefacts
+    # that otherwise contaminate FPD / amplitude statistics (observed
+    # on Exp6_chipD_ch1 where a single 24-second gap produced the only
+    # "valid" FPD in the recording). Genuinely bradycardic signals are
+    # untouched: when every RR is uniformly long the ratio test never
+    # fires.
+    enable_rr_outlier_filter: bool = True
+    max_rr_outlier_ratio: float = 5.0
+
     # Beat recovery: after initial detection, use the estimated beat period
     # to search for missed beats at expected locations with a lower threshold.
     # Recovered candidates are validated against the template before acceptance.
@@ -295,9 +306,39 @@ class RepolarizationConfig:
     # substantial fraction of the cycle length (typically 30–60%
     # in hiPSC-CM).  An FPD < 20% of RR is almost certainly the
     # afterpotential or a baseline artefact, not the true T-wave.
-    # The effective floor is max(min_fpd_ms, min_fpd_pct_rr × RR).
+    # The effective floor is max(min_fpd_ms, min(min_fpd_pct_rr × RR,
+    # max_adaptive_min_fpd_ms)).
     # Set to 0.0 to disable (use fixed min_fpd_ms only).
     min_fpd_pct_rr: float = 0.20
+
+    # --- Cap on the adaptive contribution to the minimum-FPD floor ---
+    # On strongly bradycardic signals (RR > 2.0 s — e.g. dofetilide
+    # overdose, quiescent chambers) the adaptive floor
+    # ``min_fpd_pct_rr × RR`` can exceed the typical hiPSC-CM T-wave
+    # latency (200–400 ms), pushing the search start past the real
+    # repolarisation peak and forcing every beat into the argmax
+    # fallback.  Capping the adaptive contribution keeps the floor
+    # within a biologically sensible range regardless of how slow the
+    # rhythm is.  The fixed ``min_fpd_ms`` floor (120 ms, covers the
+    # afterpotential zone) is NOT affected by this cap.
+    # 350 ms was chosen so the floor on a 3-second bradycardia (Exp6
+    # baseline) stays below the typical 300–500 ms T-wave window while
+    # still protecting against short afterdepolarisations up to
+    # ~350 ms, the upper edge of the hiPSC-CM afterpotential tail.
+    # Set to 0.0 to disable the cap (pre-v3.3.1 behaviour).
+    max_adaptive_min_fpd_ms: float = 350.0
+
+    # --- FPD reliability gate (Sprint 3 #1, Fix C) ---
+    # Fraction of beats that must produce a valid (non-NaN) FPD for the
+    # recording-level FPD mean / std to be considered clinically
+    # reportable.  When the valid fraction falls below this threshold
+    # the summary sets ``fpd_reliable=False`` and adds a diagnostic
+    # ``fpd_note``; downstream UI / export layers should surface the
+    # warning instead of reporting the numerical mean as if it were
+    # reliable.  Exp6_chipD_ch1 motivated this gate: 1/7 beats valid
+    # produced FPDcF 318.8 ± 0.0, a meaningless summary statistic.
+    # Set to 0.0 to disable (always flag reliable).
+    min_valid_fpd_ratio: float = 0.50
 
     # --- Minimum signal amplitude for FPD analysis ---
     # If the median spike amplitude across all beats is below this threshold,

@@ -87,6 +87,33 @@ def page_single_file(config: AnalysisConfig):
 #  Display helpers
 # ═══════════════════════════════════════════════════════════════════════
 
+def _render_fpd_reliability_banner(summary, config):
+    """Render a prominent warning when the FPD mean is not backed by
+    enough detectable T-waves to be trustworthy.
+
+    Fires only when ``summary['fpd_reliable'] is False``.  Backward
+    compatible: summaries written before v3.3.1 lack the key and the
+    banner stays hidden.
+    """
+    if not isinstance(summary, dict):
+        return
+    reliable = summary.get('fpd_reliable', True)
+    if reliable:
+        return
+    valid_ratio = float(summary.get('fpd_valid_ratio', 0.0))
+    threshold = getattr(
+        getattr(config, 'repolarization', None),
+        'min_valid_fpd_ratio',
+        0.50,
+    )
+    body = T('fpd_unreliable_banner_body').format(
+        valid_pct=int(round(valid_ratio * 100)),
+        threshold_pct=int(round(threshold * 100)),
+    )
+    title = T('fpd_unreliable_banner_title')
+    st.warning(f"**{title}**\n\n{body}")
+
+
 def _display_single_channel(result, config):
     """Display results for a single channel analysis."""
     fi = result.get('file_info', {})
@@ -101,6 +128,9 @@ def _display_single_channel(result, config):
     cols[2].metric("QC Grade", qc.grade if qc else '?')
     cols[3].metric(T('fpdc'), f"{summary.get('fpdc_ms_mean', 0):.1f} ± {summary.get('fpdc_ms_std', 0):.1f}")
     cols[4].metric(T('risk_score'), f"{ar.risk_score}/100" if ar else '?')
+
+    # ── FPD reliability banner (Sprint 3 #1, Fix C) ──
+    _render_fpd_reliability_banner(summary, config)
 
     # ── Rhythm topology badge (Sprint 2 #3 integration) ──
     rc = (result.get('detection_info') or {}).get('rhythm_classification') or {}
@@ -141,10 +171,17 @@ def _display_both_channels(results_both, config):
         s = r.get('summary', {})
         qc = r.get('qc_report')
         ar = r.get('arrhythmia_report')
-        # Use beat_periods from all detected beats (not QC-cleaned) for
-        # accurate rhythm stats; beat count = number of QC-accepted beats.
-        bp_all = r.get('beat_periods', np.array([]))
-        n_beats = len(r.get('beat_indices', []))
+        # Use beat_periods from the FPD-included set (post rhythm/RR filter +
+        # re-segmentation) when available, so the comparison reflects the
+        # beats that drove the FPD calculation — not pre-filter noise.
+        bi_fpd_cmp = r.get('beat_indices_fpd')
+        fs_cmp = r.get('metadata', {}).get('sample_rate', 1.0)
+        if bi_fpd_cmp is not None and len(bi_fpd_cmp) >= 2 and fs_cmp > 0:
+            bp_all = np.diff(np.sort(np.asarray(bi_fpd_cmp))) / float(fs_cmp)
+            n_beats = len(bi_fpd_cmp)
+        else:
+            bp_all = r.get('beat_periods', np.array([]))
+            n_beats = len(r.get('beat_indices', []))
         if len(bp_all) > 0:
             bp_str = f"{np.mean(bp_all)*1000:.0f} ± {np.std(bp_all)*1000:.0f}"
             cv_bp = np.std(bp_all) / np.mean(bp_all) * 100 if np.mean(bp_all) > 0 else 0
@@ -181,6 +218,9 @@ def _display_both_channels(results_both, config):
     cols[2].metric("QC Grade", qc.grade if qc else '?')
     cols[3].metric(T('fpdc'), f"{summary.get('fpdc_ms_mean', 0):.1f} ± {summary.get('fpdc_ms_std', 0):.1f}")
     cols[4].metric(T('risk_score'), f"{ar.risk_score}/100" if ar else '?')
+
+    # ── FPD reliability banner (Sprint 3 #1, Fix C) ──
+    _render_fpd_reliability_banner(summary, config)
 
     # ── Analysis tabs for selected channel ──
     tab_signal, tab_beats, tab_params, tab_arrhythmia = st.tabs([

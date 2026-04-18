@@ -43,7 +43,21 @@ def plot_signal(result, key_suffix=""):
     all_bi = sorted(st.session_state[all_key])
     excluded = st.session_state[excl_key]
 
-    included_bi = np.array([i for i in all_bi if i not in excluded], dtype=int)
+    # FPD-included set: beats that survived rhythm/RR filter + re-segmentation
+    # and actually fed parameter extraction. When available, we visually
+    # distinguish them from beats detected-but-filtered-out. Fallback to
+    # beat_indices (post-QC) for backward compatibility with older results.
+    bi_fpd_arr = result.get('beat_indices_fpd')
+    if bi_fpd_arr is None:
+        bi_fpd_arr = result.get('beat_indices', [])
+    fpd_set = set(int(x) for x in np.asarray(bi_fpd_arr, dtype=int).tolist())
+
+    included_bi = np.array([i for i in all_bi
+                             if i in fpd_set and i not in excluded],
+                            dtype=int)
+    filtered_bi = np.array([i for i in all_bi
+                             if i not in fpd_set and i not in excluded],
+                            dtype=int)
     excluded_bi = np.array([i for i in all_bi if i in excluded], dtype=int)
 
     # Toggle for raw signal overlay
@@ -68,14 +82,24 @@ def plot_signal(result, key_suffix=""):
         line=dict(color='#1f77b4', width=0.8)
     ))
 
-    # Included beats — red triangles
+    # Included beats (post rhythm/RR filter — fed FPD) — red triangles
     if len(included_bi) > 0:
         fig.add_trace(go.Scatter(
             x=t[included_bi], y=sig[included_bi],
             mode='markers', name=T('beats_included'),
-            marker=dict(color='red', size=7, symbol='triangle-down')
+            marker=dict(color='red', size=8, symbol='triangle-down')
         ))
-    # Excluded beats — grey triangles
+    # Detected but filtered out by rhythm/RR logic — small faded greys.
+    # Shown so the user can see what the detector fired on, without
+    # confusing them with the beats that actually produced FPD.
+    if len(filtered_bi) > 0:
+        fig.add_trace(go.Scatter(
+            x=t[filtered_bi], y=sig[filtered_bi],
+            mode='markers', name=T('beats_filtered_out'),
+            marker=dict(color='#666666', size=4, symbol='triangle-down'),
+            opacity=0.35
+        ))
+    # Excluded beats (manual exclusions via beat editor) — grey with outline
     if len(excluded_bi) > 0:
         fig.add_trace(go.Scatter(
             x=t[excluded_bi], y=sig[excluded_bi],
@@ -85,11 +109,12 @@ def plot_signal(result, key_suffix=""):
             opacity=0.5
         ))
 
-    # Repolarization peaks (same logic as PDF summary): aligned to QC beat_indices + all_params
-    bi_clean = np.asarray(result.get('beat_indices', []), dtype=int)
+    # Repolarization peaks: all_params is indexed over the FPD beat set
+    # (bi_fpd), so we iterate over that set, not over bi_clean.
+    bi_fpd_for_map = np.asarray(bi_fpd_arr, dtype=int)
     all_params = result.get('all_params') or []
     bi_to_repol = {}
-    for k, bi_dep in enumerate(bi_clean):
+    for k, bi_dep in enumerate(bi_fpd_for_map):
         if k >= len(all_params):
             break
         g = all_params[k].get('repol_peak_global_idx')
@@ -118,12 +143,19 @@ def plot_signal(result, key_suffix=""):
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Stats (from current included beats)
-    bp = result.get('beat_periods', np.array([]))
+    # Stats: prefer post-filter (FPD) periods so BP / BPM reflect the beats
+    # that actually drove the FPD calculation. Fallback to all-detected
+    # beat_periods when FPD set is unavailable (e.g. legacy results).
+    bp_all = result.get('beat_periods', np.array([]))
+    if len(included_bi) >= 2:
+        bp = np.diff(np.sort(included_bi)) / float(
+            result['metadata'].get('sample_rate', 1.0))
+    else:
+        bp = bp_all
     cols = st.columns(4)
-    cols[0].metric(T('n_beats_qc'), f"{len(result['beat_indices'])}")
+    cols[0].metric(T('n_beats_included'), f"{len(included_bi)}")
     cols[1].metric(T('n_beats_raw'), f"{len(all_bi)}")
-    if len(bp) > 0:
+    if len(bp) > 0 and np.mean(bp) > 0:
         cols[2].metric(T('beat_period'), f"{np.mean(bp)*1000:.0f} ms")
         cols[3].metric("BPM", f"{60/np.mean(bp):.1f}")
 

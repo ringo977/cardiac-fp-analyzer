@@ -36,6 +36,66 @@ from .repolarization import (
 logger = logging.getLogger(__name__)
 
 
+# ─── FPD reliability gate (Sprint 3 #1, Fix C) ───
+
+def apply_fpd_reliability_gate(summary, all_params, cfg):
+    """Attach ``fpd_valid_ratio`` / ``fpd_reliable`` / ``fpd_note`` to
+    ``summary`` based on the fraction of beats that produced a valid
+    FPD.
+
+    Motivation
+    ----------
+    On Exp6_chipD_ch1 only 1/7 beats produced a valid FPD (the rest
+    had no detectable T-wave) yet the summary reported
+    ``FPDcF 318.8 ± 0.0`` — a number derived from a single pathological
+    artefact.  The gate adds an explicit flag so the UI / export
+    layers can tell the user when the FPD mean is too sparse to be
+    trusted.
+
+    Parameters
+    ----------
+    summary : dict
+        Summary dict to mutate — new keys ``fpd_valid_ratio``,
+        ``fpd_reliable``, ``fpd_note`` are added.
+    all_params : list of dict
+        Per-beat parameter dicts containing ``fpd_ms`` (NaN when the
+        beat's repolarisation was not detectable).
+    cfg : RepolarizationConfig
+        Must expose ``min_valid_fpd_ratio`` (default 0.50).
+    """
+    rc = _get_repol_cfg(cfg)
+    min_valid_ratio = getattr(rc, 'min_valid_fpd_ratio', 0.50)
+
+    n_total = len(all_params)
+    n_no_repol = sum(1 for p in all_params if np.isnan(p.get('fpd_ms', np.nan)))
+
+    if n_total > 0:
+        valid_ratio = 1.0 - n_no_repol / n_total
+    else:
+        valid_ratio = 0.0
+
+    summary['fpd_valid_ratio'] = float(valid_ratio)
+    # A 0-beat recording cannot be reliable.  A non-positive threshold
+    # disables the gate (always flag as reliable, pre-v3.3.1 behaviour).
+    if n_total == 0:
+        summary['fpd_reliable'] = False
+    elif min_valid_ratio <= 0:
+        summary['fpd_reliable'] = True
+    else:
+        summary['fpd_reliable'] = bool(valid_ratio >= min_valid_ratio)
+
+    if not summary['fpd_reliable']:
+        summary['fpd_note'] = (
+            "FPD non misurabile in modo affidabile: "
+            f"{int(round(valid_ratio * 100))}% dei battiti ha T-wave "
+            f"rilevabile (soglia {int(round(min_valid_ratio * 100))}%). "
+            "I valori medi di FPD / FPDcF vanno considerati indicativi "
+            "e ispezionati sul singolo battito."
+        )
+    else:
+        summary['fpd_note'] = None
+
+
 # ─── Template averaging ───
 
 def _align_beats_xcorr(beats_data, fs, cfg=None):
@@ -405,6 +465,9 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
     summary['n_beats_no_repol'] = n_no_repol
     summary['pct_beats_no_repol'] = (n_no_repol / n_total_beats * 100
                                       if n_total_beats > 0 else 0.0)
+
+    # ─── FPD reliability gate (Sprint 3 #1, Fix C) ───
+    apply_fpd_reliability_gate(summary, all_params, rc)
 
     # ─── FPD confidence score ───
     fpd_arr = np.array(fpd_vals)

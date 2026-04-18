@@ -345,6 +345,10 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
         result = {'metadata': metadata, 'file_info': file_info, 'summary': summary,
                 'all_params': all_p, 'arrhythmia_report': ar,
                 'beat_indices': bi_clean, 'beat_indices_raw': bi,
+                # Post rhythm/RR filter + re-segmentation: the beats that
+                # actually fed parameter extraction. Used by the UI to mark
+                # the "real" included beats on the signal plot.
+                'beat_indices_fpd': np.asarray(bi_fpd, dtype=int),
                 'beat_periods': bp, 'filtered_signal': filtered,
                 'raw_signal': raw_signal,
                 'time_vector': df['time'].values,
