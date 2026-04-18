@@ -142,6 +142,43 @@ class BeatDetectionConfig:
     jitter_adaptive_fraction: float = 0.5  # jitter = 50% of spike half-width
     jitter_max_shift_ms: float = 5.0       # fixed fallback (±ms)
 
+    # ── Amplitude-cluster filter (Sprint 2 #1) ──
+    # When the detected peaks show a clearly bimodal amplitude distribution
+    # (e.g. 16 real depolarisation spikes at ~1.4 V + 33 T-wave / baseline
+    # bumps at ~0.15 V — the Exp6_ChipD_ch2 pattern) the morphology validator
+    # can fail to separate the two populations, especially in mixed-polarity
+    # mode where correlation is not meaningful. This filter sorts the per-peak
+    # local max-abs amplitudes and, if the largest adjacent gap ratio exceeds
+    # ``cluster_gap_ratio``, drops the low-amplitude cluster — provided the
+    # dominant (high-amp) cluster has at least ``cluster_min_dominant_count``
+    # peaks (so a single artefact spike cannot eat the whole recording).
+    # Operates on local max-abs in ±``cluster_window_ms`` around each peak, so
+    # it is polarity-agnostic.
+    enable_amplitude_cluster_filter: bool = True
+    cluster_gap_ratio: float = 3.0         # min sorted-adjacent ratio to fire
+    cluster_min_dominant_count: int = 3    # min peaks in dominant cluster
+    cluster_window_ms: float = 50.0        # window around peak for max-abs
+    # ── Safeguards (Sprint 2 #1b) ──
+    # Before applying the filter, verify that the low-amp cluster looks
+    # like an artefact pattern (T-wave residuals interlaced between beats)
+    # rather than a legitimate cluster of real beats.
+    #   (a) Topology: at least ``cluster_topology_min_interlaced`` fraction
+    #       of the low-cluster peaks must sit *between* two adjacent
+    #       high-cluster peaks (i.e. have a high peak immediately before
+    #       and immediately after, with no other low peak of the same
+    #       cluster in that high-RR interval required). A cluster of 3+
+    #       weak beats at the start/end of the recording (contiguous) will
+    #       fail this check and the filter aborts.
+    #   (b) Alternans: if n_low / n_high falls in
+    #       ``cluster_alternans_ratio_band`` the pattern is likely an
+    #       alternance (big/small/big/small…) — applying the filter would
+    #       halve the real beat count. Abort.
+    # On abort, the diagnostics report ``'aborted_topology'`` or
+    # ``'aborted_alternans'`` and the original beat set is returned.
+    cluster_topology_min_interlaced: float = 0.7
+    cluster_alternans_ratio_low: float = 0.85   # lower edge of alt band
+    cluster_alternans_ratio_high: float = 1.15  # upper edge of alt band
+
     # Beat recovery: after initial detection, use the estimated beat period
     # to search for missed beats at expected locations with a lower threshold.
     # Recovered candidates are validated against the template before acceptance.
