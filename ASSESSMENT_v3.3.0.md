@@ -1,10 +1,46 @@
 # Assessment tecnico — Cardiac FP Analyzer v3.3.0
 
-**Data**: 18 aprile 2026 (revisione 4)
+**Data**: 18 aprile 2026 (revisione 5 — **Sprint 1 chiuso**)
 **Autore assessment**: revisione indipendente del codebase
-**Stato test suite**: 177/177 passati, ruff clean
+**Stato test suite**: 193/193 passati, ruff clean
 **Scope**: tutto il pacchetto (`cardiac_fp_analyzer/`, `ui/`, `tests/`, packaging)
 
+> **Addendum revisione 5** — Sprint 1 item 6 completato, **Sprint 1 ufficialmente chiuso**:
+> - §3.2 ("Nota su un falso positivo") — il pattern `min_len` segnalato
+>   come codice difensivo inoperante in `parameters.py:111`,
+>   `quality_control.py:191`, `residual_analysis.py:28` è stato
+>   rimpiazzato in tutti e tre i punti da un `assert` esplicito che
+>   documenta e enforza l'invariante "`segment_beats` produce battiti
+>   di lunghezza uniforme". Nei due helper di `quality_control` e
+>   `residual_analysis` i guard funzionali originari (`beat_len < 10`
+>   e `beat_len < 20`) sono stati **preservati**: la diagnosi
+>   originaria dell'assessment era leggermente imprecisa, perché
+>   quei due punti non erano puro dead-code — il pattern `min_len`
+>   calcolava il valore che veniva poi testato dal guard. La fix
+>   distingue i due ruoli: l'assertion per l'invariante, il guard
+>   funzionale per il sanity check. L'array finale è ora costruito
+>   con `np.asarray(beats)` invece di `np.array([b[:min_len] for b in beats])`.
+>   Commit `df251af`, 16 test di regressione in
+>   `tests/test_beat_length_invariant.py` (uniform-length output di
+>   `segment_beats` su 4 combo pre/post/fs, preservazione lunghezza in
+>   `_align_beats_xcorr`, happy path dei tre helper, boundary dei
+>   guard `<10` e `<20`, `AssertionError` su input eterogeneo).
+>
+> **Stato Sprint 1 a chiusura**:
+>
+> | # | Titolo | Stato | Commit |
+> |---|---|---|---|
+> | 1 | Search-window truncation (§3.2) | ✅ | `04ecb23` + `275efbe` |
+> | 2 | Parametri duplicati config (§3.1) | ✅ | `47d203a` |
+> | 3 | CDISC/pyreadstat soft-extra (§3.3) | ✅ | `a4a346b` |
+> | 4 | `@st.cache_data` UI (§3.4) | ✅ | `b97e552` |
+> | 5 | Batch error handling (§4.1) | ✅ | `b977c45` |
+> | 6 | Cleanup `min_len` inoperanti (§3.2 nota) | ✅ | `df251af` |
+>
+> Test suite: 193/193 (da 143 pre-Sprint). Ruff clean. Prossimo passo:
+> Sprint 2 (fixture di dati reali nei test, hardcoded threshold in
+> config, `agreement_radius_ms` adattivo).
+>
 > **Addendum revisione 4** — Sprint 1 item 5 completato:
 > - §4.1 (gestione errori asimmetrica nel batch) risolto: introdotto
 >   `_BATCH_SAFE_EXCEPTIONS` come tupla module-level che include
@@ -188,7 +224,7 @@ post-spike), non più sull'afterpotential.
 
 ---
 
-#### Nota su un falso positivo correlato
+#### Nota su un falso positivo correlato ✅ FIXED (rev 5, commit `df251af`)
 
 L'analisi iniziale di questa sezione segnalava anche un pattern a
 `parameters.py:111-114`:
@@ -203,13 +239,31 @@ template. **Questa diagnosi era errata**: `segment_beats` produce
 battiti di lunghezza uniforme per costruzione (ogni beat è
 `data[idx−pre : idx+post]` con `pre`/`post` fissi), quindi in
 `aligned` tutti i beat hanno identica lunghezza e `min_len` equivale
-sempre a `len(aligned[0])`. Il pattern compare in tre punti
+sempre a `len(aligned[0])`. Il pattern compariva in tre punti
 (`parameters.py:111`, `quality_control.py:191`,
-`residual_analysis.py:28`) ed è **codice difensivo inoperante**. Non
-costituisce un bug, ma è rumore visivo che potrebbe confondere chi
-cerca le cause di problemi veri: va eliminato in un futuro refactor
-(o coperto da un invariante `assert all(len(b) == len(aligned[0]))`
-che lo documenti come precondizione).
+`residual_analysis.py:28`).
+
+**Fix applicato (rev 5)**: in tutti e tre i punti il pattern è stato
+sostituito da:
+
+```python
+beat_len = len(beats[0])
+assert all(len(b) == beat_len for b in beats), "..."
+mat = np.asarray(beats)
+```
+
+Sfumatura emersa durante l'audit, non colta dalla diagnosi originaria:
+in `quality_control.py` e `residual_analysis.py` il `min_len`
+calcolato veniva poi *usato* da un guard funzionale (`if min_len < 10:
+return None` e `if min_len < 20: return None` rispettivamente). Quei
+guard non sono dead code — sono sanity check che proteggono dai beat
+troppo corti per essere utili — e sono stati **preservati**
+sostituendo `min_len` con `beat_len` (semantica equivalente sotto
+l'invariante). Solo `parameters.py` aveva il pattern senza guard
+funzionale e quindi è stato semplificato senza condizioni residue.
+16 test di regressione coprono sia l'invariante sottostante (output
+uniforme di `segment_beats`) sia i due boundary `<10` / `<20` dei
+guard preservati (vedi `tests/test_beat_length_invariant.py`).
 
 ### 3.3 Fallback CDISC SEND non regulatory-compliant ✅ FIXED (soft)
 **File**: `cardiac_fp_analyzer/cdisc_export.py`, `ui/reports.py`
@@ -390,7 +444,9 @@ In ordine di rapporto valore/sforzo decrescente:
 3. ✅ Gestione `pyreadstat` per CDISC — approccio soft con banner UI (CRITICO 3.3 — commit `a4a346b`)
 4. ✅ Aggiungere `@st.cache_data` su `load_csv`, `analyze_single_file` (CRITICO 3.4 — commit `b97e552`; `minmax_downsample` non cachato per audit negativo)
 5. ✅ Estendere try/except del batch e includere errori pandas (4.1 — commit `b977c45`; `_BATCH_SAFE_EXCEPTIONS` + wrapper `_safe_analyze` simmetrico serial/parallel)
-6. Aggiungere `assert` di invariante o rimuovere il pattern `min_len` inoperante in `parameters.py:111`, `quality_control.py:191`, `residual_analysis.py:28` (cleanup non critico documentato in 3.2)
+6. ✅ Aggiungere `assert` di invariante o rimuovere il pattern `min_len` inoperante in `parameters.py:111`, `quality_control.py:191`, `residual_analysis.py:28` (commit `df251af`; invariante enforced via `assert`, guard funzionali `<10` / `<20` preservati)
+
+**Sprint 1 — stato finale: tutti e 6 gli item chiusi. Suite: 193/193 (da 143 pre-Sprint). Ruff clean. Pronto per Sprint 2.**
 
 **Sprint 2 — robustezza algoritmica (3–5 giorni)**
 7. Aggiungere fixture di dati reali nei test: 5–10 CSV reali con problemi noti (drift, saturazione, dofetilide, baseline cattiva); test che verifichino `assert FPD ∈ range_atteso`, non `> 0`.
