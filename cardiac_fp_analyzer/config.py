@@ -209,6 +209,19 @@ class BeatDetectionConfig:
     topology_amp_cv_noise_min: float = 0.40         # amp CV ≥ this → noise
     topology_min_beats: int = 5                     # minimum beats to classify
 
+    # ── Rhythm-aware FPD / QC (Sprint 2 #3, integration PR) ──
+    # When enabled, parameter extraction (FPD, spike amplitude) uses only the
+    # DOMINANT amplitude cluster for rhythm types where secondary/noise beats
+    # would contaminate the template (alternans_2_to_1, regular_with_ectopics,
+    # regular_with_noise, trimodal). The other rhythm types pass through
+    # unchanged, so clean recordings are bit-identical to the non-integrated
+    # pipeline.
+    enable_rhythm_aware_fpd: bool = True
+    # QC grade is downgraded by `rhythm_qc_downgrade_steps` when the
+    # noise-cluster fraction of total classified beats exceeds this threshold.
+    rhythm_qc_downgrade_threshold: float = 0.30
+    rhythm_qc_downgrade_steps: int = 1
+
     # Beat recovery: after initial detection, use the estimated beat period
     # to search for missed beats at expected locations with a lower threshold.
     # Recovered candidates are validated against the template before acceptance.
