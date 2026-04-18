@@ -1,10 +1,24 @@
 # Assessment tecnico — Cardiac FP Analyzer v3.3.0
 
-**Data**: 18 aprile 2026 (revisione 2)
+**Data**: 18 aprile 2026 (revisione 3)
 **Autore assessment**: revisione indipendente del codebase
-**Stato test suite**: 150/150 passati, ruff clean
+**Stato test suite**: 158/158 passati, ruff clean
 **Scope**: tutto il pacchetto (`cardiac_fp_analyzer/`, `ui/`, `tests/`, packaging)
 
+> **Addendum revisione 3** — Sprint 1 item 4 completato:
+> - §3.4 (nessuna cache Streamlit) risolto: nuovo modulo `ui/cache.py`
+>   con wrapper thin `load_csv_cached` e `analyze_single_file_cached`
+>   decorati `@st.cache_data`, chiavi `(path, mtime[, channel,
+>   config_json)`. Il tempfile del file upload è persistito in
+>   `session_state` con chiave `file_id` perché altrimenti ogni rerun
+>   rigenerava il path e la cache non sarebbe mai stata hit. Il core
+>   package resta streamlit-free (lo decoratore vive solo in `ui/`,
+>   coerente con lo schema `[gui]` optional extra). `minmax_downsample`
+>   intenzionalmente **non** cachato dopo audit: è invocato solo dalla
+>   pipeline matplotlib del PDF (button-triggered), non dal hot path
+>   UI — il `plot_signal` usa già stride downsample inline. Commit
+>   `b97e552`, 8 test di regressione.
+>
 > **Addendum revisione 2** — Sprint 1 items 2 e 3 completati:
 > - §3.1 (config duplicati) risolto: rename `cv_good/cv_fair/cv_marginal
 >   → *_frac` in `BeatDetectionConfig`, rimossi i dead field omonimi da
@@ -228,12 +242,49 @@ garantisce che **nessun utente possa submittere un pacchetto CSV
 pensando che sia .xpt**: tre gate (banner pre-flight + warning
 post-flight + README flag) lo rendono impossibile da mancare.
 
-### 3.4 Nessuna cache Streamlit nella UI
-**Verifica**: `grep -r "@st.cache" .` → 0 occorrenze.
+### 3.4 Nessuna cache Streamlit nella UI — ✅ FIXED (rev 3, commit `b97e552`)
 
-Conseguenza: ogni interazione UI (cambio slider, switch lingua, click navigazione) **ricarica e rianalizza tutto da zero**. Su batch da 169 file, ogni rerun costa minuti. Anche il downsampling minmax viene rifatto a ogni redraw del grafico.
+**Problema originale**: `grep -r "@st.cache" .` → 0 occorrenze. Ogni
+interazione UI (cambio slider, switch lingua, click navigazione)
+ricaricava e rianalizzava tutto da zero. Su batch da 169 file, ogni
+rerun costava minuti. Anche il downsampling minmax veniva rifatto a
+ogni redraw del grafico.
 
-**Intervento**: avvolgere `load_csv()`, `analyze_single_file()` e `minmax_downsample()` con `@st.cache_data`, usando come chiave l'hash della config + percorso file + mtime. Da soli, cambiano l'esperienza in modo radicale.
+**Intervento attuato**:
+1. **Nuovo modulo `ui/cache.py`** con due wrapper thin streamlit-aware:
+   - `load_csv_cached(filepath, mtime)` → chiave `(path, mtime)`
+   - `analyze_single_file_cached(filepath, mtime, channel, config_json)`
+     → chiave `(path, mtime, channel, config_json)`; il config è passato
+     come stringa JSON (stable hashable) e riidratato via
+     `AnalysisConfig.from_dict` dentro il wrapper
+2. **Core package streamlit-free**: il decoratore `@st.cache_data` vive
+   solo in `ui/`, coerente con lo schema `[gui]` optional extra.
+   Decorare direttamente `cardiac_fp_analyzer.loader.load_csv` avrebbe
+   aggiunto un hard dependency su streamlit al package core.
+3. **Tempfile stabilizzato**: `ui/single_file.py` ora persiste il
+   tempfile in `session_state` sotto chiave `_single_file_tmp_<file_id>`,
+   perché il vecchio codice creava un nuovo `NamedTemporaryFile` a ogni
+   rerun e la cache non sarebbe mai stata hit (path diverso ogni volta).
+4. **`minmax_downsample` audit**: non cachato. Il grep sui call-site
+   mostra che è invocato solo da `plot_raw_trace` in
+   `cardiac_fp_analyzer/plotting.py`, usato esclusivamente dalla
+   pipeline matplotlib del PDF report (button-triggered). Il hot path
+   UI è `ui/display.plot_signal`, che usa già uno stride downsample
+   inline (`sig[::step]` con `step = max(1, len(sig)//50000)`) —
+   cachare `minmax_downsample` aggiungerebbe complessità senza
+   beneficio utente.
+5. **Test**: 8 nuovi test di regressione in `tests/test_ui_cache.py`
+   (classi `TestLoadCsvCached` e `TestAnalyzeSingleFileCached`)
+   verificano round-trip vs uncached, cache-hit con monkeypatch +
+   counter, e cache-bust su cambio `mtime`/`channel`/`config_json`.
+   Fixture CSV sintetico in formato Digilent WaveForms. Tutti skippati
+   se streamlit non è installato (`pytest.importorskip`).
+
+**Impatto atteso sull'esperienza**: su batch da 169 file, la seconda
+esecuzione con stessa config diventa istantanea (cache hit). Il cambio
+di un parametro config invalida solo le entries dipendenti, non
+l'intera cache. Il limite `max_entries=16` sul wrapper analyze e 32 su
+quello load protegge dalla crescita illimitata della memoria.
 
 ---
 
@@ -298,7 +349,7 @@ Diversi test usano pattern tautologici tipo `assert spike_amplitude_mV > 0` o `a
 
 1. **Soglie scientifiche hardcoded nei file algoritmici** invece che in `config.py`. Effetto: l'autore non può cambiare soglia da un'unica fonte di verità.
 2. **Nessun fixture di dati reali** nei test. Effetto: ogni release può rompere il comportamento sui dati veri senza che nessun test lo segnali.
-3. **`@st.cache_data` mai usato**. Effetto: la UI è inusabile per batch grandi.
+3. ~~**`@st.cache_data` mai usato**. Effetto: la UI è inusabile per batch grandi.~~ → risolto in rev 3 (commit `b97e552`, vedi §3.4).
 4. **Assenza di `validate_invariants()` nelle config**: dataclass create senza validazione; un JSON malformato genera errori a runtime molto in profondità nello stack.
 5. **Nessuna metrica di confidenza propagata fino al report finale**: il `confidence` calcolato in `repolarization.py` viene usato per il filtering ma non è esposto chiaramente all'utente nei tab di summary.
 
@@ -312,7 +363,7 @@ In ordine di rapporto valore/sforzo decrescente:
 1. ✅ Fix search-window truncation in `analyze.py`/`channel_selection.py` (CRITICO 3.2 — commit `04ecb23` + UI cap `275efbe`)
 2. ✅ Uniformare parametri duplicati in `config.py` (CRITICO 3.1 — commit `47d203a`)
 3. ✅ Gestione `pyreadstat` per CDISC — approccio soft con banner UI (CRITICO 3.3 — commit `a4a346b`)
-4. Aggiungere `@st.cache_data` su `load_csv`, `analyze_single_file`, `minmax_downsample` (CRITICO 3.4)
+4. ✅ Aggiungere `@st.cache_data` su `load_csv`, `analyze_single_file` (CRITICO 3.4 — commit `b97e552`; `minmax_downsample` non cachato per audit negativo)
 5. Estendere try/except del batch e includere errori pandas (4.1)
 6. Aggiungere `assert` di invariante o rimuovere il pattern `min_len` inoperante in `parameters.py:111`, `quality_control.py:191`, `residual_analysis.py:28` (cleanup non critico documentato in 3.2)
 
