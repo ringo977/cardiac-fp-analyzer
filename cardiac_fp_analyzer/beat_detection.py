@@ -424,6 +424,17 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
     # Fix: increase min_distance to midpoint between groups and re-detect.
     bi, bt, info = _fix_bimodal_bp(data, fs, bi, bt, info, threshold_factor, cfg)
 
+    # ── Amplitude-cluster filter (Sprint 2 #1) ──
+    # Some signals show a strongly bimodal amplitude distribution that
+    # bimodal_bp cannot fix (not strictly alternating) and morphology
+    # validation cannot fix (mixed polarity → correlation skipped, median
+    # amplitude contaminated by false positives). Reject the low-amp
+    # cluster *before* morphology validation so that the latter sees a
+    # clean reference amplitude.
+    bi, cluster_info = _reject_amplitude_cluster(data, fs, bi, cfg=cfg)
+    bt = bi / fs if len(bi) > 0 else np.array([], dtype=float)
+    info['amplitude_cluster'] = cluster_info
+
     # ── Post-detection morphological validation ──
     # Remove noise spikes before they reach segmentation/parameter extraction.
     # Pass detected polarity so validation can adapt for mixed-polarity signals.
@@ -453,6 +464,113 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
     for k in list(info.keys()):
         if k.startswith('_'): del info[k]
     return bi, bt, info
+
+
+def _reject_amplitude_cluster(data, fs, bi, cfg=None):
+    """Reject low-amplitude cluster when peaks form a bimodal distribution.
+
+    Background
+    ----------
+    Some hiPSC-CM µECG recordings show two populations of detected peaks
+    with a clear amplitude gap:
+      - "Real" depolarisation spikes at e.g. ~1.4 V
+      - "Spurious" T-wave / baseline bumps at e.g. ~0.15 V
+    `_fix_bimodal_bp` only catches alternating short/long RR patterns
+    (ratio ≈ 1.5–2.8×). When the false positives are not strictly
+    alternating (e.g. 1 big + 2-3 small + 1 big …), the bimodal RR fix
+    fails to remove them. The morphology validator can also fail to
+    separate the populations — particularly in mixed-polarity mode where
+    ``correlation`` is replaced by an amplitude-only gate that uses the
+    median of all peaks (i.e. is contaminated by the spurious ones).
+
+    Strategy
+    --------
+    Operates on local ``max(|x|)`` in ±``cluster_window_ms`` around each
+    peak — polarity-agnostic, no template needed. If the largest ratio
+    between adjacent sorted amplitudes exceeds ``cluster_gap_ratio`` AND
+    the dominant (high-amp) cluster contains at least
+    ``cluster_min_dominant_count`` peaks, drop the low-amp cluster.
+
+    Threshold for acceptance is the geometric mean of the two amplitudes
+    flanking the gap — robust to outliers on either side.
+
+    Skips when:
+      - <5 detected peaks (not enough to assess clustering)
+      - all amplitudes are zero (degenerate signal)
+      - max gap ratio < ``cluster_gap_ratio`` (unimodal — leave alone)
+      - dominant cluster < ``cluster_min_dominant_count`` (could be
+        artefact spike(s); refusing to wipe out a recording)
+
+    Returns
+    -------
+    bi_filtered : 1-D int array
+    info : dict with diagnostics
+    """
+    c = _get_bd_cfg(cfg)
+    n_in = len(bi)
+    base_info = {'cluster_filter': 'skipped', 'n_input': n_in, 'n_kept': n_in}
+
+    if not getattr(c, 'enable_amplitude_cluster_filter', True):
+        return bi, {**base_info, 'cluster_filter': 'disabled'}
+    if n_in < 5:
+        return bi, {**base_info, 'cluster_filter': 'too_few_peaks'}
+
+    win = max(1, int(getattr(c, 'cluster_window_ms', 50.0) / 1000.0 * fs))
+    amps = np.empty(n_in, dtype=float)
+    n = len(data)
+    for i, idx in enumerate(bi):
+        lo = max(0, int(idx) - win)
+        hi = min(n, int(idx) + win)
+        amps[i] = float(np.max(np.abs(data[lo:hi]))) if hi > lo else 0.0
+
+    srt_idx = np.argsort(amps)
+    srt = amps[srt_idx]
+    if srt[0] <= 1e-12:
+        # Degenerate: at least one peak window is flat. Bail out — we
+        # cannot compute amplitude ratios safely.
+        return bi, {**base_info, 'cluster_filter': 'zero_amp_present'}
+
+    ratios = srt[1:] / srt[:-1]
+    max_ratio = float(ratios.max())
+    gap_idx = int(ratios.argmax())  # index in sorted amps; cluster split between
+                                     # srt[gap_idx] (low side) and srt[gap_idx+1] (high)
+
+    min_ratio = float(getattr(c, 'cluster_gap_ratio', 3.0))
+    if max_ratio < min_ratio:
+        return bi, {
+            'cluster_filter': 'unimodal',
+            'n_input': n_in, 'n_kept': n_in,
+            'max_gap_ratio': round(max_ratio, 3),
+        }
+
+    n_dominant = n_in - (gap_idx + 1)
+    min_dominant = int(getattr(c, 'cluster_min_dominant_count', 3))
+    if n_dominant < min_dominant:
+        return bi, {
+            'cluster_filter': 'dominant_too_small',
+            'n_input': n_in, 'n_kept': n_in,
+            'max_gap_ratio': round(max_ratio, 3),
+            'n_dominant': n_dominant,
+        }
+
+    # Geometric mean of the two adjacent amps flanking the gap — robust
+    # threshold that does not depend on absolute scale.
+    threshold = float(np.sqrt(srt[gap_idx] * srt[gap_idx + 1]))
+    mask = amps >= threshold
+    bi_kept = bi[mask]
+
+    info = {
+        'cluster_filter': 'applied',
+        'n_input': n_in,
+        'n_kept': int(mask.sum()),
+        'n_rejected': int((~mask).sum()),
+        'max_gap_ratio': round(max_ratio, 3),
+        'gap_low_v': round(float(srt[gap_idx]), 4),
+        'gap_high_v': round(float(srt[gap_idx + 1]), 4),
+        'threshold_v': round(threshold, 4),
+        'n_dominant': n_dominant,
+    }
+    return bi_kept, info
 
 
 def _fix_bimodal_bp(data, fs, bi, bt, info, threshold_factor, cfg=None):
