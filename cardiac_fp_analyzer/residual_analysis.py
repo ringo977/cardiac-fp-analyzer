@@ -25,10 +25,20 @@ def compute_template(beats_data, max_beats=50):
     mid = len(beats_data) // 2
     start = max(0, mid - n // 2)
     sel = beats_data[start:start + n]
-    min_len = min(len(b) for b in sel)
-    if min_len < 20:
+    # Invariant: ``segment_beats`` produces beats that all share the
+    # same length.  The per-beat slice that used to appear here was a
+    # defensive no-op; it has been replaced by an explicit assertion
+    # that documents the precondition while keeping the functional
+    # ``< 20``-sample sanity check below (templates shorter than 20
+    # samples are too noisy to be useful for residual analysis).
+    beat_len = len(sel[0])
+    assert all(len(b) == beat_len for b in sel), (
+        "compute_template: beats must share the same length; got " +
+        repr({len(b) for b in sel})
+    )
+    if beat_len < 20:
         return None
-    aligned = np.array([b[:min_len] for b in sel])
+    aligned = np.asarray(sel)
     return np.median(aligned, axis=0)
 
 
