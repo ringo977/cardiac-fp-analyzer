@@ -270,6 +270,66 @@ def plot_signal(result, key_suffix=""):
                 st.rerun()
 
 
+# Rhythm types that make a single averaged template a poor summary of the
+# underlying beats.  ``chaotic`` / ``ambiguous`` already carry that meaning;
+# ``alternans_2_to_1`` and ``trimodal`` have multiple morphological families
+# that should not be collapsed into one template.
+_TEMPLATE_RISKY_RHYTHM_TYPES = frozenset({
+    'chaotic',
+    'ambiguous',
+    'alternans_2_to_1',
+    'trimodal',
+})
+
+# FPD-dispersion threshold above which the T-wave of individual beats falls
+# at wildly different offsets relative to the depolarisation spike, so
+# point-wise aggregation (mean *or* median) cancels them.  20 % is a
+# conservative cut: below this, visual T-wave alignment in the overlay is
+# preserved on the real-signal fixtures we've tested.
+_FPD_CV_TEMPLATE_WARN = 0.20
+
+
+def _render_template_representativity_banner(result):
+    """Warn in the Battiti tab when the averaged template is likely to mask
+    the actual morphology.
+
+    Two triggers (either is sufficient):
+
+    * rhythm classifier reports a type that mixes multiple morphologies
+      (``chaotic``, ``ambiguous``, ``alternans_2_to_1``, ``trimodal``);
+    * FPD coefficient-of-variation exceeds ``_FPD_CV_TEMPLATE_WARN`` — the
+      T-waves fall at different time offsets and cancel out when averaged.
+
+    Silent (no banner) when the rhythm is regular and FPD dispersion is
+    low, which is the common case.
+    """
+    rc = (result.get('detection_info') or {}).get('rhythm_classification') or {}
+    rhythm_type = str(rc.get('rhythm_type') or '')
+    summary = result.get('summary') or {}
+    fpd_mean = float(summary.get('fpd_ms_mean', 0) or 0.0)
+    fpd_std = float(summary.get('fpd_ms_std', 0) or 0.0)
+    fpd_cv = (fpd_std / fpd_mean) if fpd_mean > 0 else 0.0
+
+    risky_rhythm = rhythm_type in _TEMPLATE_RISKY_RHYTHM_TYPES
+    dispersive_fpd = fpd_cv > _FPD_CV_TEMPLATE_WARN
+    if not (risky_rhythm or dispersive_fpd):
+        return
+
+    reasons: list[str] = []
+    if risky_rhythm:
+        reasons.append(T('template_reason_rhythm').format(rhythm=rhythm_type))
+    if dispersive_fpd:
+        reasons.append(
+            T('template_reason_fpd_cv').format(cv_pct=fpd_cv * 100.0)
+        )
+
+    title = T('template_unrepresentative_title')
+    body = T('template_unrepresentative_body').format(
+        reasons=' · '.join(reasons)
+    )
+    st.warning(f"**{title}**\n\n{body}")
+
+
 def plot_beats(result):
     """Plot overlaid beat waveforms and template."""
     bd = result.get('beats_data', [])
@@ -278,6 +338,12 @@ def plot_beats(result):
     if not bd:
         st.warning(T('no_params'))
         return
+
+    # ── Representativity banner (v3.4.x) ─────────────────────────────────
+    # Flag cases where the overlaid template is unlikely to summarise the
+    # beat morphology faithfully (chaotic/alternans rhythm, or wide FPD
+    # dispersion causing T-wave cancellation in the mean/median).
+    _render_template_representativity_banner(result)
 
     # Detect amplitude scale from first beat
     scale, y_label = amplitude_scale(bd[0])

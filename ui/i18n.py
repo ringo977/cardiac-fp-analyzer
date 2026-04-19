@@ -56,6 +56,18 @@ TRANSLATIONS = {
             'derivato da un campione troppo ridotto: ispezionare i '
             'singoli battiti prima di riportarlo.'
         ),
+        'template_unrepresentative_title': (
+            '⚠️ Template medio non rappresentativo'
+        ),
+        'template_unrepresentative_body': (
+            'Il template sovrapposto può essere fuorviante perché: '
+            '{reasons}. Quando il ritmo o la durata dell\'FPD sono '
+            'variabili, le T-wave cadono a tempi diversi e si annullano '
+            'nella media/mediana. Consultare i singoli battiti e la '
+            'cascata per un giudizio visivo.'
+        ),
+        'template_reason_rhythm': "tipo ritmo = '{rhythm}'",
+        'template_reason_fpd_cv': 'CV FPD = {cv_pct:.0f}% (soglia 20%)',
         'summary': 'Riepilogo',
         'parameter': 'Parametro',
         'mean': 'Media',
@@ -259,6 +271,18 @@ TRANSLATIONS = {
             'derived from too few beats — inspect the individual beats '
             'before reporting.'
         ),
+        'template_unrepresentative_title': (
+            '⚠️ Mean template may not be representative'
+        ),
+        'template_unrepresentative_body': (
+            'The overlaid template can be misleading because: '
+            '{reasons}. When rhythm or FPD duration are variable, '
+            'T-waves fall at different times and cancel out in the '
+            'mean/median. Inspect individual beats and the cascade '
+            'view for a visual judgment.'
+        ),
+        'template_reason_rhythm': "rhythm type = '{rhythm}'",
+        'template_reason_fpd_cv': 'FPD CV = {cv_pct:.0f}% (threshold 20%)',
         'summary': 'Summary',
         'parameter': 'Parameter',
         'mean': 'Mean',
