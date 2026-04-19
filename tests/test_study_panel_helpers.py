@@ -16,6 +16,7 @@ coverage despite their small size.
 from __future__ import annotations
 
 import importlib
+from dataclasses import dataclass as _dc
 
 import pytest
 
@@ -43,6 +44,8 @@ _BatchWorker = sp._BatchWorker
 _BatchWorkerSignals = sp._BatchWorkerSignals
 _BATCH_MAX_THREADS = sp._BATCH_MAX_THREADS
 _enumerate_csvs_under = sp._enumerate_csvs_under
+_result_fingerprint = sp._result_fingerprint
+_is_stale = sp._is_stale
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -254,6 +257,7 @@ class TestBatchWorkerRun:
             abspath='/fake/chip.csv',
             channel='auto',
             config=None,
+            fingerprint='deadbeef0001',
             signals=signals,
         )
         worker.run()
@@ -266,6 +270,9 @@ class TestBatchWorkerRun:
         assert fr.n_total == 14
         assert fr.n_included == 10
         assert fr.error == ''
+        # Fingerprint must be stamped into the success result so
+        # _rebuild_tree can detect staleness later.
+        assert fr.fingerprint == 'deadbeef0001'
 
     def test_pipeline_returning_none_becomes_error(self, monkeypatch):
         monkeypatch.setattr(
@@ -277,13 +284,18 @@ class TestBatchWorkerRun:
 
         _BatchWorker(
             file_index=0, abspath='/fake.csv',
-            channel='auto', config=None, signals=signals,
+            channel='auto', config=None,
+            fingerprint='abc123', signals=signals,
         ).run()
 
         idx, fr = cap.events[0]
         assert idx == 0
         assert fr.status == 'error'
         assert 'vuota' in fr.error.lower()
+        # Even the "None-pipeline → error" branch must carry the
+        # fingerprint — otherwise re-analysing wouldn't clear the
+        # stale ● badge on the next run.
+        assert fr.fingerprint == 'abc123'
 
     def test_exception_becomes_error_with_exc_type(self, monkeypatch):
         def boom(*a, **kw):
@@ -296,7 +308,8 @@ class TestBatchWorkerRun:
 
         _BatchWorker(
             file_index=7, abspath='/fake.csv',
-            channel='EL1', config=None, signals=signals,
+            channel='EL1', config=None,
+            fingerprint='exc-fp-77', signals=signals,
         ).run()
 
         idx, fr = cap.events[0]
@@ -306,6 +319,8 @@ class TestBatchWorkerRun:
         # so the tooltip gives the user something actionable.
         assert 'RuntimeError' in fr.error
         assert 'bad signal' in fr.error
+        # Exception branch also stamps the fingerprint.
+        assert fr.fingerprint == 'exc-fp-77'
 
     def test_fpd_fallback_when_only_beat_indices_present(self, monkeypatch):
         # Older schemas (pre-#73) don't populate beat_indices_fpd —
@@ -324,7 +339,8 @@ class TestBatchWorkerRun:
 
         _BatchWorker(
             file_index=0, abspath='/fake.csv',
-            channel='auto', config=None, signals=signals,
+            channel='auto', config=None,
+            fingerprint='fp-fallback', signals=signals,
         ).run()
 
         _, fr = cap.events[0]
@@ -345,10 +361,235 @@ class TestBatchWorkerRun:
 
         _BatchWorker(
             file_index=0, abspath='/fake.csv',
-            channel='auto', config=None, signals=signals,
+            channel='auto', config=None,
+            fingerprint='once-fp', signals=signals,
         ).run()
 
         assert len(cap.events) == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────
+#  _result_fingerprint — hash of (config, channel) that seeds staleness.
+#
+#  We build a small dataclass that *looks* like an AnalysisConfig (only
+#  what matters is that ``asdict`` / ``__dict__`` works) so we can avoid
+#  pulling the scientific core into the test.  Determinism is the whole
+#  contract — we assert equal inputs hash equal, and a changed value
+#  hashes differently.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@_dc
+class _FakeConfig:
+    threshold: float = 1.5
+    window_ms: int = 80
+    mode: str = "strict"
+
+
+class TestResultFingerprint:
+    def test_returns_stable_string(self):
+        fp = _result_fingerprint(_FakeConfig(), "auto")
+        assert isinstance(fp, str)
+        assert len(fp) > 0
+
+    def test_same_inputs_same_fingerprint(self):
+        a = _result_fingerprint(_FakeConfig(), "auto")
+        b = _result_fingerprint(_FakeConfig(), "auto")
+        assert a == b
+
+    def test_different_channel_differs(self):
+        a = _result_fingerprint(_FakeConfig(), "auto")
+        b = _result_fingerprint(_FakeConfig(), "EL1")
+        assert a != b
+
+    def test_different_config_value_differs(self):
+        a = _result_fingerprint(_FakeConfig(threshold=1.5), "auto")
+        b = _result_fingerprint(_FakeConfig(threshold=1.6), "auto")
+        assert a != b
+
+    def test_field_order_does_not_matter(self):
+        # Rebuilding the same config via different keyword order must
+        # still produce the same fingerprint — otherwise random dict
+        # iteration order would spuriously mark every row stale.
+        a = _result_fingerprint(
+            _FakeConfig(threshold=1.5, window_ms=80, mode="strict"), "auto",
+        )
+        b = _result_fingerprint(
+            _FakeConfig(mode="strict", window_ms=80, threshold=1.5), "auto",
+        )
+        assert a == b
+
+    def test_handles_non_dataclass_object(self):
+        # Defensive: some call sites may hand us a plain namespace
+        # rather than an AnalysisConfig dataclass — we fall back to
+        # ``__dict__`` and must still produce something stable.
+        class Bag:
+            def __init__(self):
+                self.x = 1
+                self.y = "two"
+        a = _result_fingerprint(Bag(), "auto")
+        b = _result_fingerprint(Bag(), "auto")
+        assert a == b
+
+    def test_handles_empty_channel(self):
+        # Empty channel is a legitimate input (file-entry default).
+        fp = _result_fingerprint(_FakeConfig(), "")
+        assert isinstance(fp, str)
+        assert len(fp) > 0
+
+
+# ─────────────────────────────────────────────────────────────────────────
+#  _is_stale — tolerance rules for the ● badge
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestIsStale:
+    def test_none_is_not_stale(self):
+        # No result at all → no badge of any kind.  "Stale" is only
+        # meaningful when there's a cached result to compare against.
+        assert _is_stale(None, _FakeConfig(), "auto") is False
+
+    def test_empty_fingerprint_is_not_stale(self):
+        # Legacy / pre-3c cached entries have fingerprint=''.  We
+        # tolerate them as "fresh" so loading a pre-3c study doesn't
+        # instantly flag every row ●.
+        r = FileResult(status='ok', fingerprint='')
+        assert _is_stale(r, _FakeConfig(), "auto") is False
+
+    def test_matching_fingerprint_is_not_stale(self):
+        cfg = _FakeConfig()
+        fp = _result_fingerprint(cfg, "auto")
+        r = FileResult(status='ok', fingerprint=fp)
+        assert _is_stale(r, cfg, "auto") is False
+
+    def test_mismatched_fingerprint_is_stale(self):
+        r = FileResult(status='ok', fingerprint='deadbeef0000')
+        # The stored fingerprint is synthetic; any real re-compute will
+        # differ → stale.
+        assert _is_stale(r, _FakeConfig(), "auto") is True
+
+    def test_config_change_flips_to_stale(self):
+        cfg_old = _FakeConfig(threshold=1.5)
+        fp_old = _result_fingerprint(cfg_old, "auto")
+        r = FileResult(status='ok', fingerprint=fp_old)
+
+        # Simulate the user tweaking the threshold in the settings
+        # dialog — the previously-cached result should now flag as
+        # stale against the *new* config.
+        cfg_new = _FakeConfig(threshold=1.9)
+        assert _is_stale(r, cfg_new, "auto") is True
+
+    def test_channel_change_flips_to_stale(self):
+        cfg = _FakeConfig()
+        fp_auto = _result_fingerprint(cfg, "auto")
+        r = FileResult(status='ok', fingerprint=fp_auto)
+        # Per-file channel override changed → different analysed signal,
+        # so the old result is now stale even though the group config
+        # hasn't moved.
+        assert _is_stale(r, cfg, "EL1") is True
+
+    def test_error_result_also_stale_aware(self):
+        # A stale error is still a stale result: the user edited the
+        # config *and* we haven't re-run, so "it used to fail under the
+        # old config" is not a statement about the new one.
+        r = FileResult(status='error', error='x', fingerprint='old-fp')
+        assert _is_stale(r, _FakeConfig(), "auto") is True
+
+
+# ─────────────────────────────────────────────────────────────────────────
+#  _badge_for / _tooltip_for / _aggregate_status — stale variants
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestBadgeForStale:
+    def test_stale_ok_is_dot(self):
+        r = FileResult(status='ok', fingerprint='old')
+        assert _badge_for(r, stale=True) == "●"
+
+    def test_stale_error_is_also_dot(self):
+        # Stale takes precedence over error — the user should first
+        # know "inputs changed" before reading the old error message.
+        r = FileResult(status='error', error='x', fingerprint='old')
+        assert _badge_for(r, stale=True) == "●"
+
+    def test_stale_on_none_still_empty(self):
+        # Defensive: if caller passes stale=True for a row with no
+        # cached result, we still show nothing (the badge has no
+        # semantic meaning without a backing result).
+        assert _badge_for(None, stale=True) == ""
+
+    def test_fresh_ok_unchanged(self):
+        # Back-compat with pre-3c callers (default stale=False).
+        assert _badge_for(FileResult(status='ok')) == "✓"
+
+
+class TestTooltipForStale:
+    def test_stale_ok_prefixed_with_reason(self):
+        r = FileResult(
+            status='ok', channel_analyzed='EL1',
+            n_included=14, n_total=14, fingerprint='old',
+        )
+        t = _tooltip_for(r, stale=True)
+        assert "non aggiornato" in t.lower() or "config cambiata" in t
+        # Underlying ok detail is still there.
+        assert "EL1" in t
+        assert "14 battiti" in t
+
+    def test_stale_error_prefixed_with_reason(self):
+        r = FileResult(status='error', error='boom', fingerprint='old')
+        t = _tooltip_for(r, stale=True)
+        assert "non aggiornato" in t.lower() or "config cambiata" in t
+        assert "boom" in t
+
+    def test_fresh_unchanged(self):
+        r = FileResult(status='ok', channel_analyzed='EL1', n_included=5, n_total=5)
+        t = _tooltip_for(r)
+        assert "non aggiornato" not in t.lower()
+
+
+class TestAggregateStatusStale:
+    def test_all_fresh_ok_still_compact(self):
+        results = [FileResult(status='ok') for _ in range(3)]
+        stale = [False, False, False]
+        assert _aggregate_status(results, stale) == "✓ 3/3"
+
+    def test_single_stale_breaks_compact_form(self):
+        # Even if everything succeeded, one stale result should force
+        # the mixed form so the user sees the ● in the summary.
+        results = [FileResult(status='ok') for _ in range(3)]
+        stale = [False, True, False]
+        out = _aggregate_status(results, stale)
+        assert "2✓" in out
+        assert "1●" in out
+        assert "/" not in out   # not the compact "✓ N/N" form
+
+    def test_mixed_ok_stale_error(self):
+        results = [
+            FileResult(status='ok'),
+            FileResult(status='ok', fingerprint='old'),
+            FileResult(status='error', error='x'),
+        ]
+        stale = [False, True, False]
+        out = _aggregate_status(results, stale)
+        assert "1✓" in out
+        assert "1●" in out
+        assert "1✗" in out
+
+    def test_stale_error_counts_as_error_not_dot(self):
+        # Rationale: errors are more actionable than staleness — the
+        # user needs to fix the error regardless of whether inputs
+        # changed.  Double-counting would inflate the summary.
+        results = [FileResult(status='error', error='x')]
+        stale = [True]
+        out = _aggregate_status(results, stale)
+        assert "1✗" in out
+        assert "●" not in out
+
+    def test_stale_argument_is_optional(self):
+        # Pre-3c callers pass just ``results`` — behaviour must match
+        # the old two-symbol summary.
+        results = [FileResult(status='ok'), FileResult(status='error')]
+        out_legacy = _aggregate_status(results)
+        out_no_stale = _aggregate_status(results, [False, False])
+        assert out_legacy == out_no_stale
 
 
 # ─────────────────────────────────────────────────────────────────────────

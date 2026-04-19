@@ -76,9 +76,11 @@ research, corrections are part of the scientific record):
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -186,6 +188,14 @@ class FileResult:
         (``len(result['beat_indices'])``).  ``>= n_included``.
     error : str
         Short user-facing message.  Empty when ``status == 'ok'``.
+    fingerprint : str
+        Hash (:func:`_result_fingerprint`) of the inputs that produced
+        this result — currently ``(group.config, file.channel)``.
+        The tree compares it to the *current* fingerprint to decide
+        whether to show the ``●`` stale badge.  Empty for legacy
+        cached entries pre-3c: those are tolerated as "fresh" rather
+        than flagged stale, on the assumption that the user hasn't
+        touched the config since loading the study.
     """
 
     status: str                      # 'ok' | 'error'
@@ -193,6 +203,7 @@ class FileResult:
     n_included: int = 0
     n_total: int = 0
     error: str = ''
+    fingerprint: str = ''
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -267,6 +278,7 @@ class _BatchWorker(QRunnable):
         config,              # AnalysisConfig — kept untyped to avoid a
                              # hard import of the scientific core at
                              # module load time.
+        fingerprint: str,
         signals: _BatchWorkerSignals,
     ) -> None:
         super().__init__()
@@ -274,6 +286,11 @@ class _BatchWorker(QRunnable):
         self._abspath = abspath
         self._channel = channel
         self._config = config
+        # Fingerprint of (config, channel) computed on the UI thread at
+        # submit time — captured here so we stamp the *current* inputs
+        # into the :class:`FileResult`, not whatever the user might
+        # have edited in the config dialog by the time we emit.
+        self._fingerprint = fingerprint
         self._signals = signals
         # ``setAutoDelete(True)`` is the QRunnable default, which we
         # want: the worker is disposable and only lives for one call.
@@ -299,12 +316,17 @@ class _BatchWorker(QRunnable):
             fr = FileResult(
                 status='error',
                 error=f"{type(exc).__name__}: {exc}",
+                fingerprint=self._fingerprint,
             )
             self._signals.done.emit(self._file_index, fr)
             return
 
         if result is None:
-            fr = FileResult(status='error', error="Pipeline ritornata vuota")
+            fr = FileResult(
+                status='error',
+                error="Pipeline ritornata vuota",
+                fingerprint=self._fingerprint,
+            )
             self._signals.done.emit(self._file_index, fr)
             return
 
@@ -323,6 +345,7 @@ class _BatchWorker(QRunnable):
             channel_analyzed=str(analyzed),
             n_included=n_included,
             n_total=n_total,
+            fingerprint=self._fingerprint,
         )
         self._signals.done.emit(self._file_index, fr)
 
@@ -1121,12 +1144,20 @@ class StudyPanel(QWidget):
         progress.canceled.connect(_on_cancel)
 
         # ── 4. Submit all workers ─────────────────────────────────────
+        # Compute the per-file fingerprint on the UI thread so we
+        # snapshot the config *as submitted*.  If the user opens the
+        # group-settings dialog while batch is running and tweaks a
+        # knob, the in-flight workers still stamp their results with
+        # the old fingerprint — the rebuilt tree will then correctly
+        # flag them ● against the new current config.
         for file_idx, abspath, ch in ready:
+            fp = _result_fingerprint(group.config, ch)
             worker = _BatchWorker(
                 file_index=file_idx,
                 abspath=str(abspath),
                 channel=ch,
                 config=group.config,
+                fingerprint=fp,
                 signals=signals,
             )
             pool.start(worker)
@@ -1400,10 +1431,18 @@ class StudyPanel(QWidget):
             # normal details — kept as a suffix so existing logic that
             # reads ``_format_group_details`` stays pure.
             details = _format_group_details(group)
-            agg = _aggregate_status(
-                [self._results.get((group.name, f.csv_relpath))
-                 for f in group.files]
-            )
+            # Collect cached results + parallel staleness flags vs the
+            # *current* group.config so the aggregate can distinguish
+            # "all fresh ✓" from "mixed with stale ●".  One pass here
+            # keeps the file-row loop from re-computing staleness per
+            # row.
+            group_results: list[FileResult | None] = []
+            group_stale: list[bool] = []
+            for f in group.files:
+                r = self._results.get((group.name, f.csv_relpath))
+                group_results.append(r)
+                group_stale.append(_is_stale(r, group.config, f.channel))
+            agg = _aggregate_status(group_results, group_stale)
             if agg:
                 details = f"{details}  ·  {agg}"
             g_item.setText(1, details)
@@ -1423,20 +1462,24 @@ class StudyPanel(QWidget):
                 f_item.setData(0, _FILE_INDEX_ROLE, idx)
 
                 # Badge + tooltip from the batch-result cache.
-                res = self._results.get((group.name, entry.csv_relpath))
-                badge = _badge_for(res)
+                res = group_results[idx]
+                is_stale = group_stale[idx]
+                badge = _badge_for(res, stale=is_stale)
                 base_name = Path(entry.csv_relpath).name
                 f_item.setText(
                     0,
                     f"{badge} {base_name}" if badge else base_name,
                 )
                 f_item.setText(1, f_details)
-                tip = _tooltip_for(res)
+                tip = _tooltip_for(res, stale=is_stale)
                 if tip:
                     f_item.setToolTip(0, tip)
                     f_item.setToolTip(1, tip)
                 # Colour cue for errors only — keep success on the
                 # default theme palette so we don't fight dark mode.
+                # Stale ok-results keep the default colour too: the ●
+                # badge already carries the signal, and tinting would
+                # over-index on "something is wrong".
                 if res is not None and res.status == 'error':
                     brush = QBrush(QColor("#b00020"))   # matte red
                     f_item.setForeground(0, brush)
@@ -1559,10 +1602,85 @@ def _len_or_zero(obj) -> int:
         return 0
 
 
-def _badge_for(res: FileResult | None) -> str:
+def _result_fingerprint(config, channel: str) -> str:
+    """Short deterministic hash of the inputs that produced a result.
+
+    The fingerprint is written into :class:`FileResult.fingerprint` at
+    analysis time and re-computed on every tree repaint.  When the two
+    diverge, the row gets the ``●`` stale badge: the cache stays
+    visible (we don't throw work away), but the user is told *which*
+    files need re-analysis.
+
+    Inputs
+        * ``config`` — the group's :class:`AnalysisConfig` (dataclass
+          or plain object; we fall back to ``repr`` for anything we
+          can't json-encode, which is good enough for a change detector
+          — it doesn't have to be canonical, only deterministic).
+        * ``channel`` — the per-file channel override ("auto" or
+          ``ch1`` / ``ch2`` / …).  Changing it re-picks a different
+          signal, so it's part of the fingerprint even though it
+          lives on the ``FileEntry``, not on the config.
+
+    Why SHA-1 truncated to 12 hex chars
+        Fingerprints are never written to disk (they live inside the
+        in-memory ``_results`` cache).  SHA-1 is not a security claim
+        here — any stable hash would do; SHA-1 just ships with the
+        stdlib and has the right output shape.  We truncate because
+        the full 40-char digest has no extra collision resistance for
+        our use case (a handful of configs per study).
+    """
+    if is_dataclass(config):
+        payload = asdict(config)
+    elif hasattr(config, '__dict__'):
+        payload = dict(config.__dict__)
+    else:
+        payload = {'repr': repr(config)}
+
+    payload['__channel__'] = channel or ''
+
+    try:
+        blob = json.dumps(payload, sort_keys=True, default=repr)
+    except (TypeError, ValueError):
+        # Belt-and-braces: if something deep in the config isn't
+        # json-encodable even with ``default=repr``, fall back to a
+        # sorted repr.  Still deterministic for equal inputs.
+        blob = repr(sorted(payload.items()))
+
+    return hashlib.sha1(blob.encode('utf-8')).hexdigest()[:12]
+
+
+def _is_stale(
+    res: FileResult | None,
+    config,
+    channel: str,
+) -> bool:
+    """Is the cached ``res`` out-of-date relative to the current inputs?
+
+    Rules:
+
+    * ``None`` (never analysed) → not stale (the row has no badge;
+      an absence of result is not a "stale" result).
+    * Empty ``res.fingerprint`` → not stale.  These are legacy cache
+      entries from before step 3c; flagging them stale on first load
+      would nag the user about perfectly good results.  They get a
+      fingerprint on the next analyse.
+    * Otherwise stale iff the stored fingerprint differs from the
+      current ``_result_fingerprint(config, channel)``.
+    """
+    if res is None:
+        return False
+    if not res.fingerprint:
+        return False
+    return res.fingerprint != _result_fingerprint(config, channel)
+
+
+def _badge_for(res: FileResult | None, *, stale: bool = False) -> str:
     """Return the column-0 prefix glyph for a file row.
 
     * ``None`` (never analysed) → empty string, no prefix.
+    * ``stale=True`` → ``'●'`` (result exists but inputs changed).
+      Takes precedence over ok/error so the user sees "this is out
+      of date" before "this succeeded last time".
     * ``ok`` → ``'✓'``.
     * ``error`` → ``'✗'``.
 
@@ -1571,6 +1689,8 @@ def _badge_for(res: FileResult | None) -> str:
     """
     if res is None:
         return ""
+    if stale:
+        return "●"
     if res.status == 'ok':
         return "✓"
     if res.status == 'error':
@@ -1578,7 +1698,7 @@ def _badge_for(res: FileResult | None) -> str:
     return ""
 
 
-def _tooltip_for(res: FileResult | None) -> str:
+def _tooltip_for(res: FileResult | None, *, stale: bool = False) -> str:
     """Tooltip text for a file row in the tree.
 
     For successful runs we surface the channel chosen by
@@ -1586,45 +1706,76 @@ def _tooltip_for(res: FileResult | None) -> str:
     what the user cares about before committing to a double-click
     deep-dive.  For errors we dump the full error message (what /
     where — the user can then re-open the CSV and iterate).
+
+    When ``stale=True`` we prepend a short marker explaining *why*
+    the ● badge is showing — otherwise the user has to remember what
+    ● means vs ✓ / ✗.
     """
     if res is None:
         return ""
     if res.status == 'error':
-        return f"Errore: {res.error}" if res.error else "Errore"
-    # status == 'ok'
-    parts: list[str] = []
-    if res.channel_analyzed:
-        parts.append(f"Canale: {res.channel_analyzed.upper()}")
-    if res.n_total:
-        if res.n_included != res.n_total:
-            parts.append(f"{res.n_included}/{res.n_total} battiti inclusi")
-        else:
-            parts.append(f"{res.n_total} battiti")
-    return "  ·  ".join(parts)
+        body = f"Errore: {res.error}" if res.error else "Errore"
+    else:
+        # status == 'ok'
+        parts: list[str] = []
+        if res.channel_analyzed:
+            parts.append(f"Canale: {res.channel_analyzed.upper()}")
+        if res.n_total:
+            if res.n_included != res.n_total:
+                parts.append(f"{res.n_included}/{res.n_total} battiti inclusi")
+            else:
+                parts.append(f"{res.n_total} battiti")
+        body = "  ·  ".join(parts)
+    if stale:
+        prefix = "Risultato non aggiornato (config cambiata)"
+        return f"{prefix}  ·  {body}" if body else prefix
+    return body
 
 
-def _aggregate_status(results: list[FileResult | None]) -> str:
+def _aggregate_status(
+    results: list[FileResult | None],
+    stale: list[bool] | None = None,
+) -> str:
     """Summary string for a group row — ``"2✓ 1✗"`` / ``"all ✓"`` / ``""``.
 
     The PoC convention:
 
     * no results at all → empty string (don't clutter the row before
       the user has run batch).
-    * all ok → compact ``"✓ {n}/{n}"``.
-    * mixed → ``"{ok}✓ {err}✗"``, with the untouched remainder
-      implicit (they have no prefix on the individual rows either).
+    * all ok + all fresh → compact ``"✓ {n}/{n}"``.
+    * mixed → ``"{ok}✓ {st}● {err}✗"`` with each term omitted when
+      the count is zero.  ``st`` is the number of stale-but-otherwise
+      countable results (a stale error still counts as ✗, not ●; a
+      stale ok counts as ● and is *not* double-counted in ✓).
+
+    ``stale`` is optional and parallel to ``results`` when given.
+    When ``None`` (pre-3c callers) the method behaves as before.
     """
     if not results:
         return ""
-    n_ok = sum(1 for r in results if r is not None and r.status == 'ok')
-    n_err = sum(1 for r in results if r is not None and r.status == 'error')
-    if n_ok == 0 and n_err == 0:
+    if stale is None:
+        stale = [False] * len(results)
+    n_ok_fresh = 0
+    n_stale = 0
+    n_err = 0
+    for r, is_stale_flag in zip(results, stale):
+        if r is None:
+            continue
+        if r.status == 'error':
+            n_err += 1
+        elif is_stale_flag:
+            n_stale += 1
+        elif r.status == 'ok':
+            n_ok_fresh += 1
+    if n_ok_fresh == 0 and n_stale == 0 and n_err == 0:
         return ""
-    if n_err == 0 and n_ok == len(results):
-        return f"✓ {n_ok}/{len(results)}"
+    if n_err == 0 and n_stale == 0 and n_ok_fresh == len(results):
+        return f"✓ {n_ok_fresh}/{len(results)}"
     parts: list[str] = []
-    if n_ok:
-        parts.append(f"{n_ok}✓")
+    if n_ok_fresh:
+        parts.append(f"{n_ok_fresh}✓")
+    if n_stale:
+        parts.append(f"{n_stale}●")
     if n_err:
         parts.append(f"{n_err}✗")
     return " ".join(parts)
