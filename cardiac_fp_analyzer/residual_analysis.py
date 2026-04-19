@@ -17,7 +17,17 @@ import numpy as np
 # ═══════════════════════════════════════════════════════════════════════
 
 def compute_template(beats_data, max_beats=50):
-    """Robust median template from up to *max_beats* beats."""
+    """Mean template from up to *max_beats* beats.
+
+    Historical note — this used to take the per-sample median on the
+    assumption it was "more robust".  In practice the beats reaching
+    this function have already passed amplitude + morphology QC, so
+    outliers are rare; the mean preserves signal energy better and
+    produces a more representative overlay for the Battiti tab (the
+    median under-weights samples where only a subset of beats carry
+    the feature — e.g. T-waves that jitter in time collapse toward
+    zero, even though the underlying T-waves are real).
+    """
     if not beats_data or len(beats_data) == 0:
         return None
     n = min(len(beats_data), max_beats)
@@ -39,7 +49,7 @@ def compute_template(beats_data, max_beats=50):
     if beat_len < 20:
         return None
     aligned = np.asarray(sel)
-    return np.median(aligned, axis=0)
+    return np.mean(aligned, axis=0)
 
 
 def compute_residuals(beats_data, template):
