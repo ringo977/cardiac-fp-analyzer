@@ -43,7 +43,21 @@ def plot_signal(result, key_suffix=""):
     all_bi = sorted(st.session_state[all_key])
     excluded = st.session_state[excl_key]
 
-    included_bi = np.array([i for i in all_bi if i not in excluded], dtype=int)
+    # FPD-included set: beats that survived rhythm/RR filter + re-segmentation
+    # and actually fed parameter extraction. When available, we visually
+    # distinguish them from beats detected-but-filtered-out. Fallback to
+    # beat_indices (post-QC) for backward compatibility with older results.
+    bi_fpd_arr = result.get('beat_indices_fpd')
+    if bi_fpd_arr is None:
+        bi_fpd_arr = result.get('beat_indices', [])
+    fpd_set = set(int(x) for x in np.asarray(bi_fpd_arr, dtype=int).tolist())
+
+    included_bi = np.array([i for i in all_bi
+                             if i in fpd_set and i not in excluded],
+                            dtype=int)
+    filtered_bi = np.array([i for i in all_bi
+                             if i not in fpd_set and i not in excluded],
+                            dtype=int)
     excluded_bi = np.array([i for i in all_bi if i in excluded], dtype=int)
 
     # Toggle for raw signal overlay
@@ -68,14 +82,24 @@ def plot_signal(result, key_suffix=""):
         line=dict(color='#1f77b4', width=0.8)
     ))
 
-    # Included beats — red triangles
+    # Included beats (post rhythm/RR filter — fed FPD) — red triangles
     if len(included_bi) > 0:
         fig.add_trace(go.Scatter(
             x=t[included_bi], y=sig[included_bi],
             mode='markers', name=T('beats_included'),
-            marker=dict(color='red', size=7, symbol='triangle-down')
+            marker=dict(color='red', size=8, symbol='triangle-down')
         ))
-    # Excluded beats — grey triangles
+    # Detected but filtered out by rhythm/RR logic — small faded greys.
+    # Shown so the user can see what the detector fired on, without
+    # confusing them with the beats that actually produced FPD.
+    if len(filtered_bi) > 0:
+        fig.add_trace(go.Scatter(
+            x=t[filtered_bi], y=sig[filtered_bi],
+            mode='markers', name=T('beats_filtered_out'),
+            marker=dict(color='#666666', size=4, symbol='triangle-down'),
+            opacity=0.35
+        ))
+    # Excluded beats (manual exclusions via beat editor) — grey with outline
     if len(excluded_bi) > 0:
         fig.add_trace(go.Scatter(
             x=t[excluded_bi], y=sig[excluded_bi],
@@ -85,11 +109,12 @@ def plot_signal(result, key_suffix=""):
             opacity=0.5
         ))
 
-    # Repolarization peaks (same logic as PDF summary): aligned to QC beat_indices + all_params
-    bi_clean = np.asarray(result.get('beat_indices', []), dtype=int)
+    # Repolarization peaks: all_params is indexed over the FPD beat set
+    # (bi_fpd), so we iterate over that set, not over bi_clean.
+    bi_fpd_for_map = np.asarray(bi_fpd_arr, dtype=int)
     all_params = result.get('all_params') or []
     bi_to_repol = {}
-    for k, bi_dep in enumerate(bi_clean):
+    for k, bi_dep in enumerate(bi_fpd_for_map):
         if k >= len(all_params):
             break
         g = all_params[k].get('repol_peak_global_idx')
@@ -118,12 +143,19 @@ def plot_signal(result, key_suffix=""):
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Stats (from current included beats)
-    bp = result.get('beat_periods', np.array([]))
+    # Stats: prefer post-filter (FPD) periods so BP / BPM reflect the beats
+    # that actually drove the FPD calculation. Fallback to all-detected
+    # beat_periods when FPD set is unavailable (e.g. legacy results).
+    bp_all = result.get('beat_periods', np.array([]))
+    if len(included_bi) >= 2:
+        bp = np.diff(np.sort(included_bi)) / float(
+            result['metadata'].get('sample_rate', 1.0))
+    else:
+        bp = bp_all
     cols = st.columns(4)
-    cols[0].metric(T('n_beats_qc'), f"{len(result['beat_indices'])}")
+    cols[0].metric(T('n_beats_included'), f"{len(included_bi)}")
     cols[1].metric(T('n_beats_raw'), f"{len(all_bi)}")
-    if len(bp) > 0:
+    if len(bp) > 0 and np.mean(bp) > 0:
         cols[2].metric(T('beat_period'), f"{np.mean(bp)*1000:.0f} ms")
         cols[3].metric("BPM", f"{60/np.mean(bp):.1f}")
 
@@ -238,6 +270,66 @@ def plot_signal(result, key_suffix=""):
                 st.rerun()
 
 
+# Rhythm types that make a single averaged template a poor summary of the
+# underlying beats.  ``chaotic`` / ``ambiguous`` already carry that meaning;
+# ``alternans_2_to_1`` and ``trimodal`` have multiple morphological families
+# that should not be collapsed into one template.
+_TEMPLATE_RISKY_RHYTHM_TYPES = frozenset({
+    'chaotic',
+    'ambiguous',
+    'alternans_2_to_1',
+    'trimodal',
+})
+
+# FPD-dispersion threshold above which the T-wave of individual beats falls
+# at wildly different offsets relative to the depolarisation spike, so
+# point-wise aggregation (mean *or* median) cancels them.  20 % is a
+# conservative cut: below this, visual T-wave alignment in the overlay is
+# preserved on the real-signal fixtures we've tested.
+_FPD_CV_TEMPLATE_WARN = 0.20
+
+
+def _render_template_representativity_banner(result):
+    """Warn in the Battiti tab when the averaged template is likely to mask
+    the actual morphology.
+
+    Two triggers (either is sufficient):
+
+    * rhythm classifier reports a type that mixes multiple morphologies
+      (``chaotic``, ``ambiguous``, ``alternans_2_to_1``, ``trimodal``);
+    * FPD coefficient-of-variation exceeds ``_FPD_CV_TEMPLATE_WARN`` — the
+      T-waves fall at different time offsets and cancel out when averaged.
+
+    Silent (no banner) when the rhythm is regular and FPD dispersion is
+    low, which is the common case.
+    """
+    rc = (result.get('detection_info') or {}).get('rhythm_classification') or {}
+    rhythm_type = str(rc.get('rhythm_type') or '')
+    summary = result.get('summary') or {}
+    fpd_mean = float(summary.get('fpd_ms_mean', 0) or 0.0)
+    fpd_std = float(summary.get('fpd_ms_std', 0) or 0.0)
+    fpd_cv = (fpd_std / fpd_mean) if fpd_mean > 0 else 0.0
+
+    risky_rhythm = rhythm_type in _TEMPLATE_RISKY_RHYTHM_TYPES
+    dispersive_fpd = fpd_cv > _FPD_CV_TEMPLATE_WARN
+    if not (risky_rhythm or dispersive_fpd):
+        return
+
+    reasons: list[str] = []
+    if risky_rhythm:
+        reasons.append(T('template_reason_rhythm').format(rhythm=rhythm_type))
+    if dispersive_fpd:
+        reasons.append(
+            T('template_reason_fpd_cv').format(cv_pct=fpd_cv * 100.0)
+        )
+
+    title = T('template_unrepresentative_title')
+    body = T('template_unrepresentative_body').format(
+        reasons=' · '.join(reasons)
+    )
+    st.warning(f"**{title}**\n\n{body}")
+
+
 def plot_beats(result):
     """Plot overlaid beat waveforms and template."""
     bd = result.get('beats_data', [])
@@ -246,6 +338,12 @@ def plot_beats(result):
     if not bd:
         st.warning(T('no_params'))
         return
+
+    # ── Representativity banner (v3.4.x) ─────────────────────────────────
+    # Flag cases where the overlaid template is unlikely to summarise the
+    # beat morphology faithfully (chaotic/alternans rhythm, or wide FPD
+    # dispersion causing T-wave cancellation in the mean/median).
+    _render_template_representativity_banner(result)
 
     # Detect amplitude scale from first beat
     scale, y_label = amplitude_scale(bd[0])

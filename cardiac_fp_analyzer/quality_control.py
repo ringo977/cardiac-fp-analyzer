@@ -451,27 +451,39 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
     # ─── Step 4b: Period-aware re-admission ───
     # Morphologically rejected beats that sit at expected rhythm positions
     # are likely real beats with slightly variable shape (common in 3D
-    # constructs).  Re-admit them if their correlation is above the marginal
-    # floor and their timing fits the clean rhythm.
+    # constructs).  Two complementary pathways run in order:
+    #
+    #   (1) standard path — corr ≥ marginal floor AND on-rhythm within
+    #       ±30 % of median RR.  Catches beats with mildly degraded shape.
+    #
+    #   (2) strict-rhythm path — when on-rhythm within ±(strict residual
+    #       ratio) × median RR AND amp_ratio ≥ strict amp ratio, admit
+    #       regardless of morphology corr sign.  Catches genuinely real
+    #       beats on bradycardic 3D signals whose shape is decorrelated /
+    #       inverted but whose timing + amplitude are unmistakable.
     n_readmitted_qc = 0
+    n_readmitted_strict = 0
     accepted_indices_tmp = [beat_indices[i] for i, a in enumerate(accepted_mask) if a]
     if len(accepted_indices_tmp) >= 4 and n_rej_morph > 0:
         acc_arr = np.array(accepted_indices_tmp)
         clean_bp = np.diff(acc_arr)
         clean_median_bp = np.median(clean_bp)
         if clean_median_bp > 0:
-            tol = clean_median_bp * 0.3  # ±30% of median period
+            tol = clean_median_bp * 0.3  # ±30% of median period (standard)
             marginal = getattr(c, 'morphology_marginal', 0.10)
             min_gap = clean_median_bp * 0.3  # don't re-admit if too close
+            strict_tol = clean_median_bp * float(
+                getattr(c, 'strict_rhythm_residual_ratio', 0.10)
+            )
+            strict_amp_ratio = float(
+                getattr(c, 'strict_rhythm_amp_ratio', 0.50)
+            )
 
             for i in range(len(accepted_mask)):
                 if accepted_mask[i]:
                     continue  # already accepted
                 # Only re-admit morphology rejections (not amplitude)
                 if i < len(amp_ratios) and amp_ratios[i] < amplitude_threshold:
-                    continue
-                # Must be above marginal floor
-                if i < len(morphology_corrs) and morphology_corrs[i] < marginal:
                     continue
                 # Check rhythmic position relative to accepted beats
                 bi_val = beat_indices[i]
@@ -481,16 +493,40 @@ def validate_beats(data, beat_indices, beats_data, beats_time, fs,
                     continue  # too close to an accepted beat
                 n_periods = min_dist_val / clean_median_bp
                 residual = abs(n_periods - round(n_periods)) * clean_median_bp
-                if residual < tol and round(n_periods) >= 1:
+
+                # Gate 1: timing must be at least within standard tolerance
+                if residual >= tol or round(n_periods) < 1:
+                    continue
+
+                amp_r = amp_ratios[i] if i < len(amp_ratios) else 0.0
+                corr_i = (morphology_corrs[i]
+                          if i < len(morphology_corrs) else 0.0)
+
+                # Standard path — corr must be above marginal floor
+                if corr_i >= marginal:
                     accepted_mask[i] = True
                     n_readmitted_qc += 1
                     n_rej_morph -= 1
-                    # Update accepted array for subsequent distance checks
+                    acc_arr = np.sort(np.append(acc_arr, bi_val))
+                    continue
+
+                # Strict-rhythm path — amp robust AND timing very tight
+                # (disabled by setting strict_amp_ratio ≥ 1)
+                if (strict_amp_ratio < 1.0
+                        and residual < strict_tol
+                        and amp_r >= strict_amp_ratio):
+                    accepted_mask[i] = True
+                    n_readmitted_qc += 1
+                    n_readmitted_strict += 1
+                    n_rej_morph -= 1
                     acc_arr = np.sort(np.append(acc_arr, bi_val))
 
             if n_readmitted_qc > 0:
+                extra = (f", {n_readmitted_strict} via strict-rhythm"
+                         if n_readmitted_strict > 0 else "")
                 print(f"     QC re-admitted {n_readmitted_qc} beats "
-                      f"(period-aware, marginal corr ≥ {marginal:.2f})")
+                      f"(period-aware, marginal corr ≥ {marginal:.2f}"
+                      f"{extra})")
 
     qc.accepted_mask = accepted_mask
     qc.n_beats_rejected_snr = n_rej_amp  # "snr" label kept for report compat

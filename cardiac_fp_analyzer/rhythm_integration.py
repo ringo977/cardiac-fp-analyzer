@@ -140,6 +140,8 @@ def apply_rhythm_filter(
     bi_raw: np.ndarray,
     rhythm_classification: dict[str, Any] | None,
     enable: bool = True,
+    min_retention_ratio: float = 0.5,
+    min_retention_beats: int = 3,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
     """Filter QC-cleaned beats so FPD / amplitude statistics use only the
     dominant amplitude cluster when the rhythm topology calls for it.
@@ -157,6 +159,16 @@ def apply_rhythm_filter(
         ``info['rhythm_classification']`` from ``detect_beats``.
     enable : bool
         Master switch. When False, returns inputs unchanged.
+    min_retention_ratio : float, default 0.5
+        Safety bail: if applying "dominant cluster only" would keep
+        fewer than ``min_retention_ratio × len(bi_clean)`` beats, fall
+        back to passthrough. A rhythm whose dominant cluster carries
+        less than half the QC-accepted signal is almost certainly a
+        trimodal/ectopic classification artefact (observed on
+        Exp6_chipD_ch1 EL1: 34 QC beats → 7 trimodal-kept).
+    min_retention_beats : int, default 3
+        Safety bail: also fall back to passthrough if the absolute
+        number of kept beats would be below this threshold.
 
     Returns
     -------
@@ -207,6 +219,33 @@ def apply_rhythm_filter(
         info['reason'] = 'qc_removed_all_dominant'
         return bd_clean, btm_clean, bi_clean, info
 
+    # Safety bail (Sprint 3 #3 — bradycardia trimodal fix):
+    # if keeping only the dominant cluster would discard too much of
+    # the QC-accepted signal, the classification is almost certainly a
+    # trimodal artefact of bradycardic R+T double-spikes (Exp6_chipD_ch1
+    # EL1: 34 → 7 beats). Fall back to passthrough and annotate the
+    # diagnostic dict so downstream UI / summary can still report the
+    # rhythm type.
+    n_input = int(len(bi_clean))
+    min_ratio = float(min_retention_ratio) if min_retention_ratio is not None else 0.0
+    min_abs = int(min_retention_beats) if min_retention_beats is not None else 0
+    retention_ratio = n_kept / n_input if n_input > 0 else 1.0
+    if retention_ratio < min_ratio or n_kept < min_abs:
+        info.update({
+            'filter_applied': False,
+            'n_kept': n_input,
+            'n_dropped': 0,
+            'kept_role': None,
+            'reason': 'safety_bail_low_retention',
+            'safety_bail': {
+                'n_would_keep': n_kept,
+                'retention_ratio': round(retention_ratio, 4),
+                'min_retention_ratio': min_ratio,
+                'min_retention_beats': min_abs,
+            },
+        })
+        return bd_clean, btm_clean, bi_clean, info
+
     info.update({
         'filter_applied': True,
         'n_kept': n_kept,
@@ -225,6 +264,146 @@ def apply_rhythm_filter(
     bi_out = np.asarray(bi_clean)[keep_mask] if isinstance(bi_clean, np.ndarray) \
         else np.asarray([v for v, k in zip(bi_clean, keep_mask) if k], dtype=int)
     return _apply_mask(bd_clean, keep_mask), _apply_mask(btm_clean, keep_mask), bi_out, info
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  1-bis. RR outlier filter
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def apply_rr_outlier_filter(
+    bd: Any,
+    btm: Any,
+    bi: np.ndarray,
+    fs: float,
+    max_rr_ratio: float = 5.0,
+    enable: bool = True,
+) -> tuple[Any, Any, np.ndarray, dict[str, Any]]:
+    """Drop beats whose adjacent RR interval is pathologically long.
+
+    Rationale
+    ---------
+    A beat whose preceding RR is more than ``max_rr_ratio`` times the
+    median RR is almost always one of:
+
+      * a missed detection (detector skipped intermediate beats during
+        a noise burst or a dropout)
+      * a quiescent gap followed by a spontaneous reactivation beat
+      * an artefact that happened to fire the detector
+
+    Keeping such beats contaminates FPD / amplitude statistics: on
+    Exp6_chipD_ch1 a single 24-second dropout gap produced the only
+    "valid" FPD in the recording (918 ms → FPDcF 318.8 ± 0, QC grade F)
+    because every other beat failed repolarisation detection.
+
+    The filter drops a beat when BOTH:
+      * its preceding RR (``bi[i] - bi[i-1]``) exceeds
+        ``max_rr_ratio × median_RR``, or
+      * (first beat only) its following RR does,
+    after computing the median on the raw differences (so the median
+    itself is robust to a single large outlier — the MAD-like pattern
+    of robust statistics).
+
+    Parameters
+    ----------
+    bd, btm : 2-D arrays or Python lists of 1-D arrays
+        Beat-data / beat-time matrices, aligned with ``bi``.
+    bi : 1-D int array
+        Sample indices of beats (same length as ``bd`` / ``btm``).
+    fs : float
+        Sampling rate (Hz). Only used for diagnostics.
+    max_rr_ratio : float, default 5.0
+        Beats with RR > this × median RR are dropped.
+    enable : bool, default True
+        Master switch.
+
+    Returns
+    -------
+    bd_f, btm_f, bi_f : filtered copies (subset of inputs).
+    info : dict with keys
+        ``filter_applied`` (bool), ``n_input``, ``n_kept``, ``n_dropped``,
+        ``median_rr_ms``, ``max_rr_ratio``, ``reason``.
+    """
+    info: dict[str, Any] = {
+        'filter_applied': False,
+        'n_input': int(len(bi)) if bi is not None else 0,
+        'n_kept': int(len(bi)) if bi is not None else 0,
+        'n_dropped': 0,
+        'median_rr_ms': None,
+        'max_rr_ratio': float(max_rr_ratio),
+        'reason': None,
+    }
+
+    if not enable:
+        info['reason'] = 'disabled'
+        return bd, btm, bi, info
+
+    bi_arr = np.asarray(bi, dtype=int) if bi is not None else np.array([], dtype=int)
+
+    # Need at least 3 beats to derive a meaningful median RR.
+    if len(bi_arr) < 3:
+        info['reason'] = 'insufficient_beats'
+        return bd, btm, bi_arr, info
+
+    if max_rr_ratio <= 0 or not np.isfinite(max_rr_ratio):
+        info['reason'] = 'ratio_disabled'
+        return bd, btm, bi_arr, info
+
+    rr_samples = np.diff(bi_arr).astype(float)
+    if not np.any(rr_samples > 0):
+        info['reason'] = 'degenerate_rr'
+        return bd, btm, bi_arr, info
+
+    median_rr = float(np.median(rr_samples[rr_samples > 0]))
+    if median_rr <= 0 or not np.isfinite(median_rr):
+        info['reason'] = 'degenerate_median'
+        return bd, btm, bi_arr, info
+
+    threshold = max_rr_ratio * median_rr
+
+    # A beat is dropped when its *preceding* RR exceeds the threshold:
+    # this models the "reactivation after a long gap" pattern, where the
+    # beat immediately after the gap is the contaminant (it's the
+    # artefact / lone spontaneous beat that breaks FPD statistics). The
+    # beat BEFORE the gap is legitimate and is kept.
+    # On genuinely bradycardic signals every RR is uniformly long, so
+    # no individual RR exceeds the median by ``max_rr_ratio`` and the
+    # filter is a no-op — which is what we want.
+    n = len(bi_arr)
+    keep = np.ones(n, dtype=bool)
+    for i in range(1, n):
+        prev_rr = rr_samples[i - 1]
+        if prev_rr > threshold:
+            keep[i] = False
+
+    n_kept = int(keep.sum())
+    info['median_rr_ms'] = median_rr / fs * 1000 if fs > 0 else None
+    if n_kept == n:
+        info['reason'] = 'no_outliers'
+        return bd, btm, bi_arr, info
+
+    # Safety net: if the filter wipes out more than half the beats, the
+    # median RR itself is unreliable (signal is mostly dropout). Bail
+    # out and keep the input unchanged rather than produce a nearly
+    # empty beat set.
+    if n_kept < max(3, n // 2):
+        info['reason'] = 'too_many_dropped_safety_bail'
+        return bd, btm, bi_arr, info
+
+    info.update({
+        'filter_applied': True,
+        'n_kept': n_kept,
+        'n_dropped': int(n - n_kept),
+        'reason': 'rr_outlier_dropped',
+    })
+
+    def _apply_mask(seq: Any, mask: np.ndarray) -> Any:
+        if isinstance(seq, np.ndarray):
+            return seq[mask]
+        return [item for item, k in zip(seq, mask) if k]
+
+    bi_out = bi_arr[keep]
+    return _apply_mask(bd, keep), _apply_mask(btm, keep), bi_out, info
 
 
 # ═══════════════════════════════════════════════════════════════════════

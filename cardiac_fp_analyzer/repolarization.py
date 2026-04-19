@@ -259,12 +259,25 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None,
     # ─── Step 1: Find the repolarization peak ───
     # Minimum FPD constraint: exclude peaks that would yield FPD below
     # the physiological floor (afterpotential rebound, not real T-wave).
-    # Effective floor = max(fixed min_fpd_ms, adaptive min_fpd_pct_rr × RR).
+    # Effective floor = max(fixed min_fpd_ms,
+    #                        min(adaptive min_fpd_pct_rr × RR,
+    #                            max_adaptive_min_fpd_ms)).
+    # The cap keeps the adaptive contribution within physiological
+    # bounds on bradycardic signals (RR > 2.5 s) where the raw product
+    # would otherwise overshoot the real T-wave latency and force every
+    # beat into the argmax fallback.
     fixed_min_fpd_ms = getattr(rc, 'min_fpd_ms', 0)
     adaptive_min_fpd_ms = 0.0
     pct_rr = getattr(rc, 'min_fpd_pct_rr', 0.0)
     if pct_rr > 0 and median_bp_s is not None and median_bp_s > 0:
         adaptive_min_fpd_ms = pct_rr * median_bp_s * 1000  # convert to ms
+    adaptive_cap_ms = getattr(rc, 'max_adaptive_min_fpd_ms', 0.0)
+    if adaptive_cap_ms and adaptive_cap_ms > 0 and adaptive_min_fpd_ms > adaptive_cap_ms:
+        logger.debug("Template min_fpd: adaptive %.0f ms capped at %.0f ms "
+                     "(%.0f%% of RR=%.0f ms)",
+                     adaptive_min_fpd_ms, adaptive_cap_ms,
+                     pct_rr * 100, median_bp_s * 1000)
+        adaptive_min_fpd_ms = adaptive_cap_ms
     effective_min_fpd_ms = max(fixed_min_fpd_ms, adaptive_min_fpd_ms)
     min_fpd_samples = int(effective_min_fpd_ms / 1000 * fs)
     if adaptive_min_fpd_ms > fixed_min_fpd_ms:
@@ -469,12 +482,25 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
 
     # ─── Step 1: Find the repolarization peak ───
     # Minimum FPD constraint: exclude peaks in the afterpotential zone.
-    # Effective floor = max(fixed min_fpd_ms, adaptive min_fpd_pct_rr × RR).
+    # Effective floor = max(fixed min_fpd_ms,
+    #                        min(adaptive min_fpd_pct_rr × RR,
+    #                            max_adaptive_min_fpd_ms)).
+    # See the matching comment in find_repolarization_on_template for a
+    # detailed explanation of the cap; it prevents bradycardic signals
+    # (RR > 2.5 s) from producing a floor that overshoots the real
+    # T-wave latency.
     fixed_min_fpd_ms = getattr(rc, 'min_fpd_ms', 0)
     adaptive_min_fpd_ms = 0.0
     pct_rr = getattr(rc, 'min_fpd_pct_rr', 0.0)
     if pct_rr > 0 and beat_period_s is not None and beat_period_s > 0:
         adaptive_min_fpd_ms = pct_rr * beat_period_s * 1000
+    adaptive_cap_ms = getattr(rc, 'max_adaptive_min_fpd_ms', 0.0)
+    if adaptive_cap_ms and adaptive_cap_ms > 0 and adaptive_min_fpd_ms > adaptive_cap_ms:
+        logger.debug("Per-beat min_fpd: adaptive %.0f ms capped at %.0f ms "
+                     "(%.0f%% of RR=%.0f ms)",
+                     adaptive_min_fpd_ms, adaptive_cap_ms,
+                     pct_rr * 100, beat_period_s * 1000)
+        adaptive_min_fpd_ms = adaptive_cap_ms
     effective_min_fpd_ms = max(fixed_min_fpd_ms, adaptive_min_fpd_ms)
     min_fpd_samples = int(effective_min_fpd_ms / 1000 * fs)
     min_pk_idx = max(0, min_fpd_samples - (peak_search_start - spike_idx))

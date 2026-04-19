@@ -42,12 +42,32 @@ TRANSLATIONS = {
         'amplitude_uV': 'Ampiezza (µV)',
         'template': 'Template',
         'n_beats_qc': 'N. battiti (QC)',
+        'n_beats_included': 'N. battiti (inclusi)',
         'n_beats_raw': 'N. battiti (raw)',
         'beat_period': 'Beat Period',
         'fpd': 'FPD (ms)',
         'fpdc': 'FPDcF (ms)',
         'spike_amp': 'Ampiezza spike',
         'fpd_confidence': 'Confidenza FPD',
+        'fpd_unreliable_banner_title': '⚠️ FPD non misurabile in modo affidabile',
+        'fpd_unreliable_banner_body': (
+            'Solo {valid_pct}% dei battiti ha una T-wave rilevabile '
+            '(soglia {threshold_pct}%). Il valore medio FPD/FPDcF è '
+            'derivato da un campione troppo ridotto: ispezionare i '
+            'singoli battiti prima di riportarlo.'
+        ),
+        'template_unrepresentative_title': (
+            '⚠️ Template medio non rappresentativo'
+        ),
+        'template_unrepresentative_body': (
+            'Il template sovrapposto può essere fuorviante perché: '
+            '{reasons}. Quando il ritmo o la durata dell\'FPD sono '
+            'variabili, le T-wave cadono a tempi diversi e si annullano '
+            'nella media/mediana. Consultare i singoli battiti e la '
+            'cascata per un giudizio visivo.'
+        ),
+        'template_reason_rhythm': "tipo ritmo = '{rhythm}'",
+        'template_reason_fpd_cv': 'CV FPD = {cv_pct:.0f}% (soglia 20%)',
         'summary': 'Riepilogo',
         'parameter': 'Parametro',
         'mean': 'Media',
@@ -186,6 +206,7 @@ TRANSLATIONS = {
         'beat_editor_help': 'Deseleziona la casella per escludere un battito, riselezionala per reincluderlo. Puoi anche aggiungere battiti mancanti.',
         'beat_include': 'Incluso',
         'beats_included': 'Battiti inclusi',
+        'beats_filtered_out': 'Rilevati ma filtrati',
         'beats_excluded': 'Battiti esclusi',
         'repol_peak_markers': 'Picco ripolarizzazione',
         'add_beat_time': 'Aggiungi battito al tempo (s)',
@@ -236,12 +257,32 @@ TRANSLATIONS = {
         'amplitude_uV': 'Amplitude (µV)',
         'template': 'Template',
         'n_beats_qc': 'N. beats (QC)',
+        'n_beats_included': 'N. beats (included)',
         'n_beats_raw': 'N. beats (raw)',
         'beat_period': 'Beat Period',
         'fpd': 'FPD (ms)',
         'fpdc': 'FPDcF (ms)',
         'spike_amp': 'Spike amplitude',
         'fpd_confidence': 'FPD Confidence',
+        'fpd_unreliable_banner_title': '⚠️ FPD not reliably measurable',
+        'fpd_unreliable_banner_body': (
+            'Only {valid_pct}% of beats have a detectable T-wave '
+            '(threshold {threshold_pct}%). The FPD/FPDcF mean is '
+            'derived from too few beats — inspect the individual beats '
+            'before reporting.'
+        ),
+        'template_unrepresentative_title': (
+            '⚠️ Mean template may not be representative'
+        ),
+        'template_unrepresentative_body': (
+            'The overlaid template can be misleading because: '
+            '{reasons}. When rhythm or FPD duration are variable, '
+            'T-waves fall at different times and cancel out in the '
+            'mean/median. Inspect individual beats and the cascade '
+            'view for a visual judgment.'
+        ),
+        'template_reason_rhythm': "rhythm type = '{rhythm}'",
+        'template_reason_fpd_cv': 'FPD CV = {cv_pct:.0f}% (threshold 20%)',
         'summary': 'Summary',
         'parameter': 'Parameter',
         'mean': 'Mean',
@@ -380,6 +421,7 @@ TRANSLATIONS = {
         'beat_editor_help': 'Uncheck the box to exclude a beat, re-check it to include it again. You can also add missing beats.',
         'beat_include': 'Included',
         'beats_included': 'Included beats',
+        'beats_filtered_out': 'Detected but filtered',
         'beats_excluded': 'Excluded beats',
         'repol_peak_markers': 'Repolarization peak',
         'add_beat_time': 'Add beat at time (s)',

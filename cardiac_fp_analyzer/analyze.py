@@ -27,6 +27,7 @@ from cardiac_fp_analyzer.report import generate_excel_report, generate_pdf_repor
 from cardiac_fp_analyzer.rhythm_integration import (
     apply_rhythm_filter,
     apply_rhythm_qc_downgrade,
+    apply_rr_outlier_filter,
     build_rhythm_summary_fields,
 )
 
@@ -231,11 +232,21 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
             bd_clean, btm_clean, bi_clean, bi,
             rhythm_classification=rc,
             enable=getattr(config.beat_detection, 'enable_rhythm_aware_fpd', True),
+            min_retention_ratio=getattr(config.beat_detection,
+                                         'rhythm_filter_min_retention_ratio', 0.5),
+            min_retention_beats=getattr(config.beat_detection,
+                                         'rhythm_filter_min_retention_beats', 5),
         )
         if verbose and rhythm_filter_info.get('filter_applied'):
             print(f"  Rhythm filter ({rhythm_filter_info['rhythm_type']}): "
                   f"kept {rhythm_filter_info['n_kept']}/{rhythm_filter_info['n_input']} "
                   f"beats ({rhythm_filter_info['kept_role']} cluster only)")
+        elif verbose and rhythm_filter_info.get('reason') == 'safety_bail_low_retention':
+            sb = rhythm_filter_info.get('safety_bail', {})
+            print(f"  Rhythm filter ({rhythm_filter_info['rhythm_type']}): "
+                  f"SAFETY BAIL — would keep {sb.get('n_would_keep')}/{rhythm_filter_info['n_input']} "
+                  f"({sb.get('retention_ratio', 0)*100:.0f}% < "
+                  f"{sb.get('min_retention_ratio', 0)*100:.0f}%), passthrough")
 
         # Apply QC downgrade for noise-contaminated signals (mutates qc_report.grade).
         _qc_downgrade_info = apply_rhythm_qc_downgrade(
@@ -251,11 +262,83 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
                   f"{_qc_downgrade_info['grade_after']} "
                   f"(noise_ratio={_qc_downgrade_info['noise_ratio']:.2f})")
 
-        # Use (possibly filtered) beats for parameter extraction.
+        # ─── RR-outlier filter (Sprint 3 #1) ───
+        # Drop beats whose preceding RR is pathologically long (likely
+        # dropout-plus-reactivation artefact). Genuinely bradycardic
+        # recordings are passed through unchanged.
+        bd_fpd, btm_fpd, bi_fpd, rr_filter_info = apply_rr_outlier_filter(
+            bd_fpd, btm_fpd, bi_fpd, fs,
+            max_rr_ratio=getattr(config.beat_detection,
+                                  'max_rr_outlier_ratio', 5.0),
+            enable=getattr(config.beat_detection,
+                            'enable_rr_outlier_filter', True),
+        )
+        if verbose and rr_filter_info.get('filter_applied'):
+            print(f"  RR filter: dropped {rr_filter_info['n_dropped']} beat(s) "
+                  f"with RR > {rr_filter_info['max_rr_ratio']:.1f}× median "
+                  f"(median RR={rr_filter_info['median_rr_ms']:.0f} ms)")
+
+        # ─── Re-segmentation guard (Sprint 3 #2) ───
+        # The initial segmentation used a post_ms derived from the *pre-filter*
+        # median RR. On signals where beat detection picks up many false
+        # positives between the true (bradycardic) beats, that median is
+        # 3-5× shorter than the real one. After the rhythm + RR filters trim
+        # the false positives, the kept beats may have a true median RR that
+        # pushes the T-wave search window (0.70 × RR) beyond the segment
+        # length. When that happens the T-wave is silently clipped at the
+        # segment boundary and the repolarization detector falls back to an
+        # afterpotential or fails the SNR gate.
+        # Guard: if the post-filter median RR would require a meaningfully
+        # longer segment, re-segment the kept beats with the correct post_ms
+        # before parameter extraction. On signals where the filter changes
+        # little (normal case), this is a no-op.
+        _resegmented_info = None
+        if len(bi_fpd) >= 3:
+            _bp_post = compute_beat_periods(bi_fpd, fs)
+            _median_bp_post_s = (float(np.median(_bp_post))
+                                 if len(_bp_post) > 0 else 0.0)
+            if _pct_rr > 0 and _median_bp_post_s > 0:
+                _adaptive_end_post_ms = _pct_rr * _median_bp_post_s * 1000.0
+            else:
+                _adaptive_end_post_ms = 0.0
+            _post_ms_needed = max(850.0,
+                                   rep_cfg.search_end_ms + 50.0,
+                                   _adaptive_end_post_ms + 50.0)
+            # Only re-segment if the pre-filter segment is meaningfully
+            # shorter than what the post-filter RR now demands.
+            if _post_ms_needed > _post_ms + 100.0:
+                bd_re, btm_re, vi_re = segment_beats(
+                    filtered, df['time'].values, bi_fpd, fs,
+                    pre_ms=rep_cfg.segment_pre_ms,
+                    post_ms=_post_ms_needed,
+                )
+                if len(bd_re) > 0:
+                    bd_fpd = bd_re
+                    btm_fpd = btm_re
+                    bi_fpd = (bi_fpd[np.array(vi_re)]
+                              if len(vi_re) < len(bi_fpd) else bi_fpd)
+                    _resegmented_info = {
+                        'applied': True,
+                        'post_ms_before': float(_post_ms),
+                        'post_ms_after': float(_post_ms_needed),
+                        'median_rr_pre_ms': float(_median_bp_s * 1000.0),
+                        'median_rr_post_ms': float(_median_bp_post_s * 1000.0),
+                        'n_beats_after': int(len(bd_fpd)),
+                    }
+                    if verbose:
+                        print(f"  Re-segmentation: post_ms "
+                              f"{_post_ms:.0f}→{_post_ms_needed:.0f} ms "
+                              f"(pre-filter median RR={_median_bp_s*1000:.0f} ms "
+                              f"→ true median RR={_median_bp_post_s*1000:.0f} ms)")
+
+        # Use (possibly filtered and re-segmented) beats for parameter extraction.
         all_p, summary = extract_all_parameters(bd_fpd, btm_fpd, bi_fpd, fs,
                                                  cfg=rep_cfg)
+        if _resegmented_info is not None:
+            summary['resegmentation_info'] = _resegmented_info
         # Merge rhythm-classification-derived fields into summary (additive).
         summary.update(build_rhythm_summary_fields(rc, rhythm_filter_info))
+        summary['rr_outlier_filter'] = rr_filter_info
 
         # Beat period from ALL detected beats (timing is reliable even for
         # morphologically marginal beats) — avoids artificial gaps from QC rejection.
@@ -272,6 +355,10 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
         result = {'metadata': metadata, 'file_info': file_info, 'summary': summary,
                 'all_params': all_p, 'arrhythmia_report': ar,
                 'beat_indices': bi_clean, 'beat_indices_raw': bi,
+                # Post rhythm/RR filter + re-segmentation: the beats that
+                # actually fed parameter extraction. Used by the UI to mark
+                # the "real" included beats on the signal plot.
+                'beat_indices_fpd': np.asarray(bi_fpd, dtype=int),
                 'beat_periods': bp, 'filtered_signal': filtered,
                 'raw_signal': raw_signal,
                 'time_vector': df['time'].values,
