@@ -55,6 +55,14 @@ _aggregate_group_metrics = sp._aggregate_group_metrics
 _fmt_mean_sd = sp._fmt_mean_sd
 _format_group_metrics_line = sp._format_group_metrics_line
 _format_file_metrics = sp._format_file_metrics
+# Step 5 — dose-response helpers.
+DoseResponsePoint = sp.DoseResponsePoint
+_DOSE_RESPONSE_METRICS = sp._DOSE_RESPONSE_METRICS
+_metric_meta = sp._metric_meta
+_collect_dose_response_points = sp._collect_dose_response_points
+_assemble_dose_response_series = sp._assemble_dose_response_series
+_can_plot_log_x = sp._can_plot_log_x
+_drug_colour = sp._drug_colour
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1096,3 +1104,409 @@ class TestBatchWorkerExtractsMetrics:
         assert math.isnan(fr.fpdc_ms)
         assert math.isnan(fr.bpm)
         assert math.isnan(fr.stv_ms)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  Step 5 — dose-response helpers.
+#
+#  The plot itself requires a QApplication; these tests only exercise the
+#  pure data-preparation pipeline (collection + series assembly +
+#  log-scale guard + colour palette).  The dialog render is validated
+#  on Marco's laptop because pyqtgraph offscreen still needs GL libs
+#  that aren't guaranteed in CI.
+# ═════════════════════════════════════════════════════════════════════════
+
+# Minimal fake Group/Study — we don't import the real dataclasses here
+# to keep these tests independent of the cardiac_fp_analyzer.study
+# module schema (and faster: no AnalysisConfig instantiation).
+
+
+@_dc
+class _FakeFile:
+    csv_relpath: str
+    channel: str = 'auto'
+
+
+@_dc
+class _FakeGroup:
+    name: str
+    drug: str = ''
+    dose_uM: float | None = None
+    files: list = None   # type: ignore[assignment]
+    config: object = None
+
+    def __post_init__(self):
+        if self.files is None:
+            self.files = []
+
+
+@_dc
+class _FakeStudy:
+    name: str = 'test-study'
+    groups: list = None   # type: ignore[assignment]
+
+    def __post_init__(self):
+        if self.groups is None:
+            self.groups = []
+
+
+def _ok(**metrics) -> FileResult:
+    """Shortcut: a fresh-ok FileResult with the requested metrics.
+
+    Empty fingerprint = "legacy fresh" per :func:`_is_stale` contract,
+    so tests can use a plain ``object()`` as the group's config
+    without computing the matching fingerprint.  Tests that want to
+    exercise staleness pass ``fingerprint=...`` explicitly.
+    """
+    defaults = {'status': 'ok', 'n_included': 10, 'n_total': 10,
+                'fingerprint': '', 'channel_analyzed': 'EL1'}
+    defaults.update(metrics)
+    return FileResult(**defaults)
+
+
+def _err(msg: str = 'boom') -> FileResult:
+    return FileResult(status='error', error=msg)
+
+
+class TestDoseResponsePoint:
+    def test_dataclass_holds_all_fields(self):
+        p = DoseResponsePoint(
+            group_name='baseline', drug='dof',
+            dose_uM=0.01, mean=385.0, sd=5.5, n=3,
+        )
+        assert p.group_name == 'baseline'
+        assert p.drug == 'dof'
+        assert p.dose_uM == 0.01
+        assert p.mean == 385.0
+        assert p.sd == 5.5
+        assert p.n == 3
+
+    def test_dose_can_be_none_for_baseline(self):
+        p = DoseResponsePoint(
+            group_name='baseline', drug='',
+            dose_uM=None, mean=400.0, sd=0.0, n=1,
+        )
+        assert p.dose_uM is None
+
+
+class TestMetricMeta:
+    def test_known_keys_resolve(self):
+        # Exercise every entry of the whitelist so a future
+        # reorder/rename of _DOSE_RESPONSE_METRICS doesn't silently
+        # break the dialog.
+        for key, label, unit, decimals in _DOSE_RESPONSE_METRICS:
+            lbl, un, dec = _metric_meta(key)
+            assert lbl == label
+            assert un == unit
+            assert dec == decimals
+
+    def test_unknown_key_raises(self):
+        with pytest.raises(KeyError):
+            _metric_meta('not-a-metric')
+
+    def test_whitelist_starts_with_fpdc(self):
+        # FPDc is the clinically-primary endpoint — it must be the
+        # default (first) entry so the dialog opens on the right
+        # metric without extra clicks.
+        assert _DOSE_RESPONSE_METRICS[0][0] == 'fpdc_ms'
+
+
+class TestCollectDoseResponsePoints:
+    def test_empty_study_returns_empty_list(self):
+        study = _FakeStudy(groups=[])
+        assert _collect_dose_response_points(study, {}) == []
+
+    def test_unknown_metric_raises_keyerror(self):
+        study = _FakeStudy(groups=[])
+        with pytest.raises(KeyError):
+            _collect_dose_response_points(study, {}, metric='not-a-metric')
+
+    def test_single_group_single_file_makes_one_point(self):
+        g = _FakeGroup(
+            name='dose-0.01', drug='dof', dose_uM=0.01,
+            files=[_FakeFile(csv_relpath='f1.csv')],
+            config=object(),
+        )
+        study = _FakeStudy(groups=[g])
+        cache = {('dose-0.01', 'f1.csv'): _ok(fpdc_ms=410.0)}
+        pts = _collect_dose_response_points(study, cache)
+        assert len(pts) == 1
+        assert pts[0].drug == 'dof'
+        assert pts[0].dose_uM == 0.01
+        assert pts[0].mean == 410.0
+        # Single-file group → sd is 0.0 (by the mean_sd_n contract).
+        assert pts[0].sd == 0.0
+        assert pts[0].n == 1
+
+    def test_multi_file_group_averages(self):
+        g = _FakeGroup(
+            name='dose-0.1', drug='dof', dose_uM=0.1,
+            files=[_FakeFile('a.csv'), _FakeFile('b.csv'),
+                   _FakeFile('c.csv')],
+            config=object(),
+        )
+        study = _FakeStudy(groups=[g])
+        cache = {
+            ('dose-0.1', 'a.csv'): _ok(fpdc_ms=410.0),
+            ('dose-0.1', 'b.csv'): _ok(fpdc_ms=420.0),
+            ('dose-0.1', 'c.csv'): _ok(fpdc_ms=430.0),
+        }
+        pts = _collect_dose_response_points(study, cache)
+        assert len(pts) == 1
+        assert pts[0].mean == 420.0   # (410+420+430)/3
+        assert pts[0].n == 3
+
+    def test_group_with_no_fresh_ok_is_dropped(self):
+        # A group where every file errored should not produce a point —
+        # the plot should simply skip it rather than showing a gap.
+        g = _FakeGroup(
+            name='dose-0.1', drug='dof', dose_uM=0.1,
+            files=[_FakeFile('a.csv')],
+            config=object(),
+        )
+        study = _FakeStudy(groups=[g])
+        cache = {('dose-0.1', 'a.csv'): _err("pipeline crash")}
+        assert _collect_dose_response_points(study, cache) == []
+
+    def test_group_with_no_cached_results_is_dropped(self):
+        g = _FakeGroup(
+            name='dose-0.1', drug='dof', dose_uM=0.1,
+            files=[_FakeFile('a.csv')],
+            config=object(),
+        )
+        study = _FakeStudy(groups=[g])
+        assert _collect_dose_response_points(study, {}) == []
+
+    def test_baseline_group_is_included(self):
+        g = _FakeGroup(
+            name='baseline', drug='', dose_uM=None,
+            files=[_FakeFile('ctrl.csv')],
+            config=object(),
+        )
+        study = _FakeStudy(groups=[g])
+        cache = {('baseline', 'ctrl.csv'): _ok(fpdc_ms=400.0)}
+        pts = _collect_dose_response_points(study, cache)
+        assert len(pts) == 1
+        assert pts[0].dose_uM is None
+
+    def test_different_metric_can_be_selected(self):
+        g = _FakeGroup(
+            name='dose-0.1', drug='dof', dose_uM=0.1,
+            files=[_FakeFile('a.csv')],
+            config=object(),
+        )
+        study = _FakeStudy(groups=[g])
+        cache = {('dose-0.1', 'a.csv'): _ok(fpdc_ms=410.0, bpm=58.0,
+                                              stv_ms=2.1)}
+        pts_bpm = _collect_dose_response_points(
+            study, cache, metric='bpm',
+        )
+        assert pts_bpm[0].mean == 58.0
+        pts_stv = _collect_dose_response_points(
+            study, cache, metric='stv_ms',
+        )
+        assert pts_stv[0].mean == 2.1
+
+    def test_error_file_doesnt_poison_aggregate(self):
+        # One OK + one error file → aggregate should be the OK value
+        # alone, not NaN, not averaged with NaN.
+        g = _FakeGroup(
+            name='dose-0.1', drug='dof', dose_uM=0.1,
+            files=[_FakeFile('a.csv'), _FakeFile('b.csv')],
+            config=object(),
+        )
+        study = _FakeStudy(groups=[g])
+        cache = {
+            ('dose-0.1', 'a.csv'): _ok(fpdc_ms=410.0),
+            ('dose-0.1', 'b.csv'): _err(),
+        }
+        pts = _collect_dose_response_points(study, cache)
+        assert len(pts) == 1
+        assert pts[0].mean == 410.0
+        assert pts[0].n == 1
+
+    def test_empty_group_produces_no_point(self):
+        # Group defined but zero files — don't even attempt to plot.
+        g = _FakeGroup(name='empty', drug='dof', dose_uM=1.0,
+                      files=[], config=object())
+        study = _FakeStudy(groups=[g])
+        assert _collect_dose_response_points(study, {}) == []
+
+    def test_stale_is_not_part_of_point(self):
+        # A result with a fingerprint that doesn't match the current
+        # (config, channel) pair is stale and must be excluded — the
+        # aggregate in the plot has to match the tree-row aggregate.
+        @_dc
+        class _Cfg:
+            v: int = 1
+
+        g = _FakeGroup(
+            name='dose-0.1', drug='dof', dose_uM=0.1,
+            files=[_FakeFile('a.csv')],
+            config=_Cfg(v=2),   # different from the stamped fingerprint
+        )
+        study = _FakeStudy(groups=[g])
+        # Stamp a fingerprint matching a DIFFERENT config, so the
+        # cached result is stale w.r.t. the group's current config.
+        old_fp = _result_fingerprint(_Cfg(v=1), 'auto')
+        cache = {('dose-0.1', 'a.csv'): _ok(
+            fpdc_ms=410.0, fingerprint=old_fp,
+        )}
+        pts = _collect_dose_response_points(study, cache)
+        # Stale result excluded → no fresh-ok → no point.
+        assert pts == []
+
+
+class TestAssembleDoseResponseSeries:
+    def test_empty_input_returns_empty_structures(self):
+        out = _assemble_dose_response_series([])
+        assert out['baselines'] == []
+        assert out['doses'] == {}
+
+    def test_single_dose_point_single_drug(self):
+        p = DoseResponsePoint(
+            group_name='g1', drug='dof', dose_uM=0.01,
+            mean=410.0, sd=1.0, n=1,
+        )
+        out = _assemble_dose_response_series([p])
+        assert out['baselines'] == []
+        assert list(out['doses'].keys()) == ['dof']
+        assert out['doses']['dof'] == [p]
+
+    def test_doses_sorted_ascending_per_drug(self):
+        # Input given in a jumbled order; output must be sorted.
+        points = [
+            DoseResponsePoint('g3', 'dof', 1.0, 450.0, 0.0, 1),
+            DoseResponsePoint('g1', 'dof', 0.01, 400.0, 0.0, 1),
+            DoseResponsePoint('g2', 'dof', 0.1, 420.0, 0.0, 1),
+        ]
+        out = _assemble_dose_response_series(points)
+        dof = out['doses']['dof']
+        assert [p.dose_uM for p in dof] == [0.01, 0.1, 1.0]
+
+    def test_baselines_and_doses_split(self):
+        # One baseline + two dose points → splits cleanly, baseline
+        # doesn't end up in the dose curve.
+        points = [
+            DoseResponsePoint('bl', '', None, 400.0, 5.0, 3),
+            DoseResponsePoint('d1', 'dof', 0.01, 410.0, 0.0, 1),
+            DoseResponsePoint('d2', 'dof', 0.1, 425.0, 0.0, 1),
+        ]
+        out = _assemble_dose_response_series(points)
+        assert len(out['baselines']) == 1
+        assert out['baselines'][0].group_name == 'bl'
+        assert [p.dose_uM for p in out['doses']['dof']] == [0.01, 0.1]
+
+    def test_multi_drug_gets_separate_curves(self):
+        points = [
+            DoseResponsePoint('a', 'dof', 0.01, 410.0, 0.0, 1),
+            DoseResponsePoint('b', 'mox', 0.1, 380.0, 0.0, 1),
+            DoseResponsePoint('c', 'dof', 0.1, 430.0, 0.0, 1),
+            DoseResponsePoint('d', 'mox', 1.0, 360.0, 0.0, 1),
+        ]
+        out = _assemble_dose_response_series(points)
+        assert set(out['doses'].keys()) == {'dof', 'mox'}
+        assert [p.dose_uM for p in out['doses']['dof']] == [0.01, 0.1]
+        assert [p.dose_uM for p in out['doses']['mox']] == [0.1, 1.0]
+
+    def test_same_dose_tie_break_by_group_name(self):
+        # Two replicate groups at the same dose → deterministic sort
+        # (alpha by group_name) so the plot doesn't render a different
+        # polyline each redraw.
+        points = [
+            DoseResponsePoint('zz', 'dof', 0.1, 410.0, 0.0, 1),
+            DoseResponsePoint('aa', 'dof', 0.1, 420.0, 0.0, 1),
+        ]
+        out = _assemble_dose_response_series(points)
+        dof = out['doses']['dof']
+        assert [p.group_name for p in dof] == ['aa', 'zz']
+
+    def test_baseline_insertion_order_preserved(self):
+        # When there are multiple baselines (multi-drug study with
+        # per-drug vehicle controls), legend order follows the
+        # study's groups[] order — not alpha.  Verified by inserting
+        # them in a non-alpha order and checking the output matches.
+        points = [
+            DoseResponsePoint('bl-mox', 'mox', None, 390.0, 0.0, 1),
+            DoseResponsePoint('bl-dof', 'dof', None, 395.0, 0.0, 1),
+        ]
+        out = _assemble_dose_response_series(points)
+        assert [p.group_name for p in out['baselines']] == [
+            'bl-mox', 'bl-dof',
+        ]
+
+    def test_drug_without_name_keeps_empty_string_key(self):
+        # Empty drug string is a legal key — e.g. a single-drug study
+        # where the user didn't bother filling in the name.  The
+        # legend will show "(senza nome)", handled in the dialog.
+        points = [
+            DoseResponsePoint('g1', '', 0.1, 410.0, 0.0, 1),
+            DoseResponsePoint('g2', '', 1.0, 420.0, 0.0, 1),
+        ]
+        out = _assemble_dose_response_series(points)
+        assert list(out['doses'].keys()) == ['']
+        assert len(out['doses']['']) == 2
+
+
+class TestCanPlotLogX:
+    def test_empty_input_is_false(self):
+        assert _can_plot_log_x([]) is False
+
+    def test_only_baselines_is_false(self):
+        # No dose points → log-x is vacuously unavailable (nothing to
+        # plot on x).  The dialog's checkbox should grey out.
+        pts = [DoseResponsePoint('bl', '', None, 400.0, 0.0, 1)]
+        assert _can_plot_log_x(pts) is False
+
+    def test_all_positive_doses_is_true(self):
+        pts = [
+            DoseResponsePoint('a', 'dof', 0.01, 1.0, 0.0, 1),
+            DoseResponsePoint('b', 'dof', 0.1, 1.0, 0.0, 1),
+            DoseResponsePoint('c', 'dof', 1.0, 1.0, 0.0, 1),
+        ]
+        assert _can_plot_log_x(pts) is True
+
+    def test_zero_dose_disables_log(self):
+        # A literal "0 µM" group forces linear scale — log can't
+        # render x=0.  In practice this shouldn't happen (baselines
+        # should use dose_uM=None), but we're defensive.
+        pts = [
+            DoseResponsePoint('a', 'dof', 0.0, 1.0, 0.0, 1),
+            DoseResponsePoint('b', 'dof', 1.0, 1.0, 0.0, 1),
+        ]
+        assert _can_plot_log_x(pts) is False
+
+    def test_negative_dose_disables_log(self):
+        # Pathological but covered for defensiveness.
+        pts = [
+            DoseResponsePoint('a', 'dof', -1.0, 1.0, 0.0, 1),
+        ]
+        assert _can_plot_log_x(pts) is False
+
+    def test_baseline_mixed_with_doses_ignores_baseline(self):
+        # Baselines (dose_uM=None) don't participate in the check —
+        # they're drawn separately as horizontal lines.
+        pts = [
+            DoseResponsePoint('bl', '', None, 400.0, 0.0, 1),
+            DoseResponsePoint('a', 'dof', 0.01, 1.0, 0.0, 1),
+        ]
+        assert _can_plot_log_x(pts) is True
+
+
+class TestDrugColour:
+    def test_zero_index_is_first_colour(self):
+        assert _drug_colour(0) == sp._DRUG_PALETTE[0]
+
+    def test_wraps_around_palette(self):
+        n = len(sp._DRUG_PALETTE)
+        assert _drug_colour(n) == _drug_colour(0)
+        assert _drug_colour(n + 1) == _drug_colour(1)
+
+    def test_returns_hex_string(self):
+        # Always a 7-char hex colour so callers can feed it to
+        # pyqtgraph / QColor without reformatting.
+        for i in range(len(sp._DRUG_PALETTE)):
+            c = _drug_colour(i)
+            assert isinstance(c, str)
+            assert c.startswith('#')
+            assert len(c) == 7

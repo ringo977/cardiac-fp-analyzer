@@ -76,6 +76,7 @@ research, corrections are part of the scientific record):
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -96,6 +97,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QAction, QBrush, QColor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -232,6 +234,86 @@ class FileResult:
     fpdc_ms: float = float('nan')
     bpm: float = float('nan')
     stv_ms: float = float('nan')
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Dose-response data model (step 5 of task #84)
+# ═══════════════════════════════════════════════════════════════════════
+#
+#  A dose-response curve is the scientific end-point of the Study model:
+#  once each group has been batch-analysed, we aggregate across files
+#  (done in step 4) and then across groups (here) to see how the metric
+#  of interest moves with increasing drug concentration.
+#
+#  The aggregated per-group point is kept as its own dataclass instead
+#  of a bare tuple so (a) tests can match on names and (b) future
+#  extensions (e.g. Hill-fit residuals, CI halfwidths, CDISC ``PPTEST``
+#  tags) can add fields without breaking call sites.
+
+
+@dataclass
+class DoseResponsePoint:
+    """One aggregated (drug, dose) point in a dose-response curve.
+
+    Attributes
+    ----------
+    group_name : str
+        Name of the :class:`Group` this point was aggregated from —
+        used to label the scatter point in the plot and to trace back
+        from a chart click to the study tree.
+    drug : str
+        Free-text drug name from :attr:`Group.drug`.  Empty string
+        when the group is a pure condition control (e.g. "vehicle").
+        Used to split the plot into one curve per drug.
+    dose_uM : float | None
+        Dose in µM.  ``None`` means the group is a *baseline* (pre-dose
+        control) and is plotted as a reference horizontal line instead
+        of as a curve point — log-scale x axes can't render x=0 and
+        dose-response figures conventionally show baseline separately.
+    mean : float
+        Aggregate central tendency across the group's fresh-ok files
+        for the selected metric (mean of per-file medians; see
+        :func:`_aggregate_group_metrics`).  Always finite — callers
+        that would produce NaN are dropped before assembling the list.
+    sd : float
+        Sample standard deviation (ddof=1) of the per-file values.
+        ``0.0`` when the aggregate is built from a single file — that
+        special case is noted explicitly in the plot via ``n=1``
+        annotation in the tooltip so the zero-error bar isn't read
+        as "perfectly consistent".
+    n : int
+        Number of fresh-ok files that contributed a finite value for
+        the selected metric.  May be smaller than the group's total
+        file count when some files had stale or NaN results for this
+        specific metric.
+    """
+
+    group_name: str
+    drug: str
+    dose_uM: float | None
+    mean: float
+    sd: float
+    n: int
+
+
+# Dose-response metric whitelist, in the order shown in the dropdown.
+# Kept as a module-level constant so tests and the dialog agree on
+# ``(key, label, unit, decimals)`` without duplicating the mapping.
+#
+# * ``key`` matches :class:`FileResult` field + the
+#   :func:`_aggregate_group_metrics` dict key — the rename-safe
+#   single source of truth.
+# * ``label`` is the *Italian* human-readable name (FPDc / FPD / BPM / STV);
+#   ``unit`` is appended on the y-axis.  BPM already encodes its unit
+#   in the label, so ``unit=''``.
+# * ``decimals`` match the tree-row formatting from step 4 — integers
+#   for FPD* and BPM, one decimal for STV.
+_DOSE_RESPONSE_METRICS: tuple[tuple[str, str, str, int], ...] = (
+    ('fpdc_ms', 'FPDc', 'ms', 0),
+    ('fpd_ms', 'FPD', 'ms', 0),
+    ('bpm', 'BPM', '', 0),
+    ('stv_ms', 'STV', 'ms', 1),
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -479,6 +561,261 @@ class _GroupDialog(QDialog):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  Dose-response dialog (step 5 of task #84)
+# ═══════════════════════════════════════════════════════════════════════
+#
+#  Minimal PoC-grade plot: scatter + error bars + dashed baseline.
+#  Scope was deliberately kept small (no Hill / EC50 fit, no custom PNG
+#  button — right-click menu from pyqtgraph already exports) so the
+#  feature ships and Marco can validate the numbers against his bench
+#  notebook before investing in curve fitting.
+#
+#  Colour palette is 6 colours chosen for simultaneous-drug
+#  distinguishability on both light and dark backgrounds; we cycle
+#  through it when a study contains > 6 drugs.  Palette is the
+#  ColorBrewer "Set1" (six-class) minus the "neutral grey" slot,
+#  because grey risks reading as "disabled" on the scatter.
+
+
+# ColorBrewer Set1 minus the neutral grey — 6 colours.
+_DRUG_PALETTE: tuple[str, ...] = (
+    '#e41a1c',   # red
+    '#377eb8',   # blue
+    '#4daf4a',   # green
+    '#984ea3',   # purple
+    '#ff7f00',   # orange
+    '#a65628',   # brown
+)
+
+
+def _drug_colour(drug_index: int) -> str:
+    """Return a hex colour string for the N-th drug in the legend.
+
+    Cycles through :data:`_DRUG_PALETTE` modulo its length — studies
+    with more than 6 drugs will reuse colours, which is a known limit
+    of the PoC palette (out of scope to solve for now).
+    """
+    return _DRUG_PALETTE[drug_index % len(_DRUG_PALETTE)]
+
+
+class DoseResponseDialog(QDialog):
+    """Modal dialog with a dose-response plot for one metric at a time.
+
+    Inputs
+    ------
+    study : Study
+        The loaded :class:`Study`; groups + config drive the aggregate.
+    results_cache : dict
+        ``StudyPanel._results`` (same object, not a copy) — read-only
+        from this dialog's perspective; the panel still owns it.
+
+    Interaction
+    -----------
+    * Metric dropdown (FPDc / FPD / BPM / STV) — re-aggregates and
+      re-plots without closing the dialog.
+    * "Asse X logaritmico" checkbox — toggle between log and linear
+      x scale.  Disabled when any dose ≤ 0 in the data (log can't
+      render those).  Default on when all doses are positive — the
+      scientific convention for drug dose-response figures.
+    * pyqtgraph's built-in right-click menu on the plot still works
+      for zoom/pan/export-PNG, so we don't duplicate those as
+      toolbar buttons.
+
+    Out of scope for this PoC
+    -------------------------
+    * Hill equation / EC50 fit — step 6 when we wire CDISC export.
+    * Per-file drill-down on scatter click — the tree already does
+      that via double-click.
+    * Custom baseline picker — baseline is always ``dose_uM is None``
+      groups.
+    """
+
+    def __init__(
+        self,
+        *,
+        study: Study,
+        results_cache: dict,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(self.tr("Dose-risposta"))
+        self.resize(720, 480)
+        self._study = study
+        self._results_cache = results_cache
+
+        # Lazy import — pyqtgraph pulls in numpy extras that we don't
+        # want on the unit-test import path (the helpers above test
+        # headless without any Qt app).
+        import pyqtgraph as pg
+        self._pg = pg
+
+        # ── Controls row ──────────────────────────────────────────────
+        self._metric_combo = QComboBox()
+        for key, label, unit, _dec in _DOSE_RESPONSE_METRICS:
+            display = f"{label} ({unit})" if unit else label
+            self._metric_combo.addItem(display, userData=key)
+        self._metric_combo.setCurrentIndex(0)   # FPDc by default
+        self._metric_combo.currentIndexChanged.connect(self._refresh_plot)
+
+        self._chk_logx = QCheckBox(self.tr("Asse X logaritmico"))
+        self._chk_logx.setChecked(True)
+        self._chk_logx.toggled.connect(self._refresh_plot)
+
+        top = QHBoxLayout()
+        top.addWidget(QLabel(self.tr("Metrica:")))
+        top.addWidget(self._metric_combo)
+        top.addSpacing(12)
+        top.addWidget(self._chk_logx)
+        top.addStretch(1)
+
+        # ── Plot widget ───────────────────────────────────────────────
+        # White background — scientific figures are printed, and a
+        # light plot is more familiar to the audience than pyqtgraph's
+        # default dark grey.
+        self._plot = pg.PlotWidget()
+        self._plot.setBackground('w')
+        # Grid helps reading off values at a glance on dose axes.
+        self._plot.showGrid(x=True, y=True, alpha=0.25)
+        self._legend = self._plot.addLegend(offset=(10, 10))
+
+        # ── Empty-state overlay ───────────────────────────────────────
+        # Shown when no group has fresh-ok results for the chosen
+        # metric.  Kept as a plain QLabel layered behind the plot so
+        # we don't have to manipulate pyqtgraph's text item machinery.
+        self._empty_label = QLabel(self.tr(
+            "Nessun gruppo con risultati fresh-ok per la metrica scelta.\n"
+            "Esegui “Analizza gruppo” su almeno un gruppo."
+        ))
+        self._empty_label.setAlignment(Qt.AlignCenter)
+        self._empty_label.setStyleSheet("color: #888; padding: 24px;")
+        self._empty_label.setWordWrap(True)
+        self._empty_label.hide()
+
+        # ── Close button ──────────────────────────────────────────────
+        btns = QDialogButtonBox(QDialogButtonBox.Close)
+        btns.rejected.connect(self.reject)
+        close_btn = btns.button(QDialogButtonBox.Close)
+        if close_btn is not None:
+            close_btn.clicked.connect(self.accept)
+
+        root = QVBoxLayout(self)
+        root.addLayout(top)
+        root.addWidget(self._plot, 1)
+        root.addWidget(self._empty_label)
+        root.addWidget(btns)
+
+        self._refresh_plot()
+
+    # ── Refresh logic ────────────────────────────────────────────────
+
+    def _refresh_plot(self, *_args) -> None:
+        """Recompute aggregates for the current metric and redraw."""
+        pg = self._pg
+        # Clear previous plot items.  ``clear()`` wipes everything on
+        # the ViewBox; ``_legend`` is attached to the PlotItem, so we
+        # recreate it after clearing to avoid stale legend entries.
+        self._plot.clear()
+        # PyQtGraph legend-detachment API differs slightly across
+        # versions — suppress broadly, the only consequence of failure
+        # is a duplicated legend slot, not a crash.
+        with contextlib.suppress(Exception):   # noqa: BLE001
+            self._legend.scene().removeItem(self._legend)
+        self._legend = self._plot.addLegend(offset=(10, 10))
+
+        metric = self._metric_combo.currentData() or 'fpdc_ms'
+        label, unit, decimals = _metric_meta(metric)
+        points = _collect_dose_response_points(
+            self._study, self._results_cache, metric=metric,
+        )
+
+        if not points:
+            self._plot.hide()
+            self._empty_label.show()
+            return
+        self._plot.show()
+        self._empty_label.hide()
+
+        # Axis labels — the x label is constant ("Dose (µM)"); y
+        # encodes the chosen metric + unit.
+        y_axis = label if not unit else f"{label} ({unit})"
+        self._plot.setLabel('bottom', self.tr("Dose"), units='µM')
+        self._plot.setLabel('left', y_axis)
+
+        # Log-x only makes sense when every dose point is > 0; disable
+        # the checkbox otherwise so the UI is honest about what's
+        # possible.
+        log_possible = _can_plot_log_x(points)
+        self._chk_logx.setEnabled(log_possible)
+        use_log = bool(self._chk_logx.isChecked()) and log_possible
+        self._plot.setLogMode(x=use_log, y=False)
+
+        series = _assemble_dose_response_series(points)
+
+        # ── Dose curves — one per drug ────────────────────────────────
+        # Drugs are plotted in insertion order (Python dict preserves it
+        # since 3.7); pick colour by index so the legend stays stable
+        # across redraws for the same study.
+        for drug_idx, (drug, curve) in enumerate(series['doses'].items()):
+            colour = _drug_colour(drug_idx)
+            xs = [p.dose_uM for p in curve]
+            ys = [p.mean for p in curve]
+            errs = [p.sd for p in curve]
+
+            pen = pg.mkPen(colour, width=2)
+            brush = pg.mkBrush(colour)
+            # Line connecting the points — read left-to-right as
+            # increasing dose; the polyline makes the trend visible
+            # at a glance.
+            legend_name = drug if drug else self.tr("(senza nome)")
+            self._plot.plot(
+                xs, ys, pen=pen, symbol='o',
+                symbolBrush=brush, symbolPen=pg.mkPen('k', width=0.5),
+                symbolSize=9, name=legend_name,
+            )
+            # Error bars — one segment per point.  pyqtgraph expects
+            # numpy-friendly inputs; plain lists work on all recent
+            # versions but we wrap in the module's own converter to
+            # stay forward-compatible.
+            import numpy as np
+            err_item = pg.ErrorBarItem(
+                x=np.asarray(xs, dtype=float),
+                y=np.asarray(ys, dtype=float),
+                height=2.0 * np.asarray(errs, dtype=float),
+                beam=0.0,
+                pen=pg.mkPen(colour, width=1.2),
+            )
+            self._plot.addItem(err_item)
+
+        # ── Baselines — dashed horizontal lines ───────────────────────
+        # One line per baseline group, in insertion order.  When the
+        # baseline has no drug label ('' / "vehicle"), we tag the
+        # legend entry "Baseline" so it's unambiguous; otherwise we
+        # prefix "Baseline" to the drug name for multi-drug runs.
+        for bl_idx, bl in enumerate(series['baselines']):
+            colour = '#555555' if not bl.drug else _drug_colour(
+                # Match the colour of the dose curve for the same drug
+                # if present — visual anchor between line + baseline.
+                list(series['doses'].keys()).index(bl.drug)
+                if bl.drug in series['doses'] else bl_idx
+            )
+            pen = pg.mkPen(colour, width=1.5, style=Qt.DashLine)
+            name = (
+                self.tr("Baseline {0}").format(bl.drug)
+                if bl.drug else self.tr("Baseline")
+            )
+            line = pg.InfiniteLine(
+                pos=bl.mean, angle=0, pen=pen, label=None,
+            )
+            # pyqtgraph InfiniteLine doesn't show in the default
+            # legend; add a proxy plot for legend purposes (empty
+            # data, just the pen) and hide its ViewBox footprint.
+            self._plot.addItem(line)
+            self._plot.plot(
+                [], [], pen=pen, name=name,
+            )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Study panel
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -537,6 +874,7 @@ class StudyPanel(QWidget):
         )
         self._act_remove = QAction(self.tr("Rimuovi"), self)
         self._act_analyze_group = QAction(self.tr("Analizza gruppo..."), self)
+        self._act_dose_response = QAction(self.tr("Dose-risposta..."), self)
         self._act_delete_study = QAction(
             self.tr("Elimina sidecar studio..."), self,
         )
@@ -553,8 +891,9 @@ class StudyPanel(QWidget):
         self._toolbar.addAction(self._act_group_settings)
         self._toolbar.addAction(self._act_remove)
         self._toolbar.addSeparator()
-        # Group 3 — analysis (batch).
+        # Group 3 — analysis (batch + cross-group plot).
         self._toolbar.addAction(self._act_analyze_group)
+        self._toolbar.addAction(self._act_dose_response)
         self._toolbar.addSeparator()
         # Group 4 — destructive. Distanced from the editing group on purpose.
         self._toolbar.addAction(self._act_delete_study)
@@ -568,6 +907,7 @@ class StudyPanel(QWidget):
         self._act_group_settings.triggered.connect(self._on_group_settings)
         self._act_remove.triggered.connect(self._on_remove)
         self._act_analyze_group.triggered.connect(self._on_analyze_group)
+        self._act_dose_response.triggered.connect(self._on_dose_response)
         self._act_delete_study.triggered.connect(self._on_delete_study)
 
         # ── Tree ──────────────────────────────────────────────────────
@@ -1215,6 +1555,29 @@ class StudyPanel(QWidget):
         progress.setValue(n)
         self._rebuild_tree()
 
+    def _on_dose_response(self) -> None:
+        """Open the dose-response plot dialog over the current study.
+
+        Step 5 of task #84.  Opens even when the study has no fresh-ok
+        results — the dialog itself renders an empty-state message in
+        that case, which is friendlier than disabling the action
+        without explanation.  We still gate the toolbar enablement in
+        :meth:`_refresh_actions` so the button looks disabled until
+        there's something useful to plot.
+
+        The dialog reads ``self._results`` by reference; it doesn't
+        own or mutate the cache, so closing the dialog doesn't lose
+        any batch-analysis state.
+        """
+        if self._study is None:
+            return
+        dlg = DoseResponseDialog(
+            study=self._study,
+            results_cache=self._results,
+            parent=self,
+        )
+        dlg.exec()
+
     def _on_delete_study(self) -> None:
         """Delete the study **sidecar** from disk, keep CSVs intact.
 
@@ -1535,6 +1898,37 @@ class StudyPanel(QWidget):
         # details column take the remaining width.
         self._tree.resizeColumnToContents(0)
 
+        # Dose-response enablement depends on whether any fresh-ok
+        # result is in cache — that state only changes on tree rebuild
+        # (after batch analyze) or on study-level swaps, both of which
+        # already call into here.  Cheaper than wiring a dedicated
+        # "cache changed" signal.
+        self._refresh_actions()
+
+    def _any_fresh_ok_result(self) -> bool:
+        """True iff at least one cached result is non-stale and status='ok'.
+
+        Used by :meth:`_refresh_actions` to gate the Dose-response button:
+        the plot has nothing to show until batch-analyze has landed at
+        least one fresh result, and we'd rather disable the action than
+        pop a modal dialog only to show "no data" inside it.
+
+        ``O(total files)`` — studies are small (≤ ~50 files), so walking
+        every (group, file) pair is effectively free.  A more elaborate
+        incremental flag was considered and rejected as premature.
+        """
+        if self._study is None:
+            return False
+        for group in self._study.groups:
+            for f in group.files:
+                r = self._results.get((group.name, f.csv_relpath))
+                if r is None or r.status != 'ok':
+                    continue
+                if _is_stale(r, group.config, f.channel):
+                    continue
+                return True
+        return False
+
     def _refresh_actions(self, *_args) -> None:
         """Enable/disable toolbar actions based on current selection.
 
@@ -1568,6 +1962,14 @@ class StudyPanel(QWidget):
         # a group) is selected" rule — we walk up to the group in
         # ``_selected_group`` so either kind is a valid anchor.
         self._act_analyze_group.setEnabled(can_edit_group)
+        # Dose-response is a *study-wide* action — it doesn't need a
+        # selection, only a loaded study with at least one fresh-ok
+        # result somewhere.  Walking the whole cache once per selection
+        # change is O(N files) which is cheap (studies are small); the
+        # payoff is the button grays out until there's data to plot.
+        self._act_dose_response.setEnabled(
+            has_study and self._any_fresh_ok_result()
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -2067,6 +2469,142 @@ def _format_file_metrics(res: FileResult | None) -> str:
     if not math.isnan(res.stv_ms):
         parts.append(f"STV: {res.stv_ms:.1f} ms")
     return "  ·  ".join(parts)
+
+
+def _metric_meta(key: str) -> tuple[str, str, int]:
+    """Return ``(label, unit, decimals)`` for a dose-response metric key.
+
+    Raises ``KeyError`` on unknown keys — callers are expected to pick
+    from :data:`_DOSE_RESPONSE_METRICS` and should fail loudly if they
+    pass a typo.  Used by the dialog to build the axis label and format
+    tooltips consistently with step-4 tree rendering.
+    """
+    for k, label, unit, decimals in _DOSE_RESPONSE_METRICS:
+        if k == key:
+            return label, unit, decimals
+    raise KeyError(f"unknown metric key: {key!r}")
+
+
+def _collect_dose_response_points(
+    study: Study,
+    results_cache: dict,
+    *,
+    metric: str = 'fpdc_ms',
+) -> list[DoseResponsePoint]:
+    """Build one :class:`DoseResponsePoint` per group for a given metric.
+
+    Iterates :attr:`Study.groups`, computes per-metric aggregate with
+    :func:`_aggregate_group_metrics` (reusing the same staleness logic
+    as the tree rows so the plot is never inconsistent with what the
+    user sees in the panel), and drops groups where the metric has
+    ``n == 0`` finite values — those groups simply don't appear in the
+    plot, rather than showing as a visually misleading "point at NaN".
+
+    Parameters
+    ----------
+    study : Study
+        The study being plotted.  ``study.groups`` is walked in order;
+        the sort by dose happens downstream in
+        :func:`_assemble_dose_response_series`.
+    results_cache : dict
+        ``StudyPanel._results`` — maps ``(group_name, csv_relpath)`` to
+        :class:`FileResult`.  Missing keys are handled as "never
+        analysed" and simply don't contribute to the aggregate.
+    metric : str
+        One of the keys in :data:`_DOSE_RESPONSE_METRICS`.  Validated
+        against the whitelist to prevent silent no-ops on typos.
+
+    Returns
+    -------
+    list[DoseResponsePoint]
+        Unordered.  Baseline groups (``dose_uM is None``) are included
+        as regular entries — the plot code filters them into a reference
+        line separately.
+    """
+    _metric_meta(metric)   # validate early; raises KeyError on typo
+
+    points: list[DoseResponsePoint] = []
+    for group in study.groups:
+        group_results: list[FileResult | None] = []
+        group_stale: list[bool] = []
+        for f in group.files:
+            r = results_cache.get((group.name, f.csv_relpath))
+            group_results.append(r)
+            group_stale.append(_is_stale(r, group.config, f.channel))
+        agg = _aggregate_group_metrics(group_results, group_stale)
+        mean, sd, n_finite = agg.get(metric, (float('nan'), float('nan'), 0))
+        if n_finite < 1 or math.isnan(mean):
+            continue
+        points.append(DoseResponsePoint(
+            group_name=group.name,
+            drug=group.drug or '',
+            dose_uM=group.dose_uM,
+            mean=float(mean),
+            sd=float(sd) if not math.isnan(sd) else 0.0,
+            n=int(n_finite),
+        ))
+    return points
+
+
+def _assemble_dose_response_series(
+    points: list[DoseResponsePoint],
+) -> dict:
+    """Split points into baselines + per-drug dose curves, ready to plot.
+
+    The dose-response figure has two visual layers:
+
+    1. **Dose curves** — one per distinct drug, with x=dose_µM on a
+       log scale when all doses are strictly positive.  Points are
+       sorted by dose so the polyline doesn't jump back and forth.
+    2. **Baselines** — a dashed horizontal reference line per drug
+       (``dose_uM is None`` groups), plus an "overall" baseline when
+       the baseline group has an empty ``drug`` (the typical "vehicle
+       only" control that precedes *any* dose series).
+
+    Returns
+    -------
+    dict with two keys:
+
+    * ``'doses'`` : ``dict[str, list[DoseResponsePoint]]``
+        Per-drug curves, each sorted by ``dose_uM`` ascending.
+        Drugs with no dose points (baseline-only) are omitted.
+    * ``'baselines'`` : ``list[DoseResponsePoint]``
+        Baseline groups (``dose_uM is None``).  Order of insertion
+        (== order in ``Study.groups``) is preserved, so the user-chosen
+        study layout drives the legend order.
+
+    Both sides of the split are derived from the same input — a point
+    is *either* a dose point *or* a baseline (by its ``dose_uM``), so
+    no point is double-counted between the two categories.
+    """
+    baselines: list[DoseResponsePoint] = []
+    doses: dict[str, list[DoseResponsePoint]] = {}
+    for p in points:
+        if p.dose_uM is None:
+            baselines.append(p)
+            continue
+        doses.setdefault(p.drug, []).append(p)
+    for drug, curve in doses.items():
+        # Sort by dose ascending so pyqtgraph can draw a polyline that
+        # doesn't zig-zag.  Tie-break by group_name for stable ordering
+        # when two groups share a dose (rare but legal).
+        curve.sort(key=lambda pt: (pt.dose_uM, pt.group_name))
+    return {'doses': doses, 'baselines': baselines}
+
+
+def _can_plot_log_x(points: list[DoseResponsePoint]) -> bool:
+    """Return True iff every dose point has ``dose_uM > 0``.
+
+    Log-scale x axes can't render x ≤ 0, so a zero-dose group (which
+    should really have been flagged baseline with ``dose_uM=None``,
+    but users sometimes write "0" literally) forces the caller to
+    fall back to linear scale.  Empty input → False (there's nothing
+    to plot, so log doesn't apply).
+    """
+    dose_points = [p for p in points if p.dose_uM is not None]
+    if not dose_points:
+        return False
+    return all(p.dose_uM > 0.0 for p in dose_points)
 
 
 def _safe_getlogin_available() -> bool:
