@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDockWidget,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -48,6 +49,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyside_app.project_panel import ProjectPanel
 from pyside_app.signal_viewer import SignalViewer
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1784,6 +1786,38 @@ class MainWindow(QMainWindow):
         act_quit.triggered.connect(self.close)
         m_file.addAction(act_quit)
 
+        # ─── Projects menu + dock (task #84 step 2) ────────────────
+        # The Projects panel is dockable on the left and hidden by
+        # default — single-file Apri CSV is still the primary flow;
+        # project-mode is opt-in for users running a dose-response.
+        self._project_panel = ProjectPanel()
+        self._project_dock = QDockWidget(self.tr("Progetti"), self)
+        self._project_dock.setObjectName("projects-dock")
+        self._project_dock.setWidget(self._project_panel)
+        self._project_dock.setAllowedAreas(
+            Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea
+        )
+        self.addDockWidget(Qt.LeftDockWidgetArea, self._project_dock)
+        self._project_dock.hide()
+
+        # Double-click on a file in the tree → reuse the normal analyze
+        # path, honouring whatever channel the user has selected.  The
+        # file entry's own ``channel`` field is not plumbed through in
+        # the PoC (step 2): that's a step-3 refinement once batch-per-
+        # group lands.
+        self._project_panel.file_activated.connect(
+            lambda path: self._run_analysis(
+                path, channel=self._signal_tab.channel_choice(),
+            )
+        )
+        self._project_panel.project_changed.connect(self._on_project_changed)
+
+        m_projects = self.menuBar().addMenu(self.tr("&Progetti"))
+        act_toggle_projects = self._project_dock.toggleViewAction()
+        act_toggle_projects.setText(self.tr("&Mostra pannello progetti"))
+        act_toggle_projects.setShortcut("Ctrl+Shift+P")
+        m_projects.addAction(act_toggle_projects)
+
         # ─── Keyboard shortcuts (global) ───────────────────────────
         # Registered at the MainWindow level so they fire no matter
         # which widget has focus.  Ctrl++ and Ctrl+- match the
@@ -2174,6 +2208,17 @@ class MainWindow(QMainWindow):
         self._signal_tab.set_analyzed_channel(None)
         self._update_window_title(None, None)
         self.statusBar().showMessage(status_msg)
+
+    def _on_project_changed(self) -> None:
+        """Status-bar hint when a project is opened / created (task #84)."""
+        p = self._project_panel.current_project()
+        if p is None:
+            return
+        self.statusBar().showMessage(
+            self.tr("Progetto: {0} — {1} gruppi").format(
+                p.name, len(p.groups),
+            )
+        )
 
     def _update_window_title(
         self, filename: str | None, channel: str | None,
