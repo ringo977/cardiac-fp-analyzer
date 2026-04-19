@@ -39,6 +39,9 @@ _badge_for = sp._badge_for
 _tooltip_for = sp._tooltip_for
 _aggregate_status = sp._aggregate_status
 _len_or_zero = sp._len_or_zero
+_BatchWorker = sp._BatchWorker
+_BatchWorkerSignals = sp._BatchWorkerSignals
+_BATCH_MAX_THREADS = sp._BATCH_MAX_THREADS
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -188,3 +191,160 @@ class TestLenOrZero:
         class NoLen:
             pass
         assert _len_or_zero(NoLen()) == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────
+#  _BatchWorker / _BatchWorkerSignals (step 3b — background batch pool)
+#
+#  These tests exercise the worker in isolation: we monkeypatch
+#  ``cardiac_fp_analyzer.analyze.analyze_single_file`` so the worker
+#  never touches disk / numpy, and we invoke ``run()`` directly on the
+#  test thread.  That's enough to verify that both success and failure
+#  paths emit *exactly one* signal with the right ``FileResult`` shape
+#  — which is the full contract the UI relies on.
+#
+#  We deliberately don't spin up a ``QThreadPool`` here: that would
+#  require a ``QApplication`` + event loop, and the _on_analyze_group
+#  orchestration (pool, progress dialog, cancel) is covered at a higher
+#  level.  The worker-level contract is what regressions will hit first.
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestBatchMaxThreads:
+    def test_is_a_positive_int(self):
+        # Pure sanity: must be ≥ 1 so ``min(idealThreadCount(), cap)``
+        # never produces 0 threads on a weird host.
+        assert isinstance(_BATCH_MAX_THREADS, int)
+        assert _BATCH_MAX_THREADS >= 1
+
+
+class _SignalCapture:
+    """Tiny helper: connect to ``signals.done`` and record the args.
+
+    Avoids pulling in pytest-qt (which would require a running Qt app
+    loop) — the worker emits via a plain ``Signal`` and we connect a
+    Python callable, which Qt dispatches synchronously for direct
+    connections by default.
+    """
+    def __init__(self, signals):
+        self.events: list[tuple[int, object]] = []
+        signals.done.connect(self._on_done)
+
+    def _on_done(self, idx, result):
+        self.events.append((idx, result))
+
+
+class TestBatchWorkerRun:
+    def test_success_emits_ok_result(self, monkeypatch):
+        # Fake pipeline result — matches the shape the worker reads.
+        fake_result = {
+            'file_info': {'analyzed_channel': 'EL2'},
+            'beat_indices': list(range(14)),
+            'beat_indices_fpd': list(range(10)),
+        }
+        monkeypatch.setattr(
+            'cardiac_fp_analyzer.analyze.analyze_single_file',
+            lambda *a, **kw: fake_result,
+        )
+        signals = _BatchWorkerSignals()
+        cap = _SignalCapture(signals)
+
+        worker = _BatchWorker(
+            file_index=3,
+            abspath='/fake/chip.csv',
+            channel='auto',
+            config=None,
+            signals=signals,
+        )
+        worker.run()
+
+        assert len(cap.events) == 1
+        idx, fr = cap.events[0]
+        assert idx == 3
+        assert fr.status == 'ok'
+        assert fr.channel_analyzed == 'EL2'
+        assert fr.n_total == 14
+        assert fr.n_included == 10
+        assert fr.error == ''
+
+    def test_pipeline_returning_none_becomes_error(self, monkeypatch):
+        monkeypatch.setattr(
+            'cardiac_fp_analyzer.analyze.analyze_single_file',
+            lambda *a, **kw: None,
+        )
+        signals = _BatchWorkerSignals()
+        cap = _SignalCapture(signals)
+
+        _BatchWorker(
+            file_index=0, abspath='/fake.csv',
+            channel='auto', config=None, signals=signals,
+        ).run()
+
+        idx, fr = cap.events[0]
+        assert idx == 0
+        assert fr.status == 'error'
+        assert 'vuota' in fr.error.lower()
+
+    def test_exception_becomes_error_with_exc_type(self, monkeypatch):
+        def boom(*a, **kw):
+            raise RuntimeError("bad signal")
+        monkeypatch.setattr(
+            'cardiac_fp_analyzer.analyze.analyze_single_file', boom,
+        )
+        signals = _BatchWorkerSignals()
+        cap = _SignalCapture(signals)
+
+        _BatchWorker(
+            file_index=7, abspath='/fake.csv',
+            channel='EL1', config=None, signals=signals,
+        ).run()
+
+        idx, fr = cap.events[0]
+        assert idx == 7
+        assert fr.status == 'error'
+        # Error string should carry the exception class name and msg
+        # so the tooltip gives the user something actionable.
+        assert 'RuntimeError' in fr.error
+        assert 'bad signal' in fr.error
+
+    def test_fpd_fallback_when_only_beat_indices_present(self, monkeypatch):
+        # Older schemas (pre-#73) don't populate beat_indices_fpd —
+        # the worker must fall back to the bare beat_indices count
+        # rather than report 0 included beats.
+        monkeypatch.setattr(
+            'cardiac_fp_analyzer.analyze.analyze_single_file',
+            lambda *a, **kw: {
+                'file_info': {'analyzed_channel': 'EL1'},
+                'beat_indices': list(range(8)),
+                # no beat_indices_fpd
+            },
+        )
+        signals = _BatchWorkerSignals()
+        cap = _SignalCapture(signals)
+
+        _BatchWorker(
+            file_index=0, abspath='/fake.csv',
+            channel='auto', config=None, signals=signals,
+        ).run()
+
+        _, fr = cap.events[0]
+        assert fr.n_total == 8
+        assert fr.n_included == 8   # fallback to total
+
+    def test_emits_exactly_once(self, monkeypatch):
+        # Regression guard: the UI counts completions — if a worker
+        # ever emits 0 or 2+ signals for one file, the progress bar
+        # desyncs and either hangs or finishes early.
+        monkeypatch.setattr(
+            'cardiac_fp_analyzer.analyze.analyze_single_file',
+            lambda *a, **kw: {'file_info': {'analyzed_channel': 'EL1'},
+                              'beat_indices': [1], 'beat_indices_fpd': [1]},
+        )
+        signals = _BatchWorkerSignals()
+        cap = _SignalCapture(signals)
+
+        _BatchWorker(
+            file_index=0, abspath='/fake.csv',
+            channel='auto', config=None, signals=signals,
+        ).run()
+
+        assert len(cap.events) == 1

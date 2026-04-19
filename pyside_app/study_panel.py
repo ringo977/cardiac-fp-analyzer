@@ -81,10 +81,17 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import (
+    QEventLoop,
+    QObject,
+    QRunnable,
+    Qt,
+    QThread,
+    QThreadPool,
+    Signal,
+)
 from PySide6.QtGui import QAction, QBrush, QColor
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -127,6 +134,18 @@ logger = logging.getLogger(__name__)
 _KIND_ROLE = Qt.UserRole + 1      # "study" | "group" | "file"
 _GROUP_NAME_ROLE = Qt.UserRole + 2   # str (for group + file rows)
 _FILE_INDEX_ROLE = Qt.UserRole + 3   # int (position within group.files)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+#  Tuning knob for the batch-analysis thread pool (step 3b).
+#
+#  4 is a pragmatic ceiling: most laptops have 4–8 performance cores,
+#  and past 4 the gain flattens because ``analyze_single_file`` is
+#  disk + numpy bound and workers start fighting over the same CSV
+#  cache / memory bandwidth.  If you need to parallelise harder (big
+#  Mac / batch server), raise it here — the UI logic doesn't care.
+# ─────────────────────────────────────────────────────────────────────────
+_BATCH_MAX_THREADS = 4
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -173,6 +192,138 @@ class FileResult:
     n_included: int = 0
     n_total: int = 0
     error: str = ''
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Background batch-analysis workers (step 3b of task #84)
+# ═══════════════════════════════════════════════════════════════════════
+#
+#  Step 3 ran ``analyze_single_file`` in the UI thread with a modal
+#  QProgressDialog + QApplication.processEvents().  That froze the UI
+#  for the duration of each individual file — tolerable for a 3-file
+#  group, painful for 20 files × multi-second pipeline.
+#
+#  Step 3b moves the work to a :class:`QThreadPool`.  Design notes:
+#
+#  * We use ``QRunnable`` (fire-and-forget) rather than ``QThread`` per
+#    file because we want a bounded-parallelism pool, not N threads.
+#    The cap is ``min(idealThreadCount(), 4)`` — 4 is a pragmatic
+#    ceiling that keeps the Mac's fan quiet and avoids hammering the
+#    same disk with many concurrent CSV reads.
+#  * ``QRunnable`` isn't a ``QObject`` so it can't emit signals; we
+#    pipe results through a separate :class:`_BatchWorkerSignals`
+#    object, connected via ``Qt.QueuedConnection`` so the slot runs
+#    on the UI thread.  That way the slot can safely touch
+#    ``self._results``, ``QProgressDialog``, and the tree.
+#  * Cancellation only removes *pending* runnables via
+#    ``pool.clear()``.  Runnables already executing finish their
+#    ``analyze_single_file`` call (which is CPU-bound numpy/pandas
+#    with no cooperative cancellation point) — the caller then
+#    ``waitForDone()``s and drops their results on the floor.
+#  * ``analyze_single_file`` is thread-safe in practice: it re-reads
+#    the CSV, builds a fresh :class:`AnalysisResult`, and touches no
+#    module-level mutable state.  Logging is thread-safe by design.
+#  * Writes to ``self._results`` happen only from the UI slot, so the
+#    GIL-safety of dict writes isn't even load-bearing — the worker
+#    just emits the result and lets the UI thread store it.
+
+
+class _BatchWorkerSignals(QObject):
+    """Signal carrier for :class:`_BatchWorker` — one result per file.
+
+    ``QRunnable`` is not a ``QObject``, so it cannot own signals.
+    The pattern is to hand each worker a shared ``_BatchWorkerSignals``
+    instance and have the worker emit through it; the UI-thread
+    consumer connects once to the shared object.
+
+    Using a single shared instance (instead of one per worker) keeps
+    the connection / disconnection story simple and avoids leaking
+    per-file ``QObject``\\s if a cancel drops pending runnables.
+    """
+
+    # (file_index, FileResult) — file_index is the position within
+    # ``group.files`` at submit time, used to key the cache.
+    done = Signal(int, object)
+
+
+class _BatchWorker(QRunnable):
+    """One-shot worker: run :func:`analyze_single_file` on one CSV.
+
+    All per-file state is captured in ``__init__``; ``run`` is the
+    only method that touches the pipeline.  Both success and failure
+    paths emit through ``signals.done`` — the UI slot decides how to
+    render the :class:`FileResult` and never needs to distinguish
+    "worker crashed" from "pipeline returned error" (both surface as
+    ``status='error'``).
+    """
+
+    def __init__(
+        self,
+        *,
+        file_index: int,
+        abspath: str,
+        channel: str,
+        config,              # AnalysisConfig — kept untyped to avoid a
+                             # hard import of the scientific core at
+                             # module load time.
+        signals: _BatchWorkerSignals,
+    ) -> None:
+        super().__init__()
+        self._file_index = file_index
+        self._abspath = abspath
+        self._channel = channel
+        self._config = config
+        self._signals = signals
+        # ``setAutoDelete(True)`` is the QRunnable default, which we
+        # want: the worker is disposable and only lives for one call.
+
+    def run(self) -> None:   # noqa: D401 — Qt virtual; not a "returns"
+        # Import here (not at module top) so the panel still loads
+        # even if the scientific core has an import error — same
+        # rationale as the original _on_analyze_group.
+        from cardiac_fp_analyzer.analyze import analyze_single_file
+
+        try:
+            result = analyze_single_file(
+                self._abspath,
+                channel=self._channel,
+                verbose=False,
+                config=self._config,
+            )
+        except Exception as exc:   # noqa: BLE001 — batch must survive
+            logger.exception(
+                "StudyPanel: analyze_single_file failed for %s",
+                self._abspath,
+            )
+            fr = FileResult(
+                status='error',
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            self._signals.done.emit(self._file_index, fr)
+            return
+
+        if result is None:
+            fr = FileResult(status='error', error="Pipeline ritornata vuota")
+            self._signals.done.emit(self._file_index, fr)
+            return
+
+        analyzed = (
+            (result.get('file_info') or {}).get('analyzed_channel') or ''
+        )
+        n_total = _len_or_zero(result.get('beat_indices'))
+        # ``beat_indices_fpd`` = beats that actually produced FPD (the
+        # user-meaningful "inclusi" count).  Fall back to
+        # ``beat_indices`` if the schema is older than task #73.
+        fpd_len = _len_or_zero(result.get('beat_indices_fpd'))
+        n_included = fpd_len if fpd_len > 0 else n_total
+
+        fr = FileResult(
+            status='ok',
+            channel_analyzed=str(analyzed),
+            n_included=n_included,
+            n_total=n_total,
+        )
+        self._signals.done.emit(self._file_index, fr)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -675,7 +826,12 @@ class StudyPanel(QWidget):
     def _on_analyze_group(self) -> None:
         """Run the full pipeline on every file of the selected group.
 
-        Step 3 of task #84.  Behaviour:
+        Step 3 of task #84 with the step-3b upgrade: work runs on a
+        :class:`QThreadPool` so the UI thread stays responsive for
+        the duration of the batch (tree redraws, mouse moves, even
+        tooltips still work while 4 files process in parallel).
+
+        Behaviour:
 
         * Channel selection follows :attr:`FileEntry.channel`.  The
           default value is ``'auto'`` (assigned by ``make_file_entry``)
@@ -686,16 +842,22 @@ class StudyPanel(QWidget):
         * Each group carries its own :class:`AnalysisConfig` — batch
           honours it, so a baseline group and a dose group can use
           different QC thresholds without touching global settings.
-        * Foreground execution with a modal :class:`QProgressDialog`
-          (cancel supported).  PoC-grade: the UI freezes for the
-          duration of each individual file.  A background
-          :class:`QThreadPool` refactor is a step-3b enhancement.
+        * Files whose CSV is missing are rejected up-front (before any
+          worker is submitted) so the pool only ever runs useful work.
+        * Parallelism is capped at
+          ``min(idealThreadCount(), _BATCH_MAX_THREADS)`` — pragmatic
+          ceiling, see the top-of-module rationale.
         * Results are cached by (group_name, csv_relpath) in
           :attr:`_results`; badges in the tree reflect ✓ / ✗ / — and
           tooltips carry the error message or beat counts.  The full
           :class:`AnalysisResult` is **not** cached (memory) — a
           double-click on a file still re-runs the pipeline to
           populate the editing tabs.
+        * Cancel aborts *pending* workers immediately via
+          ``pool.clear()``; workers already running finish their
+          current file and their results are discarded.  The tree is
+          still rebuilt so the already-completed files show their
+          badges.
 
         Audit note: exceptions from the scientific pipeline are
         logged via ``logger.exception`` with the file path, so a
@@ -723,39 +885,15 @@ class StudyPanel(QWidget):
             )
             return
 
-        # Import here (not at module top) so the panel still loads
-        # even if the scientific core has an import error — same
-        # approach as MainWindow._run_analysis.
-        from cardiac_fp_analyzer.analyze import analyze_single_file
-
         n = len(group.files)
-        progress = QProgressDialog(
-            self.tr("Analisi gruppo “{0}”...").format(group.name),
-            self.tr("Annulla"),
-            0, n, self,
-        )
-        progress.setWindowTitle(self.tr("Analisi gruppo"))
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)   # show immediately for small N
-        progress.setValue(0)
 
-        logger.info(
-            "StudyPanel: batch analyze — group=%r, n_files=%d, study=%s",
-            group.name, n, self._study.folder,
-        )
-
+        # ── 1. Resolve paths + split into (ready | missing) up-front ──
+        # Missing files don't become runnables — we write their error
+        # straight into the cache and account for them in the progress
+        # total.  This keeps the pool honest (no fake work) and means
+        # the per-file progress bar represents real pipeline work.
+        ready: list[tuple[int, Path, str]] = []  # (idx, abspath, channel)
         for i, fe in enumerate(group.files):
-            if progress.wasCanceled():
-                logger.info(
-                    "StudyPanel: batch analyze cancelled after %d/%d files",
-                    i, n,
-                )
-                break
-            progress.setLabelText(
-                self.tr("({0}/{1}) {2}").format(i + 1, n, fe.csv_relpath)
-            )
-            QApplication.processEvents()
-
             key = (group.name, fe.csv_relpath)
             abspath = resolve_file_path(self._study, fe)
             if not abspath.is_file():
@@ -765,60 +903,108 @@ class StudyPanel(QWidget):
                         "File non trovato: {0}"
                     ).format(abspath),
                 )
-                progress.setValue(i + 1)
                 continue
-
             # Clamp the per-file channel field.  We only trust the
             # three known values; anything else (legacy / corrupt
-            # sidecar) falls back to 'auto' rather than propagating
-            # a bogus label into the pipeline.
+            # sidecar) falls back to 'auto' rather than propagating a
+            # bogus label into the pipeline.
             ch = fe.channel if fe.channel in ('auto', 'EL1', 'EL2') else 'auto'
+            ready.append((i, abspath, ch))
 
-            try:
-                result = analyze_single_file(
-                    str(abspath),
-                    channel=ch,
-                    verbose=False,
-                    config=group.config,
-                )
-            except Exception as e:   # noqa: BLE001 — batch must survive
-                logger.exception(
-                    "StudyPanel: analyze_single_file failed for %s",
-                    abspath,
-                )
-                self._results[key] = FileResult(
-                    status='error',
-                    error=f"{type(e).__name__}: {e}",
-                )
-                progress.setValue(i + 1)
-                continue
+        logger.info(
+            "StudyPanel: batch analyze — group=%r, n_files=%d "
+            "(ready=%d, missing=%d), study=%s",
+            group.name, n, len(ready), n - len(ready), self._study.folder,
+        )
 
-            if result is None:
-                self._results[key] = FileResult(
-                    status='error',
-                    error=self.tr("Pipeline ritornata vuota"),
-                )
-                progress.setValue(i + 1)
-                continue
+        # ── 2. Short-circuit: every file missing → just refresh tree ──
+        if not ready:
+            self._rebuild_tree()
+            return
 
-            analyzed = (
-                (result.get('file_info') or {}).get('analyzed_channel') or ''
+        # ── 3. Wire up progress dialog + result collector + event loop ──
+        progress = QProgressDialog(
+            self.tr("Analisi gruppo “{0}”...").format(group.name),
+            self.tr("Annulla"),
+            0, n, self,
+        )
+        progress.setWindowTitle(self.tr("Analisi gruppo"))
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)   # show immediately for small N
+        # Missing files already counted in the cache — reflect them in
+        # the progress bar so the user sees "(k/n) …" honestly.
+        already_done = n - len(ready)
+        progress.setValue(already_done)
+
+        loop = QEventLoop(self)
+        signals = _BatchWorkerSignals()
+        pool = QThreadPool(self)
+        pool.setMaxThreadCount(
+            min(QThread.idealThreadCount() or 1, _BATCH_MAX_THREADS)
+        )
+
+        # Mutable flags packed in a dict so the inner closures can
+        # mutate without needing ``nonlocal`` (keeps the diff local).
+        state = {'completed': already_done, 'cancelled': False}
+
+        def _on_file_done(file_idx: int, result: FileResult) -> None:
+            # Runs on the UI thread (QueuedConnection), so it's safe to
+            # touch ``self._results``, the progress dialog, and the
+            # tree.  We swallow results that come in after a cancel —
+            # the worker was already committed to its file, but the
+            # user has moved on.
+            if state['cancelled']:
+                return
+            fe = group.files[file_idx]
+            key = (group.name, fe.csv_relpath)
+            self._results[key] = result
+            state['completed'] += 1
+            progress.setValue(state['completed'])
+            progress.setLabelText(
+                self.tr("({0}/{1}) {2}").format(
+                    state['completed'], n, fe.csv_relpath,
+                )
             )
-            n_total = _len_or_zero(result.get('beat_indices'))
-            # ``beat_indices_fpd`` = beats that actually produced FPD
-            # (the user-meaningful "inclusi" count).  Fall back to
-            # ``beat_indices`` if the schema is older than task #73.
-            fpd_len = _len_or_zero(result.get('beat_indices_fpd'))
-            n_included = fpd_len if fpd_len > 0 else n_total
+            if state['completed'] >= n:
+                loop.quit()
 
-            self._results[key] = FileResult(
-                status='ok',
-                channel_analyzed=str(analyzed),
-                n_included=n_included,
-                n_total=n_total,
+        signals.done.connect(_on_file_done, Qt.QueuedConnection)
+
+        def _on_cancel() -> None:
+            state['cancelled'] = True
+            logger.info(
+                "StudyPanel: batch analyze cancelled — completed=%d/%d",
+                state['completed'], n,
             )
-            progress.setValue(i + 1)
+            pool.clear()   # drop pending runnables; in-flight workers
+                           # still finish their current file.
+            loop.quit()
 
+        progress.canceled.connect(_on_cancel)
+
+        # ── 4. Submit all workers ─────────────────────────────────────
+        for file_idx, abspath, ch in ready:
+            worker = _BatchWorker(
+                file_index=file_idx,
+                abspath=str(abspath),
+                channel=ch,
+                config=group.config,
+                signals=signals,
+            )
+            pool.start(worker)
+
+        # ── 5. Block UI thread here (but keep the event loop pumping)
+        # so signal/slot still dispatches, tree repaints, etc.
+        loop.exec()
+
+        # ── 6. On cancel, wait for in-flight workers so we don't tear
+        # down ``signals`` while they're still emitting.  Their results
+        # are dropped in ``_on_file_done`` via the ``cancelled`` guard.
+        if state['cancelled']:
+            pool.waitForDone()
+
+        # Final book-keeping: make sure the bar reaches 100% and the
+        # tree picks up whatever results landed before the cancel.
         progress.setValue(n)
         self._rebuild_tree()
 
