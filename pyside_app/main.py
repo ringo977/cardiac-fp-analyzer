@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -64,6 +65,29 @@ _TEMPLATE_RISKY_RHYTHM_TYPES = frozenset({
 })
 _FPD_CV_TEMPLATE_WARN = 0.20   # 20 % — beyond this, T-waves jitter enough
 #                              #        to cancel in the mean template.
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#   Channel choices — UI dropdown (task #82)
+# ═══════════════════════════════════════════════════════════════════════
+# Today the Digilent µECG-Pharma loader produces exactly two electrodes
+# (el1, el2); "auto" dispatches to ``channel_selection.select_best_channel``
+# which picks by SNR.  The list is intentionally kept as module-level
+# constants so the future multi-electrode work (task #83) can swap the
+# provider to "read from ``metadata['channels']``" without touching the
+# tab code.
+CHANNEL_AUTO = "auto"
+_CHANNEL_VALUES: tuple[str, ...] = (CHANNEL_AUTO, "el1", "el2")
+
+
+def _channel_label(value: str) -> str:
+    """Human-readable label for a channel-selection value.
+
+    ``auto`` stays lowercase because it's a mode, not an electrode;
+    electrode IDs are rendered uppercase so they stand out against the
+    rest of the toolbar.
+    """
+    return "Auto" if value == CHANNEL_AUTO else value.upper()
 
 
 def _make_metric_tile(caption: str) -> dict:
@@ -199,6 +223,12 @@ class _SignalTab(QWidget):
     # lives there — the tab just surfaces the request.
     recompute_requested = Signal()
 
+    # Fired when the user picks a different channel in the dropdown
+    # (Auto / EL1 / EL2).  Payload is the raw value from
+    # ``_CHANNEL_VALUES`` — MainWindow re-runs ``analyze_single_file``
+    # with ``channel=<payload>``.
+    channel_changed = Signal(str)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
@@ -210,13 +240,46 @@ class _SignalTab(QWidget):
         # placeholder layouts.
         self.viewer = SignalViewer(mode_getter=self._current_mode)
 
-        # Toolbar row: picking mode + raw overlay toggle.
-        # Two picking modes:
+        # Toolbar row: channel dropdown + picking mode + raw overlay
+        # toggle.  Two picking modes:
         # - Visualizza: read-only, clicks do nothing (zoom/pan still work).
         # - Edit: a left-click opens a contextual popup with the actions
         #   that make sense for that click (see SignalViewer._show_edit_menu).
         # "Mostra raw" overlays the unfiltered trace as a faint grey line.
         bar = QHBoxLayout()
+
+        # ── Channel selector (task #82) ──────────────────────────────
+        # The CSV loader currently produces EL1 + EL2; ``Auto`` delegates
+        # to the SNR-based selector in ``channel_selection``.  The combo
+        # is populated from ``_CHANNEL_VALUES`` so the future multi-
+        # electrode work (task #83) can swap the provider — nothing else
+        # in this tab hard-codes the channel list.  Signal emission is
+        # BLOCKED while the combo is programmatically synchronised
+        # (``set_channel`` below): without the guard, reflecting the
+        # post-analysis "auto → el1" choice would fire a spurious
+        # channel_changed and cause a second analyze_single_file call.
+        bar.addWidget(QLabel(self.tr("Canale:")))
+        self._combo_channel = QComboBox()
+        for v in _CHANNEL_VALUES:
+            self._combo_channel.addItem(_channel_label(v), userData=v)
+        self._combo_channel.setCurrentIndex(0)  # Auto
+        self._combo_channel.setToolTip(self.tr(
+            "Scegli il canale da analizzare. 'Auto' usa il canale "
+            "con SNR migliore (vedi selezione automatica)."
+        ))
+        self._combo_channel.currentIndexChanged.connect(
+            self._on_channel_combo_changed
+        )
+        bar.addWidget(self._combo_channel)
+
+        # Small label to the right of the combo shows what was actually
+        # analysed after load — e.g. "EL1" when the combo says "Auto".
+        # Stays empty until the first successful analysis.
+        self._lbl_analyzed_ch = QLabel("")
+        self._lbl_analyzed_ch.setStyleSheet("color: #8888aa;")
+        bar.addWidget(self._lbl_analyzed_ch)
+        bar.addSpacing(18)
+
         bar.addWidget(QLabel(self.tr("Modalità:")))
         self._rb_view = QRadioButton(self.tr("Visualizza"))
         self._rb_edit = QRadioButton(self.tr("Edit"))
@@ -365,6 +428,62 @@ class _SignalTab(QWidget):
             self._btn_recompute.setToolTip(self.tr(
                 "Ricalcola Parametri e Aritmie dai battiti attuali"
             ))
+
+    # ─── Channel selector (task #82) ───────────────────────────────
+    def _on_channel_combo_changed(self, _index: int) -> None:
+        """Forward a user-driven combo change as ``channel_changed``.
+
+        Programmatic syncs via ``set_channel`` block this signal
+        explicitly, so only genuine user interactions reach MainWindow.
+        """
+        value = self._combo_channel.currentData()
+        if isinstance(value, str):
+            self.channel_changed.emit(value)
+
+    def channel_choice(self) -> str:
+        """Return the current combo value ('auto', 'el1', 'el2'…).
+
+        Used by MainWindow to decide which channel to pass to
+        ``analyze_single_file`` — it's the source of truth for "what did
+        the user ask for", as opposed to ``analyzed_channel`` which is
+        "what did the pipeline pick".
+        """
+        v = self._combo_channel.currentData()
+        return v if isinstance(v, str) else CHANNEL_AUTO
+
+    def set_channel(self, value: str) -> None:
+        """Programmatically set the channel combo without emitting a signal.
+
+        Useful on app start / project load when we need to reflect a
+        saved preference without triggering an analyze_single_file.
+        Falls back to ``Auto`` if ``value`` is not in the allowed list.
+        """
+        if value not in _CHANNEL_VALUES:
+            value = CHANNEL_AUTO
+        block = self._combo_channel.blockSignals(True)
+        try:
+            idx = _CHANNEL_VALUES.index(value)
+            self._combo_channel.setCurrentIndex(idx)
+        finally:
+            self._combo_channel.blockSignals(block)
+
+    def set_analyzed_channel(self, value: str | None) -> None:
+        """Render what the pipeline actually analysed next to the combo.
+
+        Called after every successful load / recompute.  Pass ``None`` or
+        ``""`` to clear the label (e.g. before a new analysis starts or
+        after an error).  When the user already picked a specific
+        channel (not Auto) the label is redundant and we hide it.
+        """
+        if not value:
+            self._lbl_analyzed_ch.setText("")
+            return
+        if self.channel_choice() == CHANNEL_AUTO:
+            self._lbl_analyzed_ch.setText(
+                self.tr("→ {0}").format(value.upper())
+            )
+        else:
+            self._lbl_analyzed_ch.setText("")
 
 
 def _placeholder_tab(text: str) -> QWidget:
@@ -1581,6 +1700,9 @@ class MainWindow(QMainWindow):
         self._beats_tab.jump_requested.connect(self._jump_to_time)
         self._beats_tab.included_changed.connect(self._on_beats_changed)
         self._signal_tab.recompute_requested.connect(self._on_recompute)
+        # Channel dropdown (task #82): re-runs analyze_single_file on the
+        # currently-open CSV with the newly-selected channel.
+        self._signal_tab.channel_changed.connect(self._on_channel_changed)
 
         # ─── Menu ──────────────────────────────────────────────────
         m_file = self.menuBar().addMenu(self.tr("&File"))
@@ -1754,7 +1876,34 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        # Respect any channel the user previously picked in this session
+        # — preference is sticky across Open actions until they change
+        # the combo back to Auto.
+        self._run_analysis(path, channel=self._signal_tab.channel_choice())
 
+    def _on_channel_changed(self, choice: str) -> None:
+        """User picked a different channel in the Signal-tab dropdown.
+
+        Re-runs ``analyze_single_file`` on the currently-open CSV with
+        the new channel.  No-op when no CSV is loaded yet.  The combo's
+        own state already reflects the new choice (the signal fires
+        *after* the combo updates); ``_run_analysis`` will update the
+        side label with whatever the pipeline ends up analysing.
+        """
+        if self._current_csv_path is None:
+            return
+        self._run_analysis(str(self._current_csv_path), channel=choice)
+
+    def _run_analysis(self, path: str, channel: str) -> None:
+        """Execute the pipeline and populate all tabs.
+
+        Single entry point for both ``File → Apri CSV`` and channel
+        changes from the Signal tab.  Keeping the two paths unified
+        matters because any failure-mode polish (status-bar messages,
+        downstream-tab clearing, pending-state reset) only has to live
+        in one place — divergent copies are how the UI develops stale
+        widgets after an error.
+        """
         self.statusBar().showMessage(
             self.tr("Analisi in corso: {0}...").format(Path(path).name)
         )
@@ -1774,24 +1923,15 @@ class MainWindow(QMainWindow):
             # until Fase 3 wires a proper settings dialog.
             cfg = AnalysisConfig()
             cfg.amplifier_gain = 1e4
-            result = analyze_single_file(path, verbose=False, config=cfg)
+            result = analyze_single_file(
+                path, channel=channel, verbose=False, config=cfg,
+            )
         except Exception as e:   # noqa: BLE001 — we want to show *any* error
             QMessageBox.critical(
                 self, self.tr("Errore analisi"),
                 f"{type(e).__name__}: {e}",
             )
-            # Clear downstream tabs so we don't show stale data from a
-            # previous successful load when the current one failed.
-            self._params_tab.set_result(None)
-            self._arrhythmia_tab.set_result(None)
-            self._beats_tab.set_result(None)
-            self._current_result = None
-            self._current_csv_path = None
-            self._current_config = None
-            self._signal_tab.set_recompute_enabled(False)
-            self.statusBar().showMessage(
-                self.tr("Errore durante l'analisi.")
-            )
+            self._clear_results(self.tr("Errore durante l'analisi."))
             return
 
         if result is None:
@@ -1799,16 +1939,7 @@ class MainWindow(QMainWindow):
                 self, self.tr("Nessun risultato"),
                 self.tr("La pipeline ha ritornato None (vedi log)."),
             )
-            self._params_tab.set_result(None)
-            self._arrhythmia_tab.set_result(None)
-            self._beats_tab.set_result(None)
-            self._current_result = None
-            self._current_csv_path = None
-            self._current_config = None
-            self._signal_tab.set_recompute_enabled(False)
-            self.statusBar().showMessage(
-                self.tr("Analisi ritornata vuota.")
-            )
+            self._clear_results(self.tr("Analisi ritornata vuota."))
             return
 
         # Cache the result for the Ricalcola path BEFORE ``viewer.set_result``
@@ -1834,15 +1965,65 @@ class MainWindow(QMainWindow):
         # leftover "pending" styling and enable the Ricalcola button.
         self._signal_tab.set_recompute_enabled(True)
         self._signal_tab.set_recompute_pending(False)
+
+        # Reflect what channel the pipeline actually analysed — useful
+        # when the user asked for Auto and wants to know which electrode
+        # was picked by ``select_best_channel``.
+        analyzed = result.get("file_info", {}).get("analyzed_channel", "")
+        self._signal_tab.set_analyzed_channel(analyzed)
+        self._update_window_title(Path(path).name, analyzed)
+
         # Make sure the Segnale tab is visible after a successful load
         # (the user expects to see the plot right away, even if they had
         # clicked around the placeholder tabs before opening).
         self._tabs.setCurrentWidget(self._signal_tab)
+        ch_label = (
+            _channel_label(analyzed) if analyzed else _channel_label(channel)
+        )
+        if channel == CHANNEL_AUTO and analyzed:
+            ch_suffix = self.tr("{0} (auto)").format(ch_label)
+        else:
+            ch_suffix = ch_label
         self.statusBar().showMessage(
-            self.tr("{0} — {1} battiti inclusi").format(
-                Path(path).name, self.viewer.beat_count()
+            self.tr("{0} — {1} — {2} battiti inclusi").format(
+                Path(path).name, ch_suffix, self.viewer.beat_count(),
             )
         )
+
+    def _clear_results(self, status_msg: str) -> None:
+        """Reset all downstream state after a failed / empty analysis.
+
+        Extracted to avoid the error-handling divergence that the
+        previous ``_on_open`` had two near-identical copies of.
+        """
+        self._params_tab.set_result(None)
+        self._arrhythmia_tab.set_result(None)
+        self._beats_tab.set_result(None)
+        self._current_result = None
+        self._current_csv_path = None
+        self._current_config = None
+        self._signal_tab.set_recompute_enabled(False)
+        self._signal_tab.set_analyzed_channel(None)
+        self._update_window_title(None, None)
+        self.statusBar().showMessage(status_msg)
+
+    def _update_window_title(
+        self, filename: str | None, channel: str | None,
+    ) -> None:
+        """Reflect the current file + analysed channel in the window title.
+
+        ``None`` filename resets to the app name.  When the channel is
+        known it's appended so the user sees "chipD_ch1.csv — EL1"
+        without having to look at the Signal tab.
+        """
+        base = self.tr("Cardiac FP Analyzer")
+        if not filename:
+            self.setWindowTitle(base)
+            return
+        if channel:
+            self.setWindowTitle(f"{filename} — {channel.upper()} · {base}")
+        else:
+            self.setWindowTitle(f"{filename} · {base}")
 
 
 def main() -> int:
