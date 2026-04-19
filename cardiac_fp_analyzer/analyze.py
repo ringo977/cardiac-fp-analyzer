@@ -21,6 +21,7 @@ from cardiac_fp_analyzer.channel_selection import select_best_channel
 from cardiac_fp_analyzer.filtering import full_filter_pipeline
 from cardiac_fp_analyzer.inclusion import apply_inclusion_criteria
 from cardiac_fp_analyzer.loader import load_csv, parse_filename
+from cardiac_fp_analyzer.overrides import apply_overrides, load_overrides
 from cardiac_fp_analyzer.parameters import extract_all_parameters
 from cardiac_fp_analyzer.quality_control import validate_beats
 from cardiac_fp_analyzer.report import generate_excel_report, generate_pdf_report
@@ -542,6 +543,31 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
                 threshold_factor=bd_cfg.retry_threshold_factor
             )
             if verbose: print(f"  Retry: {det['n_beats']} beats")
+
+        # ── Manual beat overrides (sidecar .overrides.json) ──
+        # If the user has previously corrected this file in the PySide6
+        # viewer (add/remove beats) a ``<csv>.overrides.json`` sits next
+        # to the CSV.  Apply it here so the correction survives re-opens
+        # and batch re-runs without the UI having to redo the diff.
+        # Overrides are in seconds so they are robust to re-sampling.
+        if config.use_overrides:
+            ov = load_overrides(filepath)
+            if ov is not None and not ov.is_empty():
+                bi, ov_info = apply_overrides(bi, ov, fs)
+                # bt (time-domain beats) is not passed to the post-detection
+                # pipeline — only bi reaches segmentation — so we do not
+                # recompute it here.  Keep detection_info in sync so any
+                # downstream log line that reads ``det['n_beats']`` sees
+                # the post-override count.
+                det = dict(det)
+                det['overrides_applied'] = ov_info
+                det['n_beats'] = int(bi.size)
+                if verbose:
+                    n_unm = len(ov_info['unmatched_removals'])
+                    extras = f", {n_unm} unmatched" if n_unm else ""
+                    print(f"  Overrides: +{ov_info['n_added']}, "
+                          f"-{ov_info['n_removed']}{extras} "
+                          f"→ {bi.size} beats")
 
         return _analyze_from_beats(
             bi,

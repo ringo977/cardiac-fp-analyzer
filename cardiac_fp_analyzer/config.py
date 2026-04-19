@@ -717,6 +717,16 @@ class AnalysisConfig:
     enable_cessation: bool = True
     enable_spectral: bool = True
 
+    # ── Manual beat overrides ──
+    # When a user corrects the automatic beat detection in the PySide6
+    # UI we persist the correction as a ``.overrides.json`` sidecar next
+    # to the CSV (see ``cardiac_fp_analyzer.overrides``).  When True the
+    # pipeline loads that sidecar on every ``analyze_single_file`` run
+    # and applies the saved add/remove list on top of the automatic
+    # detection — so the same edits survive re-opens and batch runs.
+    # Set to False to ignore any sidecars (e.g. for a pristine re-run).
+    use_overrides: bool = True
+
     # ── Serialization ──
 
     def to_dict(self) -> dict:
@@ -786,6 +796,8 @@ class AnalysisConfig:
             cfg.enable_cessation = d['enable_cessation']
         if 'enable_spectral' in d:
             cfg.enable_spectral = d['enable_spectral']
+        if 'use_overrides' in d:
+            cfg.use_overrides = bool(d['use_overrides'])
 
         return cfg
 
