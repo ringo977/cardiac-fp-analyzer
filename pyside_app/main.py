@@ -1674,12 +1674,22 @@ class MainWindow(QMainWindow):
         # Parametri + Aritmie.  ``None`` before the first file is loaded.
         self._current_result: dict | None = None
         self._current_csv_path: Path | None = None
-        # Config used for the current analysis; cached so ``Ricalcola``
-        # re-runs the post-detection pipeline with the same settings.
-        # Built in ``_on_open`` (currently a fixed AnalysisConfig with
-        # ``amplifier_gain = 1e4`` for the µECG-Pharma device — will be
-        # replaced by a user-editable settings dialog in Fase 3).
-        self._current_config = None
+        # Config used for the current analysis; kept at window scope so
+        # the Impostazioni dialog (task #74) can mutate ONE shared
+        # instance and see the change reflected on the next Apri CSV
+        # (or the immediate re-analysis fired by ``applied``).
+        # Ricalcola also re-uses the same instance, so per-file edits
+        # made in the Battiti tab survive a settings change until the
+        # user reloads.  Default ``amplifier_gain = 1e4`` matches the
+        # µECG-Pharma Digilent hardware — the field is editable in the
+        # Impostazioni dialog.
+        from cardiac_fp_analyzer.config import AnalysisConfig
+        self._config: AnalysisConfig = AnalysisConfig()
+        self._config.amplifier_gain = 1e4
+        # ``_current_config`` historically tracked "config used for the
+        # last analysis"; now it points to the same ``_config`` object
+        # after every ``_run_analysis``.  Ricalcola reads it.
+        self._current_config: AnalysisConfig | None = None
         # Guard flag: when True, ``_on_beats_changed`` will NOT flip the
         # Ricalcola button into the "pending" state.  We set it around
         # ``viewer.set_result`` calls (full load + post-recompute refresh)
@@ -1710,6 +1720,14 @@ class MainWindow(QMainWindow):
         act_open.setShortcut("Ctrl+O")
         act_open.triggered.connect(self._on_open)
         m_file.addAction(act_open)
+        m_file.addSeparator()
+        # Impostazioni dialog (task #74) — Cmd+, on macOS, Ctrl+, elsewhere.
+        # Qt maps "Ctrl+," to "Cmd+," automatically on mac.
+        act_settings = QAction(self.tr("&Impostazioni..."), self)
+        act_settings.setShortcut("Ctrl+,")
+        act_settings.setMenuRole(QAction.PreferencesRole)  # mac: → app menu
+        act_settings.triggered.connect(self._on_settings)
+        m_file.addAction(act_settings)
         m_file.addSeparator()
         act_quit = QAction(self.tr("&Esci"), self)
         act_quit.setShortcut("Ctrl+Q")
@@ -1894,6 +1912,40 @@ class MainWindow(QMainWindow):
             return
         self._run_analysis(str(self._current_csv_path), channel=choice)
 
+    def _on_settings(self) -> None:
+        """Open the Impostazioni dialog and re-run on ``applied`` (task #74).
+
+        The dialog mutates ``self._config`` in place via
+        ``apply_values_to_config``, so holding a stale snapshot in this
+        method would be a bug — we just re-read ``self._config`` on the
+        next analysis.  The ``applied`` signal fires on both Applica and
+        OK; we only re-run if a CSV is currently open, otherwise the
+        settings silently wait for the next File → Apri.
+        """
+        # Import here (not at module top) to keep the cold-start path
+        # minimal — opening the Settings dialog is a conscious user
+        # action, so the import cost is fine on first click.
+        from pyside_app.settings_dialog import SettingsDialog
+
+        dlg = SettingsDialog(self._config, parent=self)
+        dlg.applied.connect(self._on_settings_applied)
+        dlg.exec()
+        # dlg goes out of scope here; its connections die with it —
+        # no manual disconnect needed.
+
+    def _on_settings_applied(self) -> None:
+        """Slot: settings were just committed; re-run if a CSV is loaded.
+
+        Uses the current channel preference from the Signal tab so the
+        user's EL1/EL2 choice (task #82) survives a settings tweak.
+        """
+        if self._current_csv_path is None:
+            return
+        self._run_analysis(
+            str(self._current_csv_path),
+            channel=self._signal_tab.channel_choice(),
+        )
+
     def _run_analysis(self, path: str, channel: str) -> None:
         """Execute the pipeline and populate all tabs.
 
@@ -1913,18 +1965,13 @@ class MainWindow(QMainWindow):
         # if something in the scientific core is broken — easier to diagnose.
         try:
             from cardiac_fp_analyzer.analyze import analyze_single_file
-            from cardiac_fp_analyzer.config import AnalysisConfig
-            # The Digilent µECG-Pharma device writes pre-amplified voltages
-            # into the CSV — the pipeline needs the gain to recover the
-            # physical voltage, otherwise ``spike_amplitude_mV`` ends up
-            # three orders of magnitude too big (see README "Amplifier
-            # gain").  The Streamlit sidebar exposed this as a form field
-            # defaulting to ``1e4``; here we hard-code the same default
-            # until Fase 3 wires a proper settings dialog.
-            cfg = AnalysisConfig()
-            cfg.amplifier_gain = 1e4
+            # We pass ``self._config`` — the window-scope AnalysisConfig
+            # that the Impostazioni dialog (task #74) mutates in place.
+            # Ricalcola reads this same instance (via ``_current_config``),
+            # so a settings change immediately propagates to both the
+            # "Apri" and "Ricalcola" paths without extra plumbing.
             result = analyze_single_file(
-                path, channel=channel, verbose=False, config=cfg,
+                path, channel=channel, verbose=False, config=self._config,
             )
         except Exception as e:   # noqa: BLE001 — we want to show *any* error
             QMessageBox.critical(
@@ -1947,7 +1994,7 @@ class MainWindow(QMainWindow):
         # being set AND ``_suppress_pending`` being True.
         self._current_result = result
         self._current_csv_path = Path(path)
-        self._current_config = cfg
+        self._current_config = self._config
         # Populate the Battiti tab's per-beat parameter map BEFORE the
         # viewer fires beats_changed (which routes through
         # ``_refresh_beats_tab → _beats_tab.set_beats``).  If we don't,
