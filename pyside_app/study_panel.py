@@ -1,25 +1,36 @@
-"""Project panel — dockable tree for Progetti/Gruppi/File (task #84).
+"""Study panel — dockable tree for Studi/Gruppi/File (task #84).
 
-PoC UI on top of :mod:`cardiac_fp_analyzer.project`.  The panel is a
-dockable ``QWidget`` that shows the current project as a ``QTreeWidget``:
+PoC UI on top of :mod:`cardiac_fp_analyzer.study`.  The panel is a
+dockable ``QWidget`` that shows the current study as a ``QTreeWidget``:
 
-    Project "Exp6-DofRR"
+    Study "Exp6-DofRR"
     ├─ baseline   [Control]
     │  └─ Exp6_ChipD_ch2_Ti10_C.csv  (EL1)
     └─ dof-10nM   [Dofetilide 0.010 µM]
        ├─ Exp6_ChipD_ch2_Ti10_dose1.csv  (EL1)
        └─ Exp6_ChipD_ch2_Ti10_dose2.csv  (EL2)
 
+Terminology note
+----------------
+"Studio" (not "Progetto") is the regulatory term: GLP / OECD / 21 CFR
+Part 58 refer to a protocolled nonclinical investigation as a
+*nonclinical laboratory study*, and CDISC SDTM uses ``STUDYID`` as the
+top-level identifier.  "Progetto" has no such anchoring in the
+regulations that a dose-response dataset may eventually be submitted
+under, so we align the on-disk format (``.cfp-study.json``) and the
+UI vocabulary with the audit language now, while the PoC is still
+cheap to rename.
+
 Features (step 2 + follow-up #86 — per *feedback_poc_ergonomics*,
 ergonomics can be rough):
 
-* Toolbar: *Nuovo progetto* / *Apri progetto* / *Chiudi progetto* /
+* Toolbar: *Nuovo studio* / *Apri studio* / *Chiudi studio* /
   *Aggiungi gruppo* / *Aggiungi CSV al gruppo* / *Impostazioni gruppo*
-  / *Rimuovi (gruppo/file)* / *Elimina sidecar progetto* (destructive).
+  / *Rimuovi (gruppo/file)* / *Elimina sidecar studio* (destructive).
 * Double-click on a file row → emits :attr:`file_activated` with the
   absolute CSV path, so :class:`MainWindow` can reuse ``_run_analysis``.
-* Every mutation autosaves the ``.cfp-project.json`` sidecar via
-  :func:`cardiac_fp_analyzer.project.save_project` — no explicit Save
+* Every mutation autosaves the ``.cfp-study.json`` sidecar via
+  :func:`cardiac_fp_analyzer.study.save_study` — no explicit Save
   button in the PoC (Marco prefers fewer clicks).
 * No batch-analyse button here yet: that's step 3 (#84 step 3); this
   panel only manages the *structure*.
@@ -31,15 +42,15 @@ Out of scope on purpose:
   where the tree rarely exceeds ~20 rows, and it keeps the diff small.
 * Per-file config overrides (only per-group ``AnalysisConfig`` today).
 * Aggregate reports / dose-response plots (step #84b).
-* Deleting the project *folder* (incl. CSV data) — that stays in Finder.
-  The panel can only delete the **sidecar** ``.cfp-project.json``, not
-  the experimental data; see :meth:`ProjectPanel._on_delete_project`.
+* Deleting the study *folder* (incl. CSV data) — that stays in Finder.
+  The panel can only delete the **sidecar** ``.cfp-study.json``, not
+  the experimental data; see :meth:`StudyPanel._on_delete_study`.
 
 Integration contract with :class:`MainWindow`:
 
 * The panel owns no signal/result state — it just hands back a CSV
   path on double-click.
-* The project sidecar is SSOT; anything the user edits in the tree
+* The study sidecar is SSOT; anything the user edits in the tree
   is reflected back onto disk synchronously.
 
 Audit & data safety (GxP-adjacent context — cardiac-electrophysiology
@@ -47,11 +58,11 @@ research, corrections are part of the scientific record):
 
 * **Destructive actions are explicit.**  Only *two* UI actions remove
   bytes from disk — "Rimuovi" on a group/file (drops rows from the
-  sidecar JSON, never touches CSVs) and "Elimina sidecar progetto"
-  (deletes exactly one file: ``<folder>/.cfp-project.json``).  Neither
+  sidecar JSON, never touches CSVs) and "Elimina sidecar studio"
+  (deletes exactly one file: ``<folder>/.cfp-study.json``).  Neither
   can touch raw experimental data; neither can touch per-file override
   sidecars (``*.overrides.json``) — those remain next to the CSVs and
-  are keyed by CSV path, not by project membership.
+  are keyed by CSV path, not by study membership.
 * **Logging.**  ``logger.warning`` is emitted with the full absolute
   path whenever we delete or rewrite the sidecar, so a terminal /
   log-file audit shows *what was deleted and when* even if the UI is
@@ -59,7 +70,7 @@ research, corrections are part of the scientific record):
 * **Confirmation dialogs.**  Every destructive action uses a Yes/No
   dialog with default = No, and the body text spells out *which
   artefacts are affected and which are not* (CSV, overrides, cartella).
-* **No silent fallbacks.**  If :func:`save_project` fails mid-edit we
+* **No silent fallbacks.**  If :func:`save_study` fails mid-edit we
   surface it; we never swallow an ``OSError`` and pretend the edit
   was persisted.
 """
@@ -90,17 +101,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cardiac_fp_analyzer.project import (
-    PROJECT_FILENAME,
+from cardiac_fp_analyzer.study import (
+    STUDY_FILENAME,
     Group,
-    Project,
+    Study,
     add_file_to_group,
     add_group,
     find_group,
-    load_project,
+    load_study,
     remove_group,
     resolve_file_path,
-    save_project,
+    save_study,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,9 +119,9 @@ logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────
 #  Role constants for QTreeWidgetItem.data() — which layer does the row
-#  represent, and what's its key in the Project model.
+#  represent, and what's its key in the Study model.
 # ─────────────────────────────────────────────────────────────────────────
-_KIND_ROLE = Qt.UserRole + 1      # "project" | "group" | "file"
+_KIND_ROLE = Qt.UserRole + 1      # "study" | "group" | "file"
 _GROUP_NAME_ROLE = Qt.UserRole + 2   # str (for group + file rows)
 _FILE_INDEX_ROLE = Qt.UserRole + 3   # int (position within group.files)
 
@@ -206,11 +217,11 @@ class _GroupDialog(QDialog):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Project panel
+#  Study panel
 # ═══════════════════════════════════════════════════════════════════════
 
-class ProjectPanel(QWidget):
-    """Dockable panel that manages a single :class:`Project`.
+class StudyPanel(QWidget):
+    """Dockable panel that manages a single :class:`Study`.
 
     Signals
     -------
@@ -218,44 +229,44 @@ class ProjectPanel(QWidget):
         Emitted when the user double-clicks a file row.  Payload is the
         **absolute** CSV path, ready to hand to ``MainWindow._run_analysis``.
 
-    project_changed()
+    study_changed()
         Emitted after every successful mutation (add / remove / edit /
         load).  Primarily so the window title / status-bar can reflect
-        the current project name; the model on disk has already been
+        the current study name; the model on disk has already been
         saved by the time this fires.
     """
 
     file_activated = Signal(str)
-    project_changed = Signal()
+    study_changed = Signal()
 
     # ── Construction ──────────────────────────────────────────────────
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._project: Project | None = None
+        self._study: Study | None = None
 
         # ── Toolbar ───────────────────────────────────────────────────
         # Layout in three groups, separated visually:
-        #   1. Project lifecycle   : New / Open / Close
-        #   2. Project editing     : Add group / Add CSV / Group settings /
+        #   1. Study lifecycle     : New / Open / Close
+        #   2. Study editing       : Add group / Add CSV / Group settings /
         #                            Remove (group or file)
-        #   3. Destructive project : Delete sidecar (kept at the far end so
+        #   3. Destructive study   : Delete sidecar (kept at the far end so
         #                            accidental click-streaks don't land on
         #                            it — see audit notes in module docstring).
-        self._toolbar = QToolBar(self.tr("Progetto"))
+        self._toolbar = QToolBar(self.tr("Studio"))
         self._toolbar.setIconSize(self._toolbar.iconSize())  # keep defaults
 
-        self._act_new = QAction(self.tr("Nuovo progetto..."), self)
-        self._act_open = QAction(self.tr("Apri progetto..."), self)
-        self._act_close = QAction(self.tr("Chiudi progetto"), self)
+        self._act_new = QAction(self.tr("Nuovo studio..."), self)
+        self._act_open = QAction(self.tr("Apri studio..."), self)
+        self._act_close = QAction(self.tr("Chiudi studio"), self)
         self._act_add_group = QAction(self.tr("Aggiungi gruppo..."), self)
         self._act_add_file = QAction(self.tr("Aggiungi CSV al gruppo..."), self)
         self._act_group_settings = QAction(
             self.tr("Impostazioni gruppo..."), self,
         )
         self._act_remove = QAction(self.tr("Rimuovi"), self)
-        self._act_delete_project = QAction(
-            self.tr("Elimina sidecar progetto..."), self,
+        self._act_delete_study = QAction(
+            self.tr("Elimina sidecar studio..."), self,
         )
 
         # Group 1 — lifecycle.
@@ -270,16 +281,16 @@ class ProjectPanel(QWidget):
         self._toolbar.addAction(self._act_remove)
         self._toolbar.addSeparator()
         # Group 3 — destructive. Distanced from the editing group on purpose.
-        self._toolbar.addAction(self._act_delete_project)
+        self._toolbar.addAction(self._act_delete_study)
 
-        self._act_new.triggered.connect(self._on_new_project)
-        self._act_open.triggered.connect(self._on_open_project)
-        self._act_close.triggered.connect(self._on_close_project)
+        self._act_new.triggered.connect(self._on_new_study)
+        self._act_open.triggered.connect(self._on_open_study)
+        self._act_close.triggered.connect(self._on_close_study)
         self._act_add_group.triggered.connect(self._on_add_group)
         self._act_add_file.triggered.connect(self._on_add_file)
         self._act_group_settings.triggered.connect(self._on_group_settings)
         self._act_remove.triggered.connect(self._on_remove)
-        self._act_delete_project.triggered.connect(self._on_delete_project)
+        self._act_delete_study.triggered.connect(self._on_delete_study)
 
         # ── Tree ──────────────────────────────────────────────────────
         self._tree = QTreeWidget()
@@ -292,13 +303,13 @@ class ProjectPanel(QWidget):
         self._tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         self._tree.currentItemChanged.connect(self._refresh_actions)
 
-        # ── Empty-state label, shown instead of the tree until a project
+        # ── Empty-state label, shown instead of the tree until a study
         #   is opened or created.  Kept as a sibling widget rather than
         #   stuffed into the tree header because PyQtGraph-style "empty
         #   plot" placeholders are much clearer than a 1-row dummy tree.
         self._hint = QLabel(self.tr(
-            "Nessun progetto aperto.  Usa “Nuovo progetto…” o "
-            "“Apri progetto…” per iniziare."
+            "Nessuno studio aperto.  Usa “Nuovo studio…” o "
+            "“Apri studio…” per iniziare."
         ))
         self._hint.setWordWrap(True)
         self._hint.setAlignment(Qt.AlignCenter)
@@ -316,61 +327,60 @@ class ProjectPanel(QWidget):
 
     # ── Public API ────────────────────────────────────────────────────
 
-    def current_project(self) -> Project | None:
-        """Return the currently-loaded :class:`Project`, or ``None``."""
-        return self._project
+    def current_study(self) -> Study | None:
+        """Return the currently-loaded :class:`Study`, or ``None``."""
+        return self._study
 
-    def set_project(self, project: Project | None) -> None:
-        """Replace the loaded project.  Does NOT save — caller's problem.
+    def set_study(self, study: Study | None) -> None:
+        """Replace the loaded study.  Does NOT save — caller's problem.
 
-        This is the single choke point for swapping projects in the
+        This is the single choke point for swapping studies in the
         panel, so keep it side-effect-light: refresh the tree, enable
-        actions, fire ``project_changed``.  Persistence is handled on
-        the *caller* side via :func:`save_project`.
+        actions, fire ``study_changed``.  Persistence is handled on
+        the *caller* side via :func:`save_study`.
         """
-        self._project = project
+        self._study = study
         self._rebuild_tree()
         self._refresh_actions()
-        self.project_changed.emit()
+        self.study_changed.emit()
 
     # ═════════════════════════════════════════════════════════════════
     #  Toolbar handlers
     # ═════════════════════════════════════════════════════════════════
 
-    def _on_new_project(self) -> None:
-        """Create a new project sidecar in a user-chosen folder.
+    def _on_new_study(self) -> None:
+        """Create a new study sidecar in a user-chosen folder.
 
-        Refuses to overwrite an existing ``.cfp-project.json`` so we
-        never clobber someone else's project by accident — the user can
-        pick the same folder again explicitly via "Apri progetto".
+        Refuses to overwrite an existing ``.cfp-study.json`` so we
+        never clobber someone else's study by accident — the user can
+        pick the same folder again explicitly via "Apri studio".
         """
         folder = QFileDialog.getExistingDirectory(
-            self, self.tr("Cartella del nuovo progetto"),
+            self, self.tr("Cartella del nuovo studio"),
         )
         if not folder:
             return
         folder_path = Path(folder)
 
-        # Existing sidecar → bail out and suggest "Apri progetto".  We
+        # Existing sidecar → bail out and suggest "Apri studio".  We
         # do not auto-adopt because differing schema versions or stale
         # sidecars would silently override the user's intent.
-        if (folder_path / ".cfp-project.json").is_file():
+        if (folder_path / STUDY_FILENAME).is_file():
             QMessageBox.warning(
-                self, self.tr("Progetto già presente"),
+                self, self.tr("Studio già presente"),
                 self.tr(
-                    "Questa cartella contiene già un progetto "
-                    "(.cfp-project.json).  Usa “Apri progetto…” "
-                    "per caricarlo."
-                ),
+                    "Questa cartella contiene già uno studio "
+                    "({0}).  Usa “Apri studio…” per caricarlo."
+                ).format(STUDY_FILENAME),
             )
             return
 
         # Default name = folder basename so users don't have to type it
         # twice; they can still rename later by re-saving with a
-        # different project.name (not exposed in the PoC UI).
-        default_name = folder_path.name or "new-project"
+        # different study.name (not exposed in the PoC UI).
+        default_name = folder_path.name or "new-study"
         name, ok = QInputDialog.getText(
-            self, self.tr("Nome progetto"),
+            self, self.tr("Nome studio"),
             self.tr("Nome:"),
             text=default_name,
         )
@@ -378,44 +388,43 @@ class ProjectPanel(QWidget):
             return
         name = name.strip() or default_name
 
-        project = Project(name=name, folder=str(folder_path))
+        study = Study(name=name, folder=str(folder_path))
         try:
-            save_project(project)
+            save_study(study)
         except OSError as e:
             QMessageBox.critical(
                 self, self.tr("Errore salvataggio"),
-                self.tr("Impossibile creare il progetto: {0}").format(e),
+                self.tr("Impossibile creare lo studio: {0}").format(e),
             )
             return
 
-        self.set_project(project)
+        self.set_study(study)
 
-    def _on_open_project(self) -> None:
-        """Load an existing project sidecar from a user-chosen folder."""
+    def _on_open_study(self) -> None:
+        """Load an existing study sidecar from a user-chosen folder."""
         folder = QFileDialog.getExistingDirectory(
-            self, self.tr("Cartella del progetto"),
+            self, self.tr("Cartella dello studio"),
         )
         if not folder:
             return
-        project = load_project(folder)
-        if project is None:
+        study = load_study(folder)
+        if study is None:
             QMessageBox.warning(
-                self, self.tr("Progetto non trovato"),
+                self, self.tr("Studio non trovato"),
                 self.tr(
-                    "Nessun file .cfp-project.json valido in questa "
-                    "cartella."
-                ),
+                    "Nessun file {0} valido in questa cartella."
+                ).format(STUDY_FILENAME),
             )
             return
-        self.set_project(project)
+        self.set_study(study)
 
-    def _on_close_project(self) -> None:
-        """Unload the currently-open project from the panel.
+    def _on_close_study(self) -> None:
+        """Unload the currently-open study from the panel.
 
         Scope (important for audit):
 
         * Touches **nothing** on disk — this is purely an in-memory
-          operation.  The ``.cfp-project.json`` sidecar, the CSVs, the
+          operation.  The ``.cfp-study.json`` sidecar, the CSVs, the
           per-file ``*.overrides.json`` sidecars all stay put.
         * Since every structural edit autosaves (see
           :meth:`_save_and_refresh`), there is no "unsaved work" state
@@ -426,19 +435,19 @@ class ProjectPanel(QWidget):
           is safe.
 
         After close, the panel shows its empty-state hint again; the
-        user can open a different project or create a new one.
+        user can open a different study or create a new one.
         """
-        if self._project is None:
+        if self._study is None:
             return
         logger.info(
-            "ProjectPanel: closing project %r (folder=%s) — in-memory "
+            "StudyPanel: closing study %r (folder=%s) — in-memory "
             "unload only, no disk I/O",
-            self._project.name, self._project.folder,
+            self._study.name, self._study.folder,
         )
-        self.set_project(None)
+        self.set_study(None)
 
     def _on_add_group(self) -> None:
-        if self._project is None:
+        if self._study is None:
             return
         dlg = _GroupDialog(
             title=self.tr("Nuovo gruppo"),
@@ -456,7 +465,7 @@ class ProjectPanel(QWidget):
 
         group = Group(**vals)
         try:
-            add_group(self._project, group)
+            add_group(self._study, group)
         except ValueError as e:   # duplicate name / empty name
             QMessageBox.warning(
                 self, self.tr("Impossibile aggiungere"), str(e),
@@ -468,11 +477,11 @@ class ProjectPanel(QWidget):
     def _on_add_file(self) -> None:
         """Attach one or more CSV files to the currently-selected group.
 
-        Files must live under the project folder (:func:`make_file_entry`
-        enforces it).  We point the file dialog at the project root by
+        Files must live under the study folder (:func:`make_file_entry`
+        enforces it).  We point the file dialog at the study root by
         default so the user doesn't have to re-navigate every time.
         """
-        if self._project is None:
+        if self._study is None:
             return
         group = self._selected_group()
         if group is None:
@@ -488,7 +497,7 @@ class ProjectPanel(QWidget):
         paths, _ = QFileDialog.getOpenFileNames(
             self,
             self.tr("Aggiungi CSV al gruppo “{0}”").format(group.name),
-            self._project.folder,
+            self._study.folder,
             self.tr("CSV files (*.csv);;All files (*)"),
         )
         if not paths:
@@ -498,25 +507,25 @@ class ProjectPanel(QWidget):
         added = 0
         for p in paths:
             try:
-                add_file_to_group(self._project, group.name, p)
+                add_file_to_group(self._study, group.name, p)
             except ValueError:
-                # File outside the project folder — collect, report
+                # File outside the study folder — collect, report
                 # once at the end rather than a spam-dialog per file.
                 outside.append(p)
             except KeyError:
                 # Can't happen: we just resolved ``group`` above.
                 logger.exception(
-                    "ProjectPanel._on_add_file: group %r vanished", group.name,
+                    "StudyPanel._on_add_file: group %r vanished", group.name,
                 )
             else:
                 added += 1
 
         if outside:
             QMessageBox.warning(
-                self, self.tr("File fuori dal progetto"),
+                self, self.tr("File fuori dallo studio"),
                 self.tr(
                     "I seguenti file non si trovano dentro la cartella "
-                    "del progetto e non sono stati aggiunti:\n\n{0}"
+                    "dello studio e non sono stati aggiunti:\n\n{0}"
                 ).format("\n".join(outside)),
             )
 
@@ -525,7 +534,7 @@ class ProjectPanel(QWidget):
 
     def _on_group_settings(self) -> None:
         """Edit the selected group's metadata (drug/dose/condition/...)."""
-        if self._project is None:
+        if self._study is None:
             return
         group = self._selected_group()
         if group is None:
@@ -547,7 +556,7 @@ class ProjectPanel(QWidget):
         # Name is locked in the dialog; defend against future tampering.
         if vals["name"] != group.name:
             logger.warning(
-                "ProjectPanel: group rename attempted via locked dialog "
+                "StudyPanel: group rename attempted via locked dialog "
                 "(%r → %r); ignored", group.name, vals["name"],
             )
         group.drug = vals["drug"]
@@ -560,11 +569,11 @@ class ProjectPanel(QWidget):
     def _on_remove(self) -> None:
         """Remove the selected group or file (with confirmation).
 
-        Scope is intentionally limited: we refuse to remove the project
+        Scope is intentionally limited: we refuse to remove the study
         itself from here — that's a "delete the folder in Finder" kind
         of operation, not a UI action.
         """
-        if self._project is None:
+        if self._study is None:
             return
         item = self._tree.currentItem()
         if item is None:
@@ -579,12 +588,12 @@ class ProjectPanel(QWidget):
                          "eliminati.").format(name),
             ) != QMessageBox.Yes:
                 return
-            remove_group(self._project, name)
+            remove_group(self._study, name)
             self._save_and_refresh()
         elif kind == "file":
             group_name = item.data(0, _GROUP_NAME_ROLE)
             file_idx = item.data(0, _FILE_INDEX_ROLE)
-            group = find_group(self._project, group_name)
+            group = find_group(self._study, group_name)
             if group is None or not (0 <= file_idx < len(group.files)):
                 return
             if QMessageBox.question(
@@ -595,31 +604,31 @@ class ProjectPanel(QWidget):
                 return
             del group.files[file_idx]
             self._save_and_refresh()
-        # kind == "project" or None: nothing to do.
+        # kind == "study" or None: nothing to do.
 
-    def _on_delete_project(self) -> None:
-        """Delete the project **sidecar** from disk, keep CSVs intact.
+    def _on_delete_study(self) -> None:
+        """Delete the study **sidecar** from disk, keep CSVs intact.
 
         This is the only panel action that removes a *file* (as opposed
         to rewriting one).  Spelled out in full because it will be
         audited:
 
         Affects
-            Exactly one file on disk: ``<folder>/.cfp-project.json``
-            (``PROJECT_FILENAME`` constant).
+            Exactly one file on disk: ``<folder>/.cfp-study.json``
+            (``STUDY_FILENAME`` constant).
 
         Does NOT affect
-            * the project **folder** itself (only the sidecar inside it);
+            * the study **folder** itself (only the sidecar inside it);
             * the CSV files of the experimental signals;
             * per-file override sidecars (``*.overrides.json``) — those
               live next to the CSVs, are keyed by CSV path, and remain
-              valid even if the project mapping is removed;
+              valid even if the study mapping is removed;
             * any other file in the folder.
 
         Intended use-cases
-            * The user wants to stop treating a folder as a project but
+            * The user wants to stop treating a folder as a study but
               keep the raw data (renaming, re-organising, hand-off).
-            * The project JSON is corrupt and the user wants a clean
+            * The study JSON is corrupt and the user wants a clean
               slate without losing the CSVs that the sidecar was
               indexing.
 
@@ -632,24 +641,24 @@ class ProjectPanel(QWidget):
               icon) with explicit wording about what is and is not
               affected.  Default button is **No**, so hammering ↵ on an
               open dialog will NOT delete anything.
-            * After deletion, the panel unloads the in-memory project
+            * After deletion, the panel unloads the in-memory study
               so the stale state can't be re-saved and silently
               resurrect the sidecar.
 
         Audit trail
             * On confirm we log ``logger.warning`` with the absolute
-              path *and* the project name; the log line precedes the
+              path *and* the study name; the log line precedes the
               ``os.remove`` call so the audit record exists even if
               the unlink then fails.
             * Failure modes (``OSError``) surface to the user via
               :class:`QMessageBox.critical` and are re-logged with
               ``logger.exception`` — no silent swallow.
         """
-        if self._project is None:
+        if self._study is None:
             return
-        sidecar = Path(self._project.folder) / PROJECT_FILENAME
-        project_name = self._project.name
-        project_folder = self._project.folder
+        sidecar = Path(self._study.folder) / STUDY_FILENAME
+        study_name = self._study.name
+        study_folder = self._study.folder
 
         # Short-circuit: sidecar already gone (user removed it from
         # Finder while the panel was open).  Offer to clear the panel
@@ -657,10 +666,10 @@ class ProjectPanel(QWidget):
         # the user wanted.
         if not sidecar.exists():
             logger.info(
-                "ProjectPanel: delete requested but sidecar %s already "
+                "StudyPanel: delete requested but sidecar %s already "
                 "missing — unloading panel", sidecar,
             )
-            self.set_project(None)
+            self.set_study(None)
             return
 
         # Explicit confirmation.  Text lists every artefact the user
@@ -668,15 +677,15 @@ class ProjectPanel(QWidget):
         # an informed click, not a default-to-destructive.
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle(self.tr("Elimina sidecar progetto"))
+        box.setWindowTitle(self.tr("Elimina sidecar studio"))
         box.setText(self.tr(
-            "Eliminare il file di progetto “{0}”?"
-        ).format(PROJECT_FILENAME))
+            "Eliminare il file di studio “{0}”?"
+        ).format(STUDY_FILENAME))
         box.setInformativeText(self.tr(
             "Verrà eliminato SOLO il file:\n\n"
             "    {0}\n\n"
             "NON verranno toccati:\n"
-            "  • la cartella del progetto\n"
+            "  • la cartella dello studio\n"
             "  • i file CSV di segnale\n"
             "  • i file di correzione per-segnale "
             "(*.overrides.json)\n\n"
@@ -690,31 +699,31 @@ class ProjectPanel(QWidget):
         # ── Audit record (emitted BEFORE the unlink on purpose, so the
         #    trail exists even if the OS then refuses the delete).
         logger.warning(
-            "ProjectPanel: deleting project sidecar — user=%s, "
-            "project=%r, folder=%s, sidecar=%s",
+            "StudyPanel: deleting study sidecar — user=%s, "
+            "study=%r, folder=%s, sidecar=%s",
             os.getlogin() if _safe_getlogin_available() else "unknown",
-            project_name, project_folder, sidecar,
+            study_name, study_folder, sidecar,
         )
 
         try:
             os.remove(sidecar)
         except OSError as e:
             logger.exception(
-                "ProjectPanel: failed to delete sidecar %s", sidecar,
+                "StudyPanel: failed to delete sidecar %s", sidecar,
             )
             QMessageBox.critical(
                 self, self.tr("Eliminazione fallita"),
                 self.tr(
-                    "Impossibile eliminare il file di progetto:\n\n"
+                    "Impossibile eliminare il file di studio:\n\n"
                     "    {0}\n\n"
                     "Errore: {1}"
                 ).format(sidecar, e),
             )
             return
 
-        # Unload the now-orphaned in-memory project so a later edit
+        # Unload the now-orphaned in-memory study so a later edit
         # cannot silently resurrect the sidecar via autosave.
-        self.set_project(None)
+        self.set_study(None)
 
     # ═════════════════════════════════════════════════════════════════
     #  Tree events
@@ -724,16 +733,16 @@ class ProjectPanel(QWidget):
         self, item: QTreeWidgetItem, _column: int,
     ) -> None:
         """Double-clicking a file row emits :attr:`file_activated`."""
-        if self._project is None:
+        if self._study is None:
             return
         if item.data(0, _KIND_ROLE) != "file":
             return
         group_name = item.data(0, _GROUP_NAME_ROLE)
         file_idx = item.data(0, _FILE_INDEX_ROLE)
-        group = find_group(self._project, group_name)
+        group = find_group(self._study, group_name)
         if group is None or not (0 <= file_idx < len(group.files)):
             return
-        abspath = resolve_file_path(self._project, group.files[file_idx])
+        abspath = resolve_file_path(self._study, group.files[file_idx])
         if not abspath.is_file():
             QMessageBox.warning(
                 self, self.tr("File mancante"),
@@ -749,47 +758,47 @@ class ProjectPanel(QWidget):
     # ═════════════════════════════════════════════════════════════════
 
     def _save_and_refresh(self) -> None:
-        """Persist the project to disk, then rebuild the tree.
+        """Persist the study to disk, then rebuild the tree.
 
         On save failure we leave the in-memory model edited but warn
         the user — better than silently reverting, which would lose
         work the user thought they'd committed.
         """
-        if self._project is None:
+        if self._study is None:
             return
         try:
-            save_project(self._project)
+            save_study(self._study)
         except OSError as e:
             QMessageBox.warning(
                 self, self.tr("Salvataggio fallito"),
                 self.tr(
-                    "Impossibile salvare il progetto su disco ({0}).  "
+                    "Impossibile salvare lo studio su disco ({0}).  "
                     "Le modifiche restano in memoria ma potrebbero "
                     "andare perse alla chiusura."
                 ).format(e),
             )
         self._rebuild_tree()
         self._refresh_actions()
-        self.project_changed.emit()
+        self.study_changed.emit()
 
     def _selected_group(self) -> Group | None:
         """Return the currently-selected group (walks up from file rows)."""
-        if self._project is None:
+        if self._study is None:
             return None
         item = self._tree.currentItem()
         while item is not None:
             kind = item.data(0, _KIND_ROLE)
             if kind == "group":
                 return find_group(
-                    self._project, item.data(0, _GROUP_NAME_ROLE),
+                    self._study, item.data(0, _GROUP_NAME_ROLE),
                 )
             item = item.parent()
         return None
 
     def _rebuild_tree(self) -> None:
-        """Repopulate the tree from :attr:`_project`.  O(N) rows."""
+        """Repopulate the tree from :attr:`_study`.  O(N) rows."""
         self._tree.clear()
-        if self._project is None:
+        if self._study is None:
             self._hint.show()
             self._tree.hide()
             return
@@ -797,12 +806,12 @@ class ProjectPanel(QWidget):
         self._tree.show()
 
         root = QTreeWidgetItem(self._tree)
-        root.setText(0, self._project.name)
-        root.setText(1, self.tr("{0} gruppi").format(len(self._project.groups)))
-        root.setData(0, _KIND_ROLE, "project")
+        root.setText(0, self._study.name)
+        root.setText(1, self.tr("{0} gruppi").format(len(self._study.groups)))
+        root.setData(0, _KIND_ROLE, "study")
         root.setExpanded(True)
 
-        for group in self._project.groups:
+        for group in self._study.groups:
             g_item = QTreeWidgetItem(root)
             g_item.setText(0, group.name)
             g_item.setText(1, _format_group_details(group))
@@ -835,25 +844,25 @@ class ProjectPanel(QWidget):
         Rule of thumb:
 
         * *New / Open* are always enabled (lifecycle entry points).
-        * *Close / Delete sidecar* require a loaded project.
-        * *Add group* requires a loaded project.
+        * *Close / Delete sidecar* require a loaded study.
+        * *Add group* requires a loaded study.
         * *Add CSV / Group settings / Remove* additionally require a
           group-or-file selection in the tree (we walk up from file
           rows via :meth:`_selected_group` for file-level selections,
           so either kind is a valid anchor).
         """
-        has_project = self._project is not None
+        has_study = self._study is not None
 
-        # Lifecycle group — Close / Delete depend on "project loaded".
-        self._act_close.setEnabled(has_project)
-        self._act_delete_project.setEnabled(has_project)
+        # Lifecycle group — Close / Delete depend on "study loaded".
+        self._act_close.setEnabled(has_study)
+        self._act_delete_study.setEnabled(has_study)
 
         # Editing group.
-        self._act_add_group.setEnabled(has_project)
+        self._act_add_group.setEnabled(has_study)
 
         item = self._tree.currentItem()
         kind = item.data(0, _KIND_ROLE) if item is not None else None
-        can_edit_group = has_project and kind in ("group", "file")
+        can_edit_group = has_study and kind in ("group", "file")
         self._act_add_file.setEnabled(can_edit_group)
         self._act_group_settings.setEnabled(can_edit_group)
         self._act_remove.setEnabled(can_edit_group)

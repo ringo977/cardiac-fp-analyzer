@@ -49,8 +49,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyside_app.project_panel import ProjectPanel
 from pyside_app.signal_viewer import SignalViewer
+from pyside_app.study_panel import StudyPanel
 
 # ═══════════════════════════════════════════════════════════════════════
 #   Template representativity constants
@@ -456,7 +456,7 @@ class _SignalTab(QWidget):
     def set_channel(self, value: str) -> None:
         """Programmatically set the channel combo without emitting a signal.
 
-        Useful on app start / project load when we need to reflect a
+        Useful on app start / study load when we need to reflect a
         saved preference without triggering an analyze_single_file.
         Falls back to ``Auto`` if ``value`` is not in the allowed list.
         """
@@ -1786,37 +1786,40 @@ class MainWindow(QMainWindow):
         act_quit.triggered.connect(self.close)
         m_file.addAction(act_quit)
 
-        # ─── Projects menu + dock (task #84 step 2) ────────────────
-        # The Projects panel is dockable on the left and hidden by
+        # ─── Studi menu + dock (task #84 step 2) ───────────────────
+        # The Studi panel is dockable on the left and hidden by
         # default — single-file Apri CSV is still the primary flow;
-        # project-mode is opt-in for users running a dose-response.
-        self._project_panel = ProjectPanel()
-        self._project_dock = QDockWidget(self.tr("Progetti"), self)
-        self._project_dock.setObjectName("projects-dock")
-        self._project_dock.setWidget(self._project_panel)
-        self._project_dock.setAllowedAreas(
+        # study-mode is opt-in for users running a dose-response.
+        # Terminology: "Studio" (not "Progetto") aligns with GLP /
+        # 21 CFR Part 58 and CDISC ``STUDYID`` — see the module
+        # docstring of ``cardiac_fp_analyzer.study`` for rationale.
+        self._study_panel = StudyPanel()
+        self._study_dock = QDockWidget(self.tr("Studi"), self)
+        self._study_dock.setObjectName("studies-dock")
+        self._study_dock.setWidget(self._study_panel)
+        self._study_dock.setAllowedAreas(
             Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea
         )
-        self.addDockWidget(Qt.LeftDockWidgetArea, self._project_dock)
-        self._project_dock.hide()
+        self.addDockWidget(Qt.LeftDockWidgetArea, self._study_dock)
+        self._study_dock.hide()
 
         # Double-click on a file in the tree → reuse the normal analyze
         # path, honouring whatever channel the user has selected.  The
         # file entry's own ``channel`` field is not plumbed through in
         # the PoC (step 2): that's a step-3 refinement once batch-per-
         # group lands.
-        self._project_panel.file_activated.connect(
+        self._study_panel.file_activated.connect(
             lambda path: self._run_analysis(
                 path, channel=self._signal_tab.channel_choice(),
             )
         )
-        self._project_panel.project_changed.connect(self._on_project_changed)
+        self._study_panel.study_changed.connect(self._on_study_changed)
 
-        m_projects = self.menuBar().addMenu(self.tr("&Progetti"))
-        act_toggle_projects = self._project_dock.toggleViewAction()
-        act_toggle_projects.setText(self.tr("&Mostra pannello progetti"))
-        act_toggle_projects.setShortcut("Ctrl+Shift+P")
-        m_projects.addAction(act_toggle_projects)
+        m_studies = self.menuBar().addMenu(self.tr("&Studi"))
+        act_toggle_studies = self._study_dock.toggleViewAction()
+        act_toggle_studies.setText(self.tr("&Mostra pannello studi"))
+        act_toggle_studies.setShortcut("Ctrl+Shift+P")
+        m_studies.addAction(act_toggle_studies)
 
         # ─── Keyboard shortcuts (global) ───────────────────────────
         # Registered at the MainWindow level so they fire no matter
@@ -2209,14 +2212,14 @@ class MainWindow(QMainWindow):
         self._update_window_title(None, None)
         self.statusBar().showMessage(status_msg)
 
-    def _on_project_changed(self) -> None:
-        """Status-bar hint when a project is opened / created (task #84)."""
-        p = self._project_panel.current_project()
-        if p is None:
+    def _on_study_changed(self) -> None:
+        """Status-bar hint when a study is opened / created (task #84)."""
+        s = self._study_panel.current_study()
+        if s is None:
             return
         self.statusBar().showMessage(
-            self.tr("Progetto: {0} — {1} gruppi").format(
-                p.name, len(p.groups),
+            self.tr("Studio: {0} — {1} gruppi").format(
+                s.name, len(s.groups),
             )
         )
 

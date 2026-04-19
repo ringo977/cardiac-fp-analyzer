@@ -1,4 +1,15 @@
-"""Project / Group / File domain model for dose-response workflows.
+"""Study / Group / File domain model for dose-response workflows.
+
+Terminology note
+----------------
+Top-level container is **Study** — the GLP / OECD / 21 CFR Part 58 term
+for a protocolled nonclinical investigation, and the top-level key
+(``STUDYID``) in CDISC SDTM datasets.  "Project" was considered and
+rejected: it has no regulatory semantics, and in CDISC ADaM the word
+"Analysis" already has a precise meaning (post-raw derivation).  If an
+umbrella concept above Study is ever needed (e.g. a multi-study
+campaign on the same compound), that is where "project" would
+correctly belong.
 
 Rationale
 ---------
@@ -14,19 +25,20 @@ single-file analysis:
 
 * :class:`FileEntry`  — one CSV + channel choice + free-text note.
 * :class:`Group`      — a set of file entries sharing a drug/dose/
-  condition, with its own :class:`AnalysisConfig`.
-* :class:`Project`    — a collection of groups persisted next to the
-  data as ``.cfp-project.json``.
+  condition, with its own :class:`AnalysisConfig`.  Maps to a
+  CDISC "treatment arm" / dose group.
+* :class:`Study`      — a collection of groups persisted next to the
+  data as ``.cfp-study.json``.
 
 Persistence
 -----------
-A project is a folder with a ``.cfp-project.json`` sidecar.  The JSON
+A study is a folder with a ``.cfp-study.json`` sidecar.  The JSON
 stores *relative* CSV paths so the whole folder can be moved or
-renamed and the project still loads.  Atomic write via ``tempfile`` +
+renamed and the study still loads.  Atomic write via ``tempfile`` +
 ``os.replace`` — same pattern as :mod:`cardiac_fp_analyzer.overrides`.
 
-The in-memory :class:`Project` carries an absolute ``folder`` attribute
-that is **not serialised**: it is set by :func:`load_project` from
+The in-memory :class:`Study` carries an absolute ``folder`` attribute
+that is **not serialised**: it is set by :func:`load_study` from
 whichever path you give it.  That keeps the on-disk format portable
 while the in-memory object knows how to resolve relative CSV paths
 without round-tripping through the caller.
@@ -40,7 +52,7 @@ Design notes
   ``FileEntry.config_override: AnalysisConfig | None``.
 * Analysis results are **not** cached on disk.  ``.overrides.json``
   sidecars next to each CSV remain the single source of truth for
-  manual corrections; re-opening a project re-runs ``analyze_single_file``
+  manual corrections; re-opening a study re-runs ``analyze_single_file``
   on each entry, which re-applies any sidecars present.
 * No Qt import here — this module is meant to be driven by the
   PySide UI but is trivially testable headless.
@@ -60,7 +72,7 @@ from cardiac_fp_analyzer.config import AnalysisConfig
 
 logger = logging.getLogger(__name__)
 
-PROJECT_FILENAME = '.cfp-project.json'
+STUDY_FILENAME = '.cfp-study.json'
 SCHEMA_VERSION = '1'
 
 
@@ -75,8 +87,8 @@ class FileEntry:
     Attributes
     ----------
     csv_relpath : str
-        Path relative to the project folder (e.g. ``data/day1/exp6_ch2.csv``).
-        Stored relative so the project is portable across machines /
+        Path relative to the study folder (e.g. ``data/day1/exp6_ch2.csv``).
+        Stored relative so the study is portable across machines /
         folder renames.  Always forward-slash-separated on disk — the
         POSIX form round-trips on Windows without surprises.
     channel : str
@@ -166,7 +178,7 @@ class Group:
                 dose = float(raw_dose)
             except (TypeError, ValueError):
                 logger.warning(
-                    "project: ignoring non-numeric dose_uM=%r for group %r",
+                    "study: ignoring non-numeric dose_uM=%r for group %r",
                     raw_dose, d.get('name'),
                 )
                 dose = None
@@ -193,16 +205,16 @@ class Group:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Project
+#  Study
 # ═══════════════════════════════════════════════════════════════════════
 
 @dataclass
-class Project:
-    """Top-level container persisted to ``<folder>/.cfp-project.json``.
+class Study:
+    """Top-level container persisted to ``<folder>/.cfp-study.json``.
 
-    ``folder`` is the absolute on-disk path of the project directory.
-    It is set by :func:`load_project` / :func:`save_project` — do NOT
-    serialise it, because a project moved to a different machine would
+    ``folder`` is the absolute on-disk path of the study directory.
+    It is set by :func:`load_study` / :func:`save_study` — do NOT
+    serialise it, because a study moved to a different machine would
     carry a stale path.
     """
 
@@ -215,8 +227,8 @@ class Project:
 
     @property
     def sidecar_path(self) -> Path:
-        """Absolute path of the ``.cfp-project.json`` sidecar."""
-        return Path(self.folder) / PROJECT_FILENAME
+        """Absolute path of the ``.cfp-study.json`` sidecar."""
+        return Path(self.folder) / STUDY_FILENAME
 
     # ── Serialisation ─────────────────────────────────────────────────
 
@@ -232,7 +244,7 @@ class Project:
         }
 
     @classmethod
-    def from_dict(cls, d: dict, folder: str | os.PathLike) -> Project:
+    def from_dict(cls, d: dict, folder: str | os.PathLike) -> Study:
         """Build from a loaded dict, combined with the on-disk folder.
 
         ``folder`` is supplied by the caller (the loader) because it's
@@ -254,15 +266,15 @@ class Project:
 #  Load / save
 # ═══════════════════════════════════════════════════════════════════════
 
-def load_project(folder: str | os.PathLike) -> Project | None:
-    """Load the project from ``<folder>/.cfp-project.json``.
+def load_study(folder: str | os.PathLike) -> Study | None:
+    """Load the study from ``<folder>/.cfp-study.json``.
 
     Returns ``None`` if the sidecar is missing, malformed, or not a JSON
     object.  A missing sidecar is not an error — callers should treat a
-    ``None`` return as "this folder is not a project yet".
+    ``None`` return as "this folder is not a study yet".
     """
     folder_path = Path(folder)
-    sidecar = folder_path / PROJECT_FILENAME
+    sidecar = folder_path / STUDY_FILENAME
     if not sidecar.is_file():
         return None
     try:
@@ -270,39 +282,39 @@ def load_project(folder: str | os.PathLike) -> Project | None:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning(
-            "project: failed to read %s (%s); treating as missing",
+            "study: failed to read %s (%s); treating as missing",
             sidecar, exc,
         )
         return None
     if not isinstance(data, dict):
         logger.warning(
-            "project: %s is not a JSON object; treating as missing", sidecar)
+            "study: %s is not a JSON object; treating as missing", sidecar)
         return None
-    return Project.from_dict(data, folder=folder_path)
+    return Study.from_dict(data, folder=folder_path)
 
 
-def save_project(project: Project) -> Path:
-    """Atomically write the project sidecar.
+def save_study(study: Study) -> Path:
+    """Atomically write the study sidecar.
 
     The destination folder must already exist — we don't silently
-    create it, since a project targets a specific data directory and
+    create it, since a study targets a specific data directory and
     silently creating a new folder elsewhere would be surprising.
 
     Returns the sidecar path (useful for the UI to display).
     """
-    folder = Path(project.folder)
+    folder = Path(study.folder)
     if not folder.is_dir():
         raise FileNotFoundError(
-            f"save_project: folder does not exist: {folder}"
+            f"save_study: folder does not exist: {folder}"
         )
-    sidecar = folder / PROJECT_FILENAME
+    sidecar = folder / STUDY_FILENAME
     fd, tmp_path = tempfile.mkstemp(
         prefix=sidecar.name + '.', suffix='.tmp', dir=str(folder),
     )
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as fh:
             json.dump(
-                project.to_dict(), fh, indent=2, sort_keys=True,
+                study.to_dict(), fh, indent=2, sort_keys=True,
                 ensure_ascii=False,
             )
             fh.write('\n')
@@ -315,44 +327,44 @@ def save_project(project: Project) -> Path:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Path / membership helpers
+#  Helpers
 # ═══════════════════════════════════════════════════════════════════════
 
-def resolve_file_path(project: Project, entry: FileEntry) -> Path:
+def resolve_file_path(study: Study, entry: FileEntry) -> Path:
     """Return the absolute path of a :class:`FileEntry` on disk.
 
-    Joins the project folder with the entry's relative path.  Does
+    Joins the study folder with the entry's relative path.  Does
     *not* check for existence — callers that need that should call
     ``.is_file()`` themselves.
     """
-    return (Path(project.folder) / entry.csv_relpath).resolve()
+    return (Path(study.folder) / entry.csv_relpath).resolve()
 
 
 def make_file_entry(
-    project: Project,
+    study: Study,
     csv_path: str | os.PathLike,
     channel: str = 'auto',
     note: str = '',
 ) -> FileEntry:
-    """Build a :class:`FileEntry` whose path is relative to the project.
+    """Build a :class:`FileEntry` whose path is relative to the study.
 
     Accepts both absolute paths (typical from a file-open dialog) and
-    paths already relative to the project folder.  Raises ``ValueError``
-    if the target isn't within the project folder — keeps the project
+    paths already relative to the study folder.  Raises ``ValueError``
+    if the target isn't within the study folder — keeps the study
     self-contained and portable.
     """
-    project_root = Path(project.folder).resolve()
+    study_root = Path(study.folder).resolve()
     csv_abs = Path(csv_path)
     if not csv_abs.is_absolute():
-        csv_abs = (project_root / csv_abs).resolve()
+        csv_abs = (study_root / csv_abs).resolve()
     else:
         csv_abs = csv_abs.resolve()
     try:
-        rel = csv_abs.relative_to(project_root)
+        rel = csv_abs.relative_to(study_root)
     except ValueError as exc:
         raise ValueError(
-            f"CSV is outside the project folder: {csv_abs} "
-            f"(project root: {project_root})"
+            f"CSV is outside the study folder: {csv_abs} "
+            f"(study root: {study_root})"
         ) from exc
     # POSIX-style separator on disk — stable across OSes.
     return FileEntry(
@@ -360,15 +372,15 @@ def make_file_entry(
     )
 
 
-def find_group(project: Project, name: str) -> Group | None:
+def find_group(study: Study, name: str) -> Group | None:
     """Return the first group whose ``name`` matches exactly, else ``None``."""
-    for g in project.groups:
+    for g in study.groups:
         if g.name == name:
             return g
     return None
 
 
-def add_group(project: Project, group: Group) -> None:
+def add_group(study: Study, group: Group) -> None:
     """Append a group, raising ``ValueError`` on duplicate names.
 
     Group names are the stable user-visible identifier (used in reports,
@@ -377,22 +389,22 @@ def add_group(project: Project, group: Group) -> None:
     """
     if not group.name:
         raise ValueError("add_group: group name must be non-empty")
-    if find_group(project, group.name) is not None:
+    if find_group(study, group.name) is not None:
         raise ValueError(f"add_group: duplicate group name: {group.name!r}")
-    project.groups.append(group)
+    study.groups.append(group)
 
 
-def remove_group(project: Project, name: str) -> bool:
+def remove_group(study: Study, name: str) -> bool:
     """Remove the group with the given name.  Returns True if removed."""
-    for i, g in enumerate(project.groups):
+    for i, g in enumerate(study.groups):
         if g.name == name:
-            del project.groups[i]
+            del study.groups[i]
             return True
     return False
 
 
 def add_file_to_group(
-    project: Project,
+    study: Study,
     group_name: str,
     csv_path: str | os.PathLike,
     channel: str = 'auto',
@@ -401,12 +413,12 @@ def add_file_to_group(
     """Convenience: build a :class:`FileEntry` and attach it to a group.
 
     Raises ``KeyError`` if the group doesn't exist, ``ValueError`` from
-    :func:`make_file_entry` if the CSV is outside the project folder.
+    :func:`make_file_entry` if the CSV is outside the study folder.
     """
-    group = find_group(project, group_name)
+    group = find_group(study, group_name)
     if group is None:
         raise KeyError(f"add_file_to_group: unknown group {group_name!r}")
-    entry = make_file_entry(project, csv_path, channel=channel, note=note)
+    entry = make_file_entry(study, csv_path, channel=channel, note=note)
     group.files.append(entry)
     return entry
 
@@ -416,13 +428,13 @@ def add_file_to_group(
 # ═══════════════════════════════════════════════════════════════════════
 
 __all__ = [
-    'PROJECT_FILENAME',
+    'STUDY_FILENAME',
     'SCHEMA_VERSION',
     'FileEntry',
     'Group',
-    'Project',
-    'load_project',
-    'save_project',
+    'Study',
+    'load_study',
+    'save_study',
     'resolve_file_path',
     'make_file_entry',
     'find_group',
