@@ -78,11 +78,13 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QBrush, QColor
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -94,6 +96,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressDialog,
     QToolBar,
     QTreeWidget,
     QTreeWidgetItem,
@@ -124,6 +127,52 @@ logger = logging.getLogger(__name__)
 _KIND_ROLE = Qt.UserRole + 1      # "study" | "group" | "file"
 _GROUP_NAME_ROLE = Qt.UserRole + 2   # str (for group + file rows)
 _FILE_INDEX_ROLE = Qt.UserRole + 3   # int (position within group.files)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Batch-analysis result cache (step 3 of task #84)
+# ═══════════════════════════════════════════════════════════════════════
+
+@dataclass
+class FileResult:
+    """Summary of a batch-analyze pass for one file.
+
+    Step 3 deliberately caches **only the summary** (channel + beat
+    counts + error string), not the full :class:`AnalysisResult`:
+
+    * keeping the full result for every file in a 20-file study would
+      chew through memory (each result holds the full filtered signal,
+      time vector, and beats arrays);
+    * the panel only needs enough to render badges and tooltips;
+    * a double-click on a file row re-runs :func:`analyze_single_file`
+      and populates the editing tabs, so the user still has a path to
+      inspect the raw result — batch gives the overview, double-click
+      gives the deep dive.
+
+    Attributes
+    ----------
+    status : str
+        ``'ok'`` — pipeline succeeded; ``'error'`` — raised, timed out,
+        or returned ``None`` (reason stored in ``error``).
+    channel_analyzed : str
+        What ``select_best_channel`` (or the user-pinned override)
+        actually ran on — e.g. ``'EL1'``.  Empty for errors.
+    n_included : int
+        Beats that fed the parameter extraction
+        (``len(result['beat_indices_fpd'])``) — the "useful" count
+        the user cares about for QC.
+    n_total : int
+        Beats surviving the detection + clean-up pass
+        (``len(result['beat_indices'])``).  ``>= n_included``.
+    error : str
+        Short user-facing message.  Empty when ``status == 'ok'``.
+    """
+
+    status: str                      # 'ok' | 'error'
+    channel_analyzed: str = ''
+    n_included: int = 0
+    n_total: int = 0
+    error: str = ''
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -245,12 +294,18 @@ class StudyPanel(QWidget):
         super().__init__(parent)
         self._study: Study | None = None
 
+        # Batch-analysis cache — keyed by (group_name, csv_relpath) so
+        # it stays stable under file reordering within a group.  Pruned
+        # on structural edits by :meth:`_prune_cache`.
+        self._results: dict[tuple[str, str], FileResult] = {}
+
         # ── Toolbar ───────────────────────────────────────────────────
-        # Layout in three groups, separated visually:
+        # Layout in four groups, separated visually:
         #   1. Study lifecycle     : New / Open / Close
         #   2. Study editing       : Add group / Add CSV / Group settings /
         #                            Remove (group or file)
-        #   3. Destructive study   : Delete sidecar (kept at the far end so
+        #   3. Analysis            : Analizza gruppo (batch)
+        #   4. Destructive study   : Delete sidecar (kept at the far end so
         #                            accidental click-streaks don't land on
         #                            it — see audit notes in module docstring).
         self._toolbar = QToolBar(self.tr("Studio"))
@@ -265,6 +320,7 @@ class StudyPanel(QWidget):
             self.tr("Impostazioni gruppo..."), self,
         )
         self._act_remove = QAction(self.tr("Rimuovi"), self)
+        self._act_analyze_group = QAction(self.tr("Analizza gruppo..."), self)
         self._act_delete_study = QAction(
             self.tr("Elimina sidecar studio..."), self,
         )
@@ -280,7 +336,10 @@ class StudyPanel(QWidget):
         self._toolbar.addAction(self._act_group_settings)
         self._toolbar.addAction(self._act_remove)
         self._toolbar.addSeparator()
-        # Group 3 — destructive. Distanced from the editing group on purpose.
+        # Group 3 — analysis (batch).
+        self._toolbar.addAction(self._act_analyze_group)
+        self._toolbar.addSeparator()
+        # Group 4 — destructive. Distanced from the editing group on purpose.
         self._toolbar.addAction(self._act_delete_study)
 
         self._act_new.triggered.connect(self._on_new_study)
@@ -290,6 +349,7 @@ class StudyPanel(QWidget):
         self._act_add_file.triggered.connect(self._on_add_file)
         self._act_group_settings.triggered.connect(self._on_group_settings)
         self._act_remove.triggered.connect(self._on_remove)
+        self._act_analyze_group.triggered.connect(self._on_analyze_group)
         self._act_delete_study.triggered.connect(self._on_delete_study)
 
         # ── Tree ──────────────────────────────────────────────────────
@@ -338,8 +398,14 @@ class StudyPanel(QWidget):
         panel, so keep it side-effect-light: refresh the tree, enable
         actions, fire ``study_changed``.  Persistence is handled on
         the *caller* side via :func:`save_study`.
+
+        Any previous batch-analysis results are dropped on purpose:
+        they were keyed by (group_name, csv_relpath) of the *old*
+        study and would mis-attribute to unrelated files if we kept
+        them around.
         """
         self._study = study
+        self._results.clear()
         self._rebuild_tree()
         self._refresh_actions()
         self.study_changed.emit()
@@ -606,6 +672,156 @@ class StudyPanel(QWidget):
             self._save_and_refresh()
         # kind == "study" or None: nothing to do.
 
+    def _on_analyze_group(self) -> None:
+        """Run the full pipeline on every file of the selected group.
+
+        Step 3 of task #84.  Behaviour:
+
+        * Channel selection follows :attr:`FileEntry.channel`.  The
+          default value is ``'auto'`` (assigned by ``make_file_entry``)
+          so out-of-the-box batch picks the best electrode per file via
+          :func:`select_best_channel`.  Users who have explicitly pinned
+          EL1 / EL2 on a file (e.g. because they know the other
+          electrode is dead on that chip) keep that preference.
+        * Each group carries its own :class:`AnalysisConfig` — batch
+          honours it, so a baseline group and a dose group can use
+          different QC thresholds without touching global settings.
+        * Foreground execution with a modal :class:`QProgressDialog`
+          (cancel supported).  PoC-grade: the UI freezes for the
+          duration of each individual file.  A background
+          :class:`QThreadPool` refactor is a step-3b enhancement.
+        * Results are cached by (group_name, csv_relpath) in
+          :attr:`_results`; badges in the tree reflect ✓ / ✗ / — and
+          tooltips carry the error message or beat counts.  The full
+          :class:`AnalysisResult` is **not** cached (memory) — a
+          double-click on a file still re-runs the pipeline to
+          populate the editing tabs.
+
+        Audit note: exceptions from the scientific pipeline are
+        logged via ``logger.exception`` with the file path, so a
+        terminal audit shows *which* file failed and why.
+        """
+        if self._study is None:
+            return
+        group = self._selected_group()
+        if group is None:
+            QMessageBox.information(
+                self, self.tr("Seleziona un gruppo"),
+                self.tr(
+                    "Seleziona prima un gruppo nell'albero, poi "
+                    "“Analizza gruppo”."
+                ),
+            )
+            return
+        if not group.files:
+            QMessageBox.information(
+                self, self.tr("Gruppo vuoto"),
+                self.tr(
+                    "Il gruppo “{0}” non contiene file.  Aggiungi "
+                    "almeno un CSV prima di avviare l'analisi."
+                ).format(group.name),
+            )
+            return
+
+        # Import here (not at module top) so the panel still loads
+        # even if the scientific core has an import error — same
+        # approach as MainWindow._run_analysis.
+        from cardiac_fp_analyzer.analyze import analyze_single_file
+
+        n = len(group.files)
+        progress = QProgressDialog(
+            self.tr("Analisi gruppo “{0}”...").format(group.name),
+            self.tr("Annulla"),
+            0, n, self,
+        )
+        progress.setWindowTitle(self.tr("Analisi gruppo"))
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)   # show immediately for small N
+        progress.setValue(0)
+
+        logger.info(
+            "StudyPanel: batch analyze — group=%r, n_files=%d, study=%s",
+            group.name, n, self._study.folder,
+        )
+
+        for i, fe in enumerate(group.files):
+            if progress.wasCanceled():
+                logger.info(
+                    "StudyPanel: batch analyze cancelled after %d/%d files",
+                    i, n,
+                )
+                break
+            progress.setLabelText(
+                self.tr("({0}/{1}) {2}").format(i + 1, n, fe.csv_relpath)
+            )
+            QApplication.processEvents()
+
+            key = (group.name, fe.csv_relpath)
+            abspath = resolve_file_path(self._study, fe)
+            if not abspath.is_file():
+                self._results[key] = FileResult(
+                    status='error',
+                    error=self.tr(
+                        "File non trovato: {0}"
+                    ).format(abspath),
+                )
+                progress.setValue(i + 1)
+                continue
+
+            # Clamp the per-file channel field.  We only trust the
+            # three known values; anything else (legacy / corrupt
+            # sidecar) falls back to 'auto' rather than propagating
+            # a bogus label into the pipeline.
+            ch = fe.channel if fe.channel in ('auto', 'EL1', 'EL2') else 'auto'
+
+            try:
+                result = analyze_single_file(
+                    str(abspath),
+                    channel=ch,
+                    verbose=False,
+                    config=group.config,
+                )
+            except Exception as e:   # noqa: BLE001 — batch must survive
+                logger.exception(
+                    "StudyPanel: analyze_single_file failed for %s",
+                    abspath,
+                )
+                self._results[key] = FileResult(
+                    status='error',
+                    error=f"{type(e).__name__}: {e}",
+                )
+                progress.setValue(i + 1)
+                continue
+
+            if result is None:
+                self._results[key] = FileResult(
+                    status='error',
+                    error=self.tr("Pipeline ritornata vuota"),
+                )
+                progress.setValue(i + 1)
+                continue
+
+            analyzed = (
+                (result.get('file_info') or {}).get('analyzed_channel') or ''
+            )
+            n_total = _len_or_zero(result.get('beat_indices'))
+            # ``beat_indices_fpd`` = beats that actually produced FPD
+            # (the user-meaningful "inclusi" count).  Fall back to
+            # ``beat_indices`` if the schema is older than task #73.
+            fpd_len = _len_or_zero(result.get('beat_indices_fpd'))
+            n_included = fpd_len if fpd_len > 0 else n_total
+
+            self._results[key] = FileResult(
+                status='ok',
+                channel_analyzed=str(analyzed),
+                n_included=n_included,
+                n_total=n_total,
+            )
+            progress.setValue(i + 1)
+
+        progress.setValue(n)
+        self._rebuild_tree()
+
     def _on_delete_study(self) -> None:
         """Delete the study **sidecar** from disk, keep CSVs intact.
 
@@ -763,6 +979,12 @@ class StudyPanel(QWidget):
         On save failure we leave the in-memory model edited but warn
         the user — better than silently reverting, which would lose
         work the user thought they'd committed.
+
+        Also prunes stale batch-analysis cache entries (files that no
+        longer exist in the study after the mutation that just fired).
+        We *don't* clear the whole cache — other files in the group
+        still have valid results, and the PoC does best-effort
+        preservation.
         """
         if self._study is None:
             return
@@ -777,9 +999,30 @@ class StudyPanel(QWidget):
                     "andare perse alla chiusura."
                 ).format(e),
             )
+        self._prune_cache()
         self._rebuild_tree()
         self._refresh_actions()
         self.study_changed.emit()
+
+    def _prune_cache(self) -> None:
+        """Drop cache entries whose (group, file) pair no longer exists.
+
+        Called after every mutation so removing a file / group /
+        study doesn't leave ghost badges behind.  Entries for files
+        that still exist keep their last known status (✓ / ✗) — the
+        user has to re-run batch to refresh.
+        """
+        if self._study is None:
+            self._results.clear()
+            return
+        valid = {
+            (g.name, f.csv_relpath)
+            for g in self._study.groups
+            for f in g.files
+        }
+        stale = [k for k in self._results if k not in valid]
+        for k in stale:
+            del self._results[k]
 
     def _selected_group(self) -> Group | None:
         """Return the currently-selected group (walks up from file rows)."""
@@ -796,7 +1039,21 @@ class StudyPanel(QWidget):
         return None
 
     def _rebuild_tree(self) -> None:
-        """Repopulate the tree from :attr:`_study`.  O(N) rows."""
+        """Repopulate the tree from :attr:`_study`.  O(N) rows.
+
+        Batch-analysis state (step 3) is layered in:
+
+        * File rows get a status badge prefix in column 0 — ``✓`` /
+          ``✗`` / no prefix for "never analysed".
+        * Error status colours the row red; ok leaves the default
+          theme colour (don't fight the user's OS theme).
+        * Tooltip on column 0 carries the full error message or the
+          channel + beat counts (gives the user something to read
+          before committing to a double-click re-analyse).
+        * Group rows get an aggregate suffix in column 1 —
+          ``"… · 3 file · 2✓ 1✗"`` — so the user sees at a glance
+          which groups still have work to do.
+        """
         self._tree.clear()
         if self._study is None:
             self._hint.show()
@@ -814,25 +1071,52 @@ class StudyPanel(QWidget):
         for group in self._study.groups:
             g_item = QTreeWidgetItem(root)
             g_item.setText(0, group.name)
-            g_item.setText(1, _format_group_details(group))
+
+            # Aggregate batch status for the group, appended after the
+            # normal details — kept as a suffix so existing logic that
+            # reads ``_format_group_details`` stays pure.
+            details = _format_group_details(group)
+            agg = _aggregate_status(
+                [self._results.get((group.name, f.csv_relpath))
+                 for f in group.files]
+            )
+            if agg:
+                details = f"{details}  ·  {agg}"
+            g_item.setText(1, details)
             g_item.setData(0, _KIND_ROLE, "group")
             g_item.setData(0, _GROUP_NAME_ROLE, group.name)
             g_item.setExpanded(True)
 
             for idx, entry in enumerate(group.files):
                 f_item = QTreeWidgetItem(g_item)
-                # Show just the filename — the full relpath goes in the
-                # details column so long paths don't blow out column 0.
-                f_item.setText(0, Path(entry.csv_relpath).name)
-                details = entry.csv_relpath
+                f_details = entry.csv_relpath
                 if entry.channel and entry.channel != "auto":
-                    details = f"{details}  ·  {entry.channel.upper()}"
+                    f_details = f"{f_details}  ·  {entry.channel.upper()}"
                 if entry.note:
-                    details = f"{details}  ·  {entry.note}"
-                f_item.setText(1, details)
+                    f_details = f"{f_details}  ·  {entry.note}"
                 f_item.setData(0, _KIND_ROLE, "file")
                 f_item.setData(0, _GROUP_NAME_ROLE, group.name)
                 f_item.setData(0, _FILE_INDEX_ROLE, idx)
+
+                # Badge + tooltip from the batch-result cache.
+                res = self._results.get((group.name, entry.csv_relpath))
+                badge = _badge_for(res)
+                base_name = Path(entry.csv_relpath).name
+                f_item.setText(
+                    0,
+                    f"{badge} {base_name}" if badge else base_name,
+                )
+                f_item.setText(1, f_details)
+                tip = _tooltip_for(res)
+                if tip:
+                    f_item.setToolTip(0, tip)
+                    f_item.setToolTip(1, tip)
+                # Colour cue for errors only — keep success on the
+                # default theme palette so we don't fight dark mode.
+                if res is not None and res.status == 'error':
+                    brush = QBrush(QColor("#b00020"))   # matte red
+                    f_item.setForeground(0, brush)
+                    f_item.setForeground(1, brush)
 
         # Stretch the first column to fit the deepest row, then let the
         # details column take the remaining width.
@@ -866,6 +1150,10 @@ class StudyPanel(QWidget):
         self._act_add_file.setEnabled(can_edit_group)
         self._act_group_settings.setEnabled(can_edit_group)
         self._act_remove.setEnabled(can_edit_group)
+        # Batch analyze is gated on the same "a group (or a file within
+        # a group) is selected" rule — we walk up to the group in
+        # ``_selected_group`` so either kind is a valid anchor.
+        self._act_analyze_group.setEnabled(can_edit_group)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -892,6 +1180,91 @@ def _format_group_details(group: Group) -> str:
 def _n_files_label(n: int) -> str:
     """Italian-aware pluralisation for "N file"."""
     return "1 file" if n == 1 else f"{n} file"
+
+
+def _len_or_zero(obj) -> int:
+    """``len(obj)`` with a safe fallback to 0 for ``None`` / unsized.
+
+    Used to pull beat counts out of an ``AnalysisResult`` dict where
+    keys might be missing on older schemas or ``None`` on edge cases
+    (analyse-empty-signal).  Keeps ``_on_analyze_group`` free of
+    nested ``if`` ladders.
+    """
+    try:
+        return len(obj) if obj is not None else 0
+    except TypeError:
+        return 0
+
+
+def _badge_for(res: FileResult | None) -> str:
+    """Return the column-0 prefix glyph for a file row.
+
+    * ``None`` (never analysed) → empty string, no prefix.
+    * ``ok`` → ``'✓'``.
+    * ``error`` → ``'✗'``.
+
+    Kept as a module-level pure function so it's unit-testable without
+    spinning up Qt — same rationale as :func:`_format_group_details`.
+    """
+    if res is None:
+        return ""
+    if res.status == 'ok':
+        return "✓"
+    if res.status == 'error':
+        return "✗"
+    return ""
+
+
+def _tooltip_for(res: FileResult | None) -> str:
+    """Tooltip text for a file row in the tree.
+
+    For successful runs we surface the channel chosen by
+    ``select_best_channel`` and the included-beats count, which is
+    what the user cares about before committing to a double-click
+    deep-dive.  For errors we dump the full error message (what /
+    where — the user can then re-open the CSV and iterate).
+    """
+    if res is None:
+        return ""
+    if res.status == 'error':
+        return f"Errore: {res.error}" if res.error else "Errore"
+    # status == 'ok'
+    parts: list[str] = []
+    if res.channel_analyzed:
+        parts.append(f"Canale: {res.channel_analyzed.upper()}")
+    if res.n_total:
+        if res.n_included != res.n_total:
+            parts.append(f"{res.n_included}/{res.n_total} battiti inclusi")
+        else:
+            parts.append(f"{res.n_total} battiti")
+    return "  ·  ".join(parts)
+
+
+def _aggregate_status(results: list[FileResult | None]) -> str:
+    """Summary string for a group row — ``"2✓ 1✗"`` / ``"all ✓"`` / ``""``.
+
+    The PoC convention:
+
+    * no results at all → empty string (don't clutter the row before
+      the user has run batch).
+    * all ok → compact ``"✓ {n}/{n}"``.
+    * mixed → ``"{ok}✓ {err}✗"``, with the untouched remainder
+      implicit (they have no prefix on the individual rows either).
+    """
+    if not results:
+        return ""
+    n_ok = sum(1 for r in results if r is not None and r.status == 'ok')
+    n_err = sum(1 for r in results if r is not None and r.status == 'error')
+    if n_ok == 0 and n_err == 0:
+        return ""
+    if n_err == 0 and n_ok == len(results):
+        return f"✓ {n_ok}/{len(results)}"
+    parts: list[str] = []
+    if n_ok:
+        parts.append(f"{n_ok}✓")
+    if n_err:
+        parts.append(f"{n_err}✗")
+    return " ".join(parts)
 
 
 def _safe_getlogin_available() -> bool:
