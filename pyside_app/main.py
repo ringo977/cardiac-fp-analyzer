@@ -746,6 +746,13 @@ class _BeatsTab(QWidget):
         # Beats added via viewer clicks won't have entries here until
         # the user re-runs the pipeline (Ricalcola).
         self._params_by_idx: dict[int, dict] = {}
+        # Sample indices submitted to the last recompute (i.e. the full
+        # set of beats the pipeline *tried* to analyse).  A beat in this
+        # set but NOT in ``_params_by_idx`` was dropped by QC / ritmo /
+        # RR — rendered as "Scartato" so the user sees their pick was
+        # rejected instead of silently vanishing.  A beat added AFTER
+        # the recompute is not in this set and shows "—" (provisional).
+        self._analyzed_indices: set[int] = set()
         # Re-entrancy guard for itemChanged — see comment on connect().
         self._block_item_changed: bool = False
         # Amplitude scale cached per-render so the tiles can report the
@@ -765,6 +772,7 @@ class _BeatsTab(QWidget):
         """
         self._excluded.clear()
         self._params_by_idx.clear()
+        self._analyzed_indices.clear()
         if result is None:
             self._render_banner(None)
             self._render_template_plot(None)
@@ -781,6 +789,12 @@ class _BeatsTab(QWidget):
         # well-formed result, but we defensively skip the tail if not.
         for sample_idx, p in zip(bi, all_p):
             self._params_by_idx[sample_idx] = p
+        # Default analyzed-set = the beats the pipeline produced.  On
+        # file open this matches the viewer and nothing shows up as
+        # "Scartato".  After Ricalcola, MainWindow calls
+        # ``set_last_analyzed(bi_edited)`` to widen this to every beat
+        # that was *submitted* — so pipeline-rejected picks get flagged.
+        self._analyzed_indices = set(bi)
         # Upper pane first — the template plot caches the amplitude
         # scale that the spike-amp tile reads, so order matters.
         self._render_banner(result)
@@ -797,7 +811,11 @@ class _BeatsTab(QWidget):
         new beats. The excluded set is intersected with the new indices
         so dormant exclusions for vanished beats don't survive.
         """
-        new_idx = list(int(x) for x in (indices or []))
+        # ``indices or []`` blows up when ``indices`` is a numpy array
+        # with more than one element — ndarray.__bool__ raises for
+        # multi-element arrays.  The viewer always passes a (possibly
+        # empty) ndarray, so do an explicit None check instead.
+        new_idx = [int(x) for x in (indices if indices is not None else [])]
         # Drop excluded entries that no longer correspond to any beat —
         # otherwise re-clicking that sample would silently exclude it.
         self._excluded &= set(new_idx)
@@ -810,6 +828,23 @@ class _BeatsTab(QWidget):
         before passing the trimmed list to ``recompute_from_beats``.
         """
         return set(self._excluded)
+
+    def set_last_analyzed(self, indices) -> None:
+        """Record the full set of beats submitted to the last recompute.
+
+        Called by MainWindow right after ``set_result`` in the Ricalcola
+        path.  ``set_result`` conservatively sets ``_analyzed_indices``
+        to the pipeline *output* (kept beats); this widens it to the
+        pipeline *input* so user picks that QC / ritmo / RR dropped get
+        rendered as "Scartato" in the Stato column instead of silently
+        reverting to "—" (which means "needs Ricalcola").
+
+        No re-render — the caller is expected to follow with
+        ``set_beats(...)`` to rebuild the rows.
+        """
+        self._analyzed_indices = set(
+            int(x) for x in (indices if indices is not None else [])
+        )
 
     # ─── Internal: row population ─────────────────────────────────
     def _render_rows(self, indices, time_vector) -> None:
@@ -1080,27 +1115,36 @@ class _BeatsTab(QWidget):
     def _derive_status(self, sample_idx: int) -> str:
         """Per-beat quality flag for the Stato column.
 
-        Sources:
-        * ``all_params[i]['fpd_ms']`` — NaN/None → ``No FPD``.
-        * Anything else → ``OK``.
-        * Beats with no params yet (added via viewer click, not yet
-          ricalcolati) → ``—`` so the user knows the row is provisional.
+        Four outcomes:
+        * ``OK``       — beat has params AND fpd_ms is a valid number.
+        * ``No FPD``   — beat has params but fpd_ms is NaN/None (pipeline
+          couldn't detect repolarisation).
+        * ``Scartato`` — beat was *submitted* to the last recompute
+          (``_analyzed_indices``) but has no params: QC / ritmo / RR
+          filter rejected it.  Typical case: user click in a noise
+          region, morph-correlation below threshold.
+        * ``—``        — beat added to the viewer since the last
+          recompute (never analysed): row is provisional until
+          Ricalcola.
 
-        Future: incorporate ``rr_outlier_filter`` per-beat flags + QC
-        per-beat morph tags. Kept narrow for 2.C to avoid coupling to
-        fields that aren't always populated.
+        Future: expose *why* a Scartato beat was rejected (amp / morph /
+        RR / rhythm) by threading the per-beat rejection reason through
+        ``recompute_from_beats``.  Out of scope for the POC.
         """
         p = self._params_by_idx.get(sample_idx)
-        if p is None:
-            return "—"
-        fpd = p.get("fpd_ms")
-        try:
-            f = float(fpd) if fpd is not None else float("nan")
-        except (TypeError, ValueError):
-            f = float("nan")
-        if f != f:   # NaN
-            return self.tr("No FPD")
-        return self.tr("OK")
+        if p is not None:
+            fpd = p.get("fpd_ms")
+            try:
+                f = float(fpd) if fpd is not None else float("nan")
+            except (TypeError, ValueError):
+                f = float("nan")
+            if f != f:   # NaN
+                return self.tr("No FPD")
+            return self.tr("OK")
+        # No params for this beat — either rejected or provisional.
+        if sample_idx in self._analyzed_indices:
+            return self.tr("Scartato")
+        return "—"
 
     def _update_header_count(self) -> None:
         """Refresh the bold header to reflect the current totals."""
@@ -1690,6 +1734,12 @@ class MainWindow(QMainWindow):
         # last analysis"; now it points to the same ``_config`` object
         # after every ``_run_analysis``.  Ricalcola reads it.
         self._current_config: AnalysisConfig | None = None
+        # Pure (pre-override) automatic detection captured at open time,
+        # kept so ``Ricalcola`` can build a *cumulative* sidecar diff
+        # against the automatic baseline — not against whatever beats
+        # the last sidecar already injected (task #79).  Populated from
+        # ``result['detection_info']['bi_detection']`` in ``_run_analysis``.
+        self._bi_auto_at_open: np.ndarray | None = None
         # Guard flag: when True, ``_on_beats_changed`` will NOT flip the
         # Ricalcola button into the "pending" state.  We set it around
         # ``viewer.set_result`` calls (full load + post-recompute refresh)
@@ -1841,23 +1891,28 @@ class MainWindow(QMainWindow):
         # filtered/re-segmented state, not the original detection.
         self._current_result = new_result
 
-        # Populate the Battiti tab's per-beat parameter map BEFORE the
-        # viewer fires beats_changed (same ordering as ``_on_open``).
-        # Otherwise ``_refresh_beats_tab`` renders rows against the
-        # previous-run params map and the Stato column shows stale
-        # "OK"/"No FPD" flags until ``_beats_tab.set_result`` catches up.
+        # Populate the Battiti tab's per-beat parameter map.  We pass
+        # the full *submitted* beat list (``bi_edited``) as the analysed
+        # set so rows whose beat was dropped by QC / ritmo / RR render
+        # as "Scartato" instead of silently vanishing.  Then re-render
+        # with the viewer's full beat list (which still contains every
+        # user pick — we deliberately do NOT resync the viewer to the
+        # filtered set, see design note below).
         self._beats_tab.set_result(new_result)
+        self._beats_tab.set_last_analyzed(bi_edited)
+        self._beats_tab.set_beats(
+            self.viewer.get_beat_indices(),
+            self.viewer.get_time_vector(),
+        )
 
-        # The viewer keeps whatever beats the user had; sync it to the
-        # recompute's filtered set so marker positions reflect what the
-        # pipeline actually kept (QC/RR filter may drop a few).  Guard
-        # with _suppress_pending so the resulting beats_changed doesn't
-        # mark the (already-fresh) tabs as stale again.
-        self._suppress_pending = True
-        try:
-            self.viewer.set_result(new_result)
-        finally:
-            self._suppress_pending = False
+        # Design note (task #85): we intentionally *do not* call
+        # ``viewer.set_result(new_result)``.  The viewer keeps showing
+        # every triangle the user placed, including picks the pipeline
+        # rejected — otherwise the user's click-picks "disappear" and
+        # they lose any sense of what the pipeline is analysing.  The
+        # mismatch between "triangles shown" and "beats in Parametri"
+        # is surfaced via the Stato column (Scartato) and the status
+        # bar delta below.
 
         # Refresh Parametri + Aritmie from the new result.
         self._params_tab.set_result(new_result)
@@ -1865,23 +1920,75 @@ class MainWindow(QMainWindow):
 
         self._signal_tab.set_recompute_pending(False)
 
+        # Persist the user's corrections as a sidecar JSON next to the
+        # CSV (task #79).  The diff is always computed against the pure
+        # automatic detection captured at open time — so re-Ricalcola
+        # after reopening the same file produces the same sidecar, and
+        # an intermediate Ricalcola that ends up identical to the
+        # automatic set deletes the sidecar (``save_overrides`` unlinks
+        # on empty).  Failure to write is logged but does NOT abort the
+        # recompute: the in-memory result is still valid, we just lose
+        # persistence until the next Ricalcola attempt.
+        sidecar_info: str = ""
+        if (
+            self._current_csv_path is not None
+            and self._bi_auto_at_open is not None
+        ):
+            from cardiac_fp_analyzer.overrides import (
+                diff_to_overrides,
+                save_overrides,
+            )
+            fs = float(
+                (new_result.get("metadata") or {}).get("sample_rate") or 0.0
+            )
+            if fs > 0:
+                try:
+                    ov = diff_to_overrides(
+                        self._bi_auto_at_open, bi_edited, fs,
+                    )
+                    save_overrides(str(self._current_csv_path), ov)
+                    if ov.is_empty():
+                        sidecar_info = self.tr(" · correzioni azzerate")
+                    else:
+                        sidecar_info = self.tr(
+                            " · salvate +{0}/-{1}"
+                        ).format(len(ov.added_s), len(ov.removed_s))
+                except OSError as e:   # disk full, permissions, etc.
+                    QMessageBox.warning(
+                        self, self.tr("Salvataggio correzioni"),
+                        self.tr(
+                            "Non è stato possibile salvare il file di "
+                            "correzioni ({0}).  Il ricalcolo è comunque "
+                            "valido."
+                        ).format(e),
+                    )
+
         # Status-bar delta: the QC / rhythm / RR-outlier filters may
         # silently drop beats that the user had explicitly added. Show
         # the delta so the user knows when the pipeline rejected some
         # of their picks — otherwise a "why did my beat disappear?"
         # moment.  When the pipeline kept everything, fall back to the
         # simpler phrasing so the common case isn't noisy.
+        #
+        # Since #85 the viewer is NOT resynced to the filtered set, so
+        # ``viewer.beat_count()`` still reflects the full user pick set.
+        # Read the *kept* count directly from the new result.
+        kept_bi = new_result.get("beat_indices_fpd")
+        if kept_bi is None:
+            kept_bi = new_result.get("beat_indices", [])
         n_in = int(len(bi_edited))
-        n_out = int(self.viewer.beat_count())
+        n_out = int(len(kept_bi))
         if n_in > 0 and n_out < n_in:
             dropped = n_in - n_out
             self.statusBar().showMessage(self.tr(
                 "Ricalcolo completato — {0} battiti inclusi "
-                "({1} filtrati da QC/ritmo/RR su {2})"
-            ).format(n_out, dropped, n_in))
+                "({1} filtrati da QC/ritmo/RR su {2}){3}"
+            ).format(n_out, dropped, n_in, sidecar_info))
         else:
             self.statusBar().showMessage(
-                self.tr("Ricalcolo completato — {0} battiti inclusi").format(n_out)
+                self.tr(
+                    "Ricalcolo completato — {0} battiti inclusi{1}"
+                ).format(n_out, sidecar_info)
             )
 
     # ─── Actions ──────────────────────────────────────────────────
@@ -1995,6 +2102,20 @@ class MainWindow(QMainWindow):
         self._current_result = result
         self._current_csv_path = Path(path)
         self._current_config = self._config
+        # Snapshot the pure automatic detection for the Ricalcola →
+        # sidecar save path (task #79).  ``analyze.py`` always writes
+        # ``detection_info['bi_detection']``; fall back to the final
+        # ``beat_indices`` if a legacy analyzer somehow skipped it so
+        # we never crash on KeyError here (sidecar save will just diff
+        # against the post-pipeline set — not ideal but safe).
+        det_info = result.get("detection_info") or {}
+        bi_det = det_info.get("bi_detection")
+        if bi_det is not None:
+            self._bi_auto_at_open = np.asarray(bi_det, dtype=int)
+        else:
+            self._bi_auto_at_open = np.asarray(
+                result.get("beat_indices", []), dtype=int,
+            )
         # Populate the Battiti tab's per-beat parameter map BEFORE the
         # viewer fires beats_changed (which routes through
         # ``_refresh_beats_tab → _beats_tab.set_beats``).  If we don't,

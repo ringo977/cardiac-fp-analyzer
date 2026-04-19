@@ -544,6 +544,15 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
             )
             if verbose: print(f"  Retry: {det['n_beats']} beats")
 
+        # Snapshot the pure (pre-override) detection so the PySide UI can
+        # reconstruct the "automatic" baseline when writing a new sidecar
+        # from Ricalcola (task #79).  Without this, a user who Ricalcola-s
+        # after loading a CSV that already had a sidecar would overwrite
+        # it with a diff against the *post-override* set — silently losing
+        # earlier corrections.
+        det = dict(det)
+        det['bi_detection'] = [int(x) for x in bi]
+
         # ── Manual beat overrides (sidecar .overrides.json) ──
         # If the user has previously corrected this file in the PySide6
         # viewer (add/remove beats) a ``<csv>.overrides.json`` sits next
@@ -559,7 +568,6 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
                 # recompute it here.  Keep detection_info in sync so any
                 # downstream log line that reads ``det['n_beats']`` sees
                 # the post-override count.
-                det = dict(det)
                 det['overrides_applied'] = ov_info
                 det['n_beats'] = int(bi.size)
                 if verbose:

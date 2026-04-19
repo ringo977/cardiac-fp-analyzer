@@ -291,3 +291,72 @@ def test_sidecar_unmatched_removal_is_reported(csv_with_baseline):
     np.testing.assert_array_equal(
         result["beat_indices_raw"], baseline["beat_indices_raw"],
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  bi_detection snapshot (task #79 contract for Ricalcola → sidecar save)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_bi_detection_is_always_exposed(csv_with_baseline):
+    """``detection_info['bi_detection']`` must always be present.
+
+    The PySide UI reads this field at open-time to remember the pure
+    automatic baseline, so it can later build a fresh sidecar diff
+    against it when the user clicks Ricalcola (task #79).  Missing the
+    field would make the UI fall back to diffing against the
+    post-override set, silently losing earlier corrections on save.
+
+    With no sidecar on disk, the pre-override snapshot must equal the
+    pipeline's raw beat indices (the pipeline received the unchanged
+    set).
+    """
+    _, baseline = csv_with_baseline
+    det = baseline["detection_info"]
+    assert "bi_detection" in det, (
+        "detection_info must expose 'bi_detection' for the UI override "
+        "save path (#79)"
+    )
+    bi_det = np.asarray(det["bi_detection"], dtype=int)
+    bi_raw = np.asarray(baseline["beat_indices_raw"], dtype=int)
+    # No sidecar applied → the snapshot IS the raw detection.
+    np.testing.assert_array_equal(bi_det, bi_raw)
+
+
+def test_bi_detection_preserves_pre_override_state(csv_with_baseline):
+    """With a sidecar, ``bi_detection`` must still be the pure detection.
+
+    This is the contract that makes the #79 save-from-Ricalcola flow
+    correct: the UI diffs ``viewer beats`` against ``bi_detection`` (the
+    pure automatic set) instead of against ``beat_indices_raw`` (which
+    already includes the applied overrides).  Without this invariant,
+    a second Ricalcola on a file that loaded with a sidecar would omit
+    the original corrections from the fresh sidecar.
+    """
+    csv_path, baseline = csv_with_baseline
+    bi_raw_baseline = np.asarray(baseline["beat_indices_raw"])
+    if len(bi_raw_baseline) < 3:
+        pytest.skip("synthetic fixture produced too few beats")
+
+    fs = float(baseline["metadata"]["sample_rate"])
+    mid_idx = int(bi_raw_baseline[len(bi_raw_baseline) // 2])
+
+    # Sidecar removes the middle automatic beat.
+    ov = BeatOverrides(removed_s=[float(mid_idx) / fs])
+    save_overrides(str(csv_path), ov)
+
+    cfg = AnalysisConfig()
+    edited = analyze_single_file(
+        str(csv_path), channel="el1", verbose=False, config=cfg,
+    )
+    assert edited is not None
+
+    bi_det = np.asarray(edited["detection_info"]["bi_detection"], dtype=int)
+    bi_raw = np.asarray(edited["beat_indices_raw"], dtype=int)
+
+    # bi_detection keeps the removed beat — it is the PRE-override set.
+    assert mid_idx in set(bi_det.tolist())
+    # beat_indices_raw does NOT (the sidecar already filtered it out).
+    assert mid_idx not in set(bi_raw.tolist())
+    # And bi_detection matches the no-sidecar baseline exactly.
+    np.testing.assert_array_equal(bi_det, bi_raw_baseline)
