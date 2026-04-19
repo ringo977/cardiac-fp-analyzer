@@ -79,6 +79,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
@@ -196,6 +197,28 @@ class FileResult:
         cached entries pre-3c: those are tolerated as "fresh" rather
         than flagged stale, on the assumption that the user hasn't
         touched the config since loading the study.
+    fpd_ms, fpdc_ms, bpm, stv_ms : float
+        Scalar batch metrics extracted from ``result['summary']``
+        (step 4 — per-group aggregate).  All default to ``NaN`` so
+        legacy cached entries pre-step-4 (and error results) keep
+        rendering without breaking the aggregate helpers — aggregate
+        / tooltip code must tolerate NaN via :func:`math.isnan`.
+
+        Choice of these four is scientific:
+
+        * ``fpd_ms``   — field-potential duration median, raw
+          (primary electrophysiology endpoint).
+        * ``fpdc_ms``  — rate-corrected FPD median (dose-response
+          primary endpoint; analogue of QTc in ECG).
+        * ``bpm``      — mean beat rate (chronotropic effect).
+        * ``stv_ms``   — short-term variability (arrhythmogenic
+          risk proxy — small ≈ stable, high ≈ unstable).
+
+        We deliberately store point estimates (not arrays) — the
+        per-beat distribution stays in the pipeline's result dict
+        and the deep-dive tab re-loads it on double-click.  The
+        study-panel cache is for *decisions at a glance*, not for
+        re-running statistics.
     """
 
     status: str                      # 'ok' | 'error'
@@ -204,6 +227,11 @@ class FileResult:
     n_total: int = 0
     error: str = ''
     fingerprint: str = ''
+    # Scientific scalar metrics — NaN sentinel for "missing / error".
+    fpd_ms: float = float('nan')
+    fpdc_ms: float = float('nan')
+    bpm: float = float('nan')
+    stv_ms: float = float('nan')
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -340,12 +368,22 @@ class _BatchWorker(QRunnable):
         fpd_len = _len_or_zero(result.get('beat_indices_fpd'))
         n_included = fpd_len if fpd_len > 0 else n_total
 
+        # Step 4 — pull the four per-group-aggregate scalars out of
+        # ``summary``.  All may be NaN on degenerate signals (e.g.
+        # no beats with valid repol); downstream aggregate/tooltip
+        # tolerates that.
+        fpd, fpdc, bpm, stv = _extract_summary_metrics(result.get('summary'))
+
         fr = FileResult(
             status='ok',
             channel_analyzed=str(analyzed),
             n_included=n_included,
             n_total=n_total,
             fingerprint=self._fingerprint,
+            fpd_ms=fpd,
+            fpdc_ms=fpdc,
+            bpm=bpm,
+            stv_ms=stv,
         )
         self._signals.done.emit(self._file_index, fr)
 
@@ -1445,6 +1483,14 @@ class StudyPanel(QWidget):
             agg = _aggregate_status(group_results, group_stale)
             if agg:
                 details = f"{details}  ·  {agg}"
+            # Step 4 — per-group scalar metrics (FPDc/BPM/STV mean±SD),
+            # appended only when there's at least one fresh-ok result
+            # to average over.  Dose-response readout at a glance,
+            # which is the whole point of grouping files by dose.
+            metrics_agg = _aggregate_group_metrics(group_results, group_stale)
+            metrics_line = _format_group_metrics_line(metrics_agg)
+            if metrics_line:
+                details = f"{details}  ·  {metrics_line}"
             g_item.setText(1, details)
             g_item.setData(0, _KIND_ROLE, "group")
             g_item.setData(0, _GROUP_NAME_ROLE, group.name)
@@ -1602,6 +1648,73 @@ def _len_or_zero(obj) -> int:
         return 0
 
 
+def _to_float_or_nan(x) -> float:
+    """Coerce ``x`` to float, returning NaN for ``None`` / non-numeric / NaN.
+
+    The scientific pipeline mostly stores scalars as numpy floats.
+    :class:`FileResult` stores native Python floats so the dataclass
+    stays json-dumpable if we ever persist it.  This helper is the
+    single coercion point — keeps the worker clean of try/except
+    scatter.  Handles:
+
+    * ``None`` → NaN (missing field).
+    * strings → tries ``float(x)``; falls back to NaN on parse error.
+    * numpy scalars → accepted via ``float(x)``.
+    * already-NaN → NaN (no spurious conversion).
+    """
+    if x is None:
+        return float('nan')
+    try:
+        f = float(x)
+    except (TypeError, ValueError):
+        return float('nan')
+    # math.isnan rejects complex / ambiguous; our try/except above
+    # already filtered those, so this is a pure finite-ness check.
+    if math.isnan(f):
+        return float('nan')
+    return f
+
+
+def _extract_summary_metrics(summary: dict | None) -> tuple[float, float, float, float]:
+    """Pull ``(fpd_ms, fpdc_ms, bpm, stv_ms)`` out of a pipeline summary.
+
+    The scientific-core ``summary`` dict is rich (~30 keys); we only
+    surface the four scalars the study-panel UI shows at a glance.
+    For FPD / FPDc we prefer **median** over mean because the per-beat
+    distribution is heavy-tailed on marginal recordings (a handful of
+    ectopic beats drag the mean more than clinicians expect).  Median
+    is also what gets reported in papers.
+
+    Units:
+
+    * ``fpd_*`` / ``stv_ms`` are in *milliseconds* in the UI cache.
+      The scientific core stores ``fpd_values`` in *seconds* (see
+      ``parameters.py:456``) but also writes ``fpd_median`` in ms
+      via the generic parameter loop (``*_median`` lives alongside
+      ``*_mean``).  We read the ms one directly.
+    * ``bpm`` is beats-per-minute (``summary['bpm_mean']``).
+
+    Any missing / NaN source becomes NaN in the output — downstream
+    aggregate / tooltip code already tolerates NaN.
+    """
+    if not summary:
+        return (float('nan'),) * 4
+
+    # FPD/FPDc are ms in the summary (see parameters.py generic loop
+    # over ``['fpd_ms', 'fpdc_ms', ...]`` filling ``_median`` keys).
+    fpd = _to_float_or_nan(summary.get('fpd_ms_median'))
+    fpdc = _to_float_or_nan(summary.get('fpdc_ms_median'))
+    # Fallback to mean when median missing on older result schemas.
+    if math.isnan(fpd):
+        fpd = _to_float_or_nan(summary.get('fpd_ms_mean'))
+    if math.isnan(fpdc):
+        fpdc = _to_float_or_nan(summary.get('fpdc_ms_mean'))
+
+    bpm = _to_float_or_nan(summary.get('bpm_mean'))
+    stv = _to_float_or_nan(summary.get('stv_ms'))
+    return fpd, fpdc, bpm, stv
+
+
 def _result_fingerprint(config, channel: str) -> str:
     """Short deterministic hash of the inputs that produced a result.
 
@@ -1725,6 +1838,12 @@ def _tooltip_for(res: FileResult | None, *, stale: bool = False) -> str:
                 parts.append(f"{res.n_included}/{res.n_total} battiti inclusi")
             else:
                 parts.append(f"{res.n_total} battiti")
+        # Step 4 — surface the scalar metrics alongside the beat
+        # counts so the user can compare FPDc/BPM across files in
+        # the same group without clicking each one.
+        metrics = _format_file_metrics(res)
+        if metrics:
+            parts.append(metrics)
         body = "  ·  ".join(parts)
     if stale:
         prefix = "Risultato non aggiornato (config cambiata)"
@@ -1779,6 +1898,175 @@ def _aggregate_status(
     if n_err:
         parts.append(f"{n_err}✗")
     return " ".join(parts)
+
+
+def _mean_sd_n(values: list[float]) -> tuple[float, float, int]:
+    """Return ``(mean, sd, n)`` over the finite entries of ``values``.
+
+    NaNs are *dropped* before computing stats: a file whose pipeline
+    couldn't produce a given metric (e.g. no valid repol → NaN FPD)
+    simply doesn't contribute to the aggregate instead of polluting
+    it.  ``n`` reflects the finite count actually used, not the
+    input length — so the caller can tell "aggregate of 3/5 files"
+    from "aggregate of 5/5".
+
+    Rules:
+
+    * empty / all-NaN input → ``(NaN, NaN, 0)``.
+    * n=1 → ``(value, 0.0, 1)`` — can't compute SD from one point;
+      returning 0 is the common-sense read "no spread observed yet".
+    * n≥2 → sample SD (ddof=1), matching what scientists expect when
+      they see "mean ± SD".
+    """
+    finite = [v for v in values if not (v is None or math.isnan(v))]
+    n = len(finite)
+    if n == 0:
+        return float('nan'), float('nan'), 0
+    mean = sum(finite) / n
+    if n == 1:
+        return mean, 0.0, 1
+    # Sample SD (ddof=1) — matches scientific convention.
+    var = sum((v - mean) ** 2 for v in finite) / (n - 1)
+    return mean, math.sqrt(var), n
+
+
+def _aggregate_group_metrics(
+    results: list[FileResult | None],
+    stale: list[bool] | None = None,
+) -> dict:
+    """Compute ``mean ± SD`` per metric over fresh-ok results in a group.
+
+    Contract for "fresh-ok":
+
+    * ``r is not None``
+    * ``r.status == 'ok'``
+    * ``stale[i] is False`` (or ``stale`` is ``None`` → all fresh)
+
+    Only fresh-ok results feed the aggregate.  Stale and error rows
+    are deliberately excluded — if the user edited the config,
+    presenting a mean over old numbers would be misleading; once they
+    re-run, the fresh results will repopulate the aggregate.
+
+    Returns a flat dict shaped for the formatter:
+
+        {
+            'n': <int, count of fresh-ok files contributing>,
+            'n_total': <int, total files in the group>,
+            'fpd_ms':  (mean, sd, n_finite),
+            'fpdc_ms': (mean, sd, n_finite),
+            'bpm':     (mean, sd, n_finite),
+            'stv_ms':  (mean, sd, n_finite),
+        }
+
+    ``n_finite`` per metric may be lower than ``n`` when some files
+    had NaN for that specific metric (e.g. chronic baseline with no
+    valid FPD but still a measurable rate).  That keeps the UI
+    honest about how much each metric is actually averaging over.
+    """
+    n_total = len(results)
+    if stale is None:
+        stale = [False] * n_total
+
+    fpd_vals: list[float] = []
+    fpdc_vals: list[float] = []
+    bpm_vals: list[float] = []
+    stv_vals: list[float] = []
+    n_fresh_ok = 0
+    for r, s in zip(results, stale):
+        if r is None or r.status != 'ok' or s:
+            continue
+        n_fresh_ok += 1
+        fpd_vals.append(r.fpd_ms)
+        fpdc_vals.append(r.fpdc_ms)
+        bpm_vals.append(r.bpm)
+        stv_vals.append(r.stv_ms)
+
+    return {
+        'n': n_fresh_ok,
+        'n_total': n_total,
+        'fpd_ms': _mean_sd_n(fpd_vals),
+        'fpdc_ms': _mean_sd_n(fpdc_vals),
+        'bpm': _mean_sd_n(bpm_vals),
+        'stv_ms': _mean_sd_n(stv_vals),
+    }
+
+
+def _fmt_mean_sd(mean_sd_n: tuple[float, float, int], *, unit: str = '', decimals: int = 1) -> str:
+    """Format a ``(mean, sd, n)`` tuple as ``"385 ± 12 ms"``.
+
+    Rules:
+
+    * ``n == 0`` → empty string (caller can skip the whole term).
+    * ``n == 1`` → ``"385 ms (n=1)"`` — no ``± 0`` for a single
+      sample, since it's misleading.
+    * ``n >= 2`` → ``"385 ± 12 ms"``.
+
+    Integer formatting when ``decimals=0``, else fixed decimals.
+    """
+    mean, sd, n = mean_sd_n
+    if n == 0 or math.isnan(mean):
+        return ""
+    fmt = f"{{:.{decimals}f}}"
+    u = f" {unit}" if unit else ""
+    if n == 1:
+        return f"{fmt.format(mean)}{u} (n=1)"
+    return f"{fmt.format(mean)} ± {fmt.format(sd)}{u}"
+
+
+def _format_group_metrics_line(agg: dict) -> str:
+    """One-line ``"FPDc 385±12 ms · BPM 58±3 · STV 2.1 ms · n=4/5"`` summary.
+
+    Only terms with ``n >= 1`` are included.  The ``n=K/N`` suffix is
+    always appended when ``agg['n'] > 0`` so the user knows how many
+    files contributed — stale/error rows are not in the aggregate
+    but are in the denominator (``n_total``).
+
+    Returns empty string when the group has no fresh-ok aggregates,
+    so the caller can skip appending anything to the tree row.
+    """
+    if agg.get('n', 0) == 0:
+        return ""
+    parts: list[str] = []
+    # FPDc first — clinically the primary endpoint.
+    fpdc = _fmt_mean_sd(agg['fpdc_ms'], unit='ms', decimals=0)
+    if fpdc:
+        parts.append(f"FPDc {fpdc}")
+    fpd = _fmt_mean_sd(agg['fpd_ms'], unit='ms', decimals=0)
+    if fpd and not fpdc:
+        # Fall back to raw FPD only when FPDc is unavailable —
+        # otherwise two near-duplicate numbers clutter the row.
+        parts.append(f"FPD {fpd}")
+    bpm = _fmt_mean_sd(agg['bpm'], unit='BPM', decimals=0)
+    if bpm:
+        parts.append(bpm)
+    stv = _fmt_mean_sd(agg['stv_ms'], unit='ms', decimals=1)
+    if stv:
+        parts.append(f"STV {stv}")
+    parts.append(f"n={agg['n']}/{agg['n_total']}")
+    return "  ·  ".join(parts)
+
+
+def _format_file_metrics(res: FileResult | None) -> str:
+    """Single-file metrics block for the tooltip — ``"FPDc: 385 ms · 58 BPM"``.
+
+    Returns empty string when ``res`` is None / error / all-NaN, so
+    the tooltip call site can skip appending the separator.  Used
+    alongside the existing channel+beat-count tooltip text, not as
+    a replacement — both pieces of info help the user decide whether
+    a deep-dive is warranted.
+    """
+    if res is None or res.status != 'ok':
+        return ""
+    parts: list[str] = []
+    if not math.isnan(res.fpdc_ms):
+        parts.append(f"FPDc: {res.fpdc_ms:.0f} ms")
+    elif not math.isnan(res.fpd_ms):
+        parts.append(f"FPD: {res.fpd_ms:.0f} ms")
+    if not math.isnan(res.bpm):
+        parts.append(f"{res.bpm:.0f} BPM")
+    if not math.isnan(res.stv_ms):
+        parts.append(f"STV: {res.stv_ms:.1f} ms")
+    return "  ·  ".join(parts)
 
 
 def _safe_getlogin_available() -> bool:
