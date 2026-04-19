@@ -119,6 +119,7 @@ from cardiac_fp_analyzer.study import (
     add_group,
     find_group,
     load_study,
+    make_file_entry,
     remove_group,
     resolve_file_path,
     save_study,
@@ -467,6 +468,9 @@ class StudyPanel(QWidget):
         self._act_close = QAction(self.tr("Chiudi studio"), self)
         self._act_add_group = QAction(self.tr("Aggiungi gruppo..."), self)
         self._act_add_file = QAction(self.tr("Aggiungi CSV al gruppo..."), self)
+        self._act_add_folder = QAction(
+            self.tr("Aggiungi cartella al gruppo..."), self,
+        )
         self._act_group_settings = QAction(
             self.tr("Impostazioni gruppo..."), self,
         )
@@ -484,6 +488,7 @@ class StudyPanel(QWidget):
         # Group 2 — editing.
         self._toolbar.addAction(self._act_add_group)
         self._toolbar.addAction(self._act_add_file)
+        self._toolbar.addAction(self._act_add_folder)
         self._toolbar.addAction(self._act_group_settings)
         self._toolbar.addAction(self._act_remove)
         self._toolbar.addSeparator()
@@ -498,6 +503,7 @@ class StudyPanel(QWidget):
         self._act_close.triggered.connect(self._on_close_study)
         self._act_add_group.triggered.connect(self._on_add_group)
         self._act_add_file.triggered.connect(self._on_add_file)
+        self._act_add_folder.triggered.connect(self._on_add_folder)
         self._act_group_settings.triggered.connect(self._on_group_settings)
         self._act_remove.triggered.connect(self._on_remove)
         self._act_analyze_group.triggered.connect(self._on_analyze_group)
@@ -748,6 +754,138 @@ class StudyPanel(QWidget):
 
         if added:
             self._save_and_refresh()
+
+    def _on_add_folder(self) -> None:
+        """Recursively attach every CSV under a folder to the selected group.
+
+        Companion to :meth:`_on_add_file`: the native
+        ``QFileDialog.getOpenFileNames`` dialog does not let the user
+        multi-select CSVs across different subfolders in one pass, which
+        is exactly the shape Marco's on-disk data takes (``baseline/``,
+        ``dose1/``, ``dose2/`` siblings under the study root).  This
+        action asks for a *folder*, globs ``*.csv`` recursively, and
+        adds each one.
+
+        Behaviour:
+
+        * Hidden files (name starts with ``'.'``) are skipped — keeps
+          macOS ``.DS_Store`` artefacts and the user's own dotfiles out.
+        * Duplicates (CSV already in this group, identified by the
+          POSIX relative path) are skipped silently and counted in the
+          summary — no "file already exists" per-file dialog spam.
+        * CSVs outside the study folder (can happen if the user
+          navigates out of the study root before confirming) are
+          collected and reported once at the end.
+        * Scanning is sorted deterministically so the tree order
+          follows the filesystem alphabetically, which matches how
+          Marco lays dose-response chips out.
+
+        If the dialog returns nothing, we bail silently.  If the scan
+        returns zero CSVs, we show a polite "nothing to add" dialog so
+        the user doesn't wonder whether the action fired.
+        """
+        if self._study is None:
+            return
+        group = self._selected_group()
+        if group is None:
+            QMessageBox.information(
+                self, self.tr("Seleziona un gruppo"),
+                self.tr(
+                    "Seleziona prima un gruppo nell'albero, poi "
+                    "“Aggiungi cartella al gruppo”."
+                ),
+            )
+            return
+
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            self.tr("Aggiungi cartella al gruppo “{0}”").format(group.name),
+            self._study.folder,
+        )
+        if not folder:
+            return
+
+        candidates = _enumerate_csvs_under(Path(folder))
+        if not candidates:
+            QMessageBox.information(
+                self, self.tr("Nessun CSV trovato"),
+                self.tr(
+                    "Nessun file .csv trovato (ricorsivamente) in “{0}”."
+                ).format(folder),
+            )
+            return
+
+        # Dedup against what's already in the group.
+        existing = {fe.csv_relpath for fe in group.files}
+
+        added = 0
+        duplicates = 0
+        outside: list[str] = []
+        for p in candidates:
+            try:
+                # Use make_file_entry to resolve + validate "inside
+                # study folder" without mutating the study yet — this
+                # way we can decide to skip duplicates before bloating
+                # ``group.files``.
+                entry = make_file_entry(self._study, str(p))
+            except ValueError:
+                outside.append(str(p))
+                continue
+            if entry.csv_relpath in existing:
+                duplicates += 1
+                continue
+            try:
+                add_file_to_group(self._study, group.name, str(p))
+            except (ValueError, KeyError):
+                # Can't happen: we just resolved ``group`` and just
+                # validated ``entry`` above.  Guard is defensive.
+                logger.exception(
+                    "StudyPanel._on_add_folder: unexpected add failure for %s",
+                    p,
+                )
+                continue
+            existing.add(entry.csv_relpath)
+            added += 1
+
+        logger.info(
+            "StudyPanel: add-folder group=%r folder=%s "
+            "added=%d duplicates=%d outside=%d",
+            group.name, folder, added, duplicates, len(outside),
+        )
+
+        if outside:
+            # Trim long lists so the dialog doesn't dwarf the screen —
+            # full list is in the audit log anyway.
+            preview = "\n".join(outside[:20])
+            if len(outside) > 20:
+                preview += self.tr("\n… ({0} altri)").format(len(outside) - 20)
+            QMessageBox.warning(
+                self, self.tr("File fuori dallo studio"),
+                self.tr(
+                    "I seguenti CSV non si trovano dentro la cartella "
+                    "dello studio e non sono stati aggiunti:\n\n{0}"
+                ).format(preview),
+            )
+
+        if added:
+            self._save_and_refresh()
+            # A concise summary line so the user knows what happened —
+            # posted once, not per-file.
+            QMessageBox.information(
+                self, self.tr("Aggiunta cartella completata"),
+                self.tr(
+                    "Aggiunti {0} CSV al gruppo “{1}”.\n"
+                    "Duplicati saltati: {2}.\n"
+                    "Fuori studio: {3}."
+                ).format(added, group.name, duplicates, len(outside)),
+            )
+        elif duplicates and not outside:
+            QMessageBox.information(
+                self, self.tr("Nessun nuovo file"),
+                self.tr(
+                    "Tutti i {0} CSV trovati erano già nel gruppo “{1}”."
+                ).format(duplicates, group.name),
+            )
 
     def _on_group_settings(self) -> None:
         """Edit the selected group's metadata (drug/dose/condition/...)."""
@@ -1334,6 +1472,7 @@ class StudyPanel(QWidget):
         kind = item.data(0, _KIND_ROLE) if item is not None else None
         can_edit_group = has_study and kind in ("group", "file")
         self._act_add_file.setEnabled(can_edit_group)
+        self._act_add_folder.setEnabled(can_edit_group)
         self._act_group_settings.setEnabled(can_edit_group)
         self._act_remove.setEnabled(can_edit_group)
         # Batch analyze is gated on the same "a group (or a file within
@@ -1366,6 +1505,44 @@ def _format_group_details(group: Group) -> str:
 def _n_files_label(n: int) -> str:
     """Italian-aware pluralisation for "N file"."""
     return "1 file" if n == 1 else f"{n} file"
+
+
+def _enumerate_csvs_under(folder: Path) -> list[Path]:
+    """Recursively list *visible* ``*.csv`` files under ``folder``.
+
+    Module-level and pure so it can be unit-tested without spinning up
+    Qt: :meth:`StudyPanel._on_add_folder` delegates here for the
+    filesystem scan.
+
+    Returns
+    -------
+    list[Path]
+        Sorted by POSIX path for deterministic tree order.  Hidden
+        files (any component starting with ``'.'``) are excluded so
+        macOS ``.DS_Store`` siblings and the user's own dotfiles
+        don't pollute the study.  Symlinks are followed by ``rglob``
+        — that's Python's default and matches the user's mental
+        model of "it's inside the folder, add it".
+
+    Notes
+    -----
+    Returning the paths as ``Path`` objects (not strings) lets the
+    caller stringify them only when handing them to Qt / study API,
+    and keeps the tests filesystem-agnostic.
+    """
+    try:
+        all_csvs = list(Path(folder).rglob('*.csv'))
+    except OSError:
+        # Unreadable folder (permissions) — let the caller show an
+        # empty-result dialog rather than crashing the UI thread.
+        return []
+    visible = [
+        p for p in all_csvs
+        # Skip anything whose path contains a hidden component.  That
+        # also filters out files inside hidden subtrees (``.cache/`` …).
+        if not any(part.startswith('.') for part in p.parts)
+    ]
+    return sorted(visible)
 
 
 def _len_or_zero(obj) -> int:

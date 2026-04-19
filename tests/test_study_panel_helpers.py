@@ -42,6 +42,7 @@ _len_or_zero = sp._len_or_zero
 _BatchWorker = sp._BatchWorker
 _BatchWorkerSignals = sp._BatchWorkerSignals
 _BATCH_MAX_THREADS = sp._BATCH_MAX_THREADS
+_enumerate_csvs_under = sp._enumerate_csvs_under
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -348,3 +349,74 @@ class TestBatchWorkerRun:
         ).run()
 
         assert len(cap.events) == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────
+#  _enumerate_csvs_under — recursive CSV scanner for "Aggiungi cartella"
+#
+#  Uses ``tmp_path`` so the filesystem layout is deterministic per test.
+#  The action backing this helper is UX-critical (it replaces the
+#  multi-select dialog workflow for cross-subfolder selection), so any
+#  regression in "hidden file skip" or "ordering" would surface as
+#  confusing tree order or .DS_Store pollution.
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestEnumerateCsvsUnder:
+    def test_empty_folder_returns_empty_list(self, tmp_path):
+        assert _enumerate_csvs_under(tmp_path) == []
+
+    def test_finds_top_level_csvs(self, tmp_path):
+        (tmp_path / "a.csv").write_text("x")
+        (tmp_path / "b.csv").write_text("x")
+        result = _enumerate_csvs_under(tmp_path)
+        assert len(result) == 2
+        assert {p.name for p in result} == {"a.csv", "b.csv"}
+
+    def test_finds_nested_csvs_recursively(self, tmp_path):
+        # Real-world dose-response layout: baseline/ dose1/ dose2/
+        for sub in ("baseline", "dose1", "dose2"):
+            d = tmp_path / sub
+            d.mkdir()
+            (d / f"chip_{sub}.csv").write_text("x")
+        result = _enumerate_csvs_under(tmp_path)
+        assert len(result) == 3
+        # Sorted → baseline/ comes before dose1/ comes before dose2/
+        assert [p.parent.name for p in result] == ["baseline", "dose1", "dose2"]
+
+    def test_ignores_non_csv_files(self, tmp_path):
+        (tmp_path / "data.csv").write_text("x")
+        (tmp_path / "notes.txt").write_text("x")
+        (tmp_path / "archive.zip").write_text("x")
+        result = _enumerate_csvs_under(tmp_path)
+        assert len(result) == 1
+        assert result[0].name == "data.csv"
+
+    def test_skips_hidden_files_at_top_level(self, tmp_path):
+        (tmp_path / "visible.csv").write_text("x")
+        (tmp_path / ".hidden.csv").write_text("x")
+        result = _enumerate_csvs_under(tmp_path)
+        assert [p.name for p in result] == ["visible.csv"]
+
+    def test_skips_csvs_inside_hidden_directory(self, tmp_path):
+        # ``.cache/baseline.csv`` is a very plausible accident on macOS.
+        cache_dir = tmp_path / ".cache"
+        cache_dir.mkdir()
+        (cache_dir / "baseline.csv").write_text("x")
+        (tmp_path / "keeper.csv").write_text("x")
+        result = _enumerate_csvs_under(tmp_path)
+        assert [p.name for p in result] == ["keeper.csv"]
+
+    def test_is_sorted_for_deterministic_tree_order(self, tmp_path):
+        # Insert in reverse order to prove we sort (not filesystem mtime)
+        for name in ("zebra.csv", "alpha.csv", "middle.csv"):
+            (tmp_path / name).write_text("x")
+        result = _enumerate_csvs_under(tmp_path)
+        assert [p.name for p in result] == [
+            "alpha.csv", "middle.csv", "zebra.csv",
+        ]
+
+    def test_missing_folder_returns_empty_not_raise(self, tmp_path):
+        # Defensive: UI shouldn't crash if the folder vanished between
+        # dialog pick and scan.
+        result = _enumerate_csvs_under(tmp_path / "does-not-exist")
+        assert result == []
