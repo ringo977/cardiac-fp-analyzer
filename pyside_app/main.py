@@ -1956,11 +1956,24 @@ class MainWindow(QMainWindow):
         )
         QApplication.processEvents()
 
+        # GH #6 Fase 2 — Group.config is source-of-truth for Ricalcola.
+        # If the active file belongs to a Group (tracked via
+        # ``_current_group`` set by ``_on_study_file_activated``), use
+        # that Group's persisted config so the fingerprint of the
+        # recomputed result matches the one the batch wrote in the
+        # Studi cache.  Falls back to the global app config when the
+        # file was opened standalone (outside a Study).
+        recompute_config = (
+            self._current_group.config
+            if self._current_group is not None
+            else self._current_config
+        )
+
         try:
             from cardiac_fp_analyzer.analyze import recompute_from_beats
             new_result = recompute_from_beats(
                 self._current_result, bi_edited,
-                config=self._current_config, verbose=False,
+                config=recompute_config, verbose=False,
             )
         except Exception as e:   # noqa: BLE001 — surface any pipeline error
             QMessageBox.critical(
