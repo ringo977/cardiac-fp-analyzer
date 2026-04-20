@@ -1743,6 +1743,13 @@ class MainWindow(QMainWindow):
         # can read ``group.config`` as source-of-truth (issue #6),
         # guaranteeing fingerprint consistency with the batch cache.
         self._current_group: Group | None = None
+        # POSIX-style path relative to the study folder, set alongside
+        # ``_current_group``.  Needed by Fase 3: after a Ricalcola we
+        # call ``StudyPanel.update_entry(group_name, csv_relpath, ...)``
+        # to write the fresh FileResult back into the batch cache, so
+        # the Studi tree and the dose-response dialog reflect the
+        # user's edit immediately.
+        self._current_csv_relpath: str | None = None
         # Config used for the current analysis; kept at window scope so
         # the Impostazioni dialog (task #74) can mutate ONE shared
         # instance and see the change reflected on the next Apri CSV
@@ -2018,6 +2025,32 @@ class MainWindow(QMainWindow):
 
         self._signal_tab.set_recompute_pending(False)
 
+        # GH #6 Fase 3 — write the recomputed result back into the
+        # Studi batch cache so the tree and the dose-response dialog
+        # pick up the user's edits immediately.  Only for files opened
+        # from the Studi panel (``_current_group`` and
+        # ``_current_csv_relpath`` are set together by
+        # ``_on_study_file_activated``).  Standalone files have no
+        # cache row to update.  The fingerprint is recomputed from
+        # ``recompute_config`` (= ``group.config`` post Fase 2) and
+        # the channel actually analysed in ``new_result``, so it
+        # matches what the next batch run would produce.
+        if (
+            self._current_group is not None
+            and self._current_csv_relpath is not None
+        ):
+            analyzed_channel = (
+                (new_result.get('file_info') or {}).get('analyzed_channel')
+                or self._signal_tab.channel_choice()
+            )
+            self._study_panel.update_entry(
+                self._current_group.name,
+                self._current_csv_relpath,
+                new_result,
+                channel=str(analyzed_channel),
+                config=recompute_config,
+            )
+
         # Persist the user's corrections as a sidecar JSON next to the
         # CSV (task #79).  The diff is always computed against the pure
         # automatic detection captured at open time — so re-Ricalcola
@@ -2101,8 +2134,10 @@ class MainWindow(QMainWindow):
             return
         # Standalone open: the file is not associated with a Study /
         # Group, so Ricalcola will fall back to the global
-        # ``self._config`` (issue #6).
+        # ``self._config`` (issue #6) and write-back to the Studi
+        # cache is skipped.
         self._current_group = None
+        self._current_csv_relpath = None
         # Respect any channel the user previously picked in this session
         # — preference is sticky across Open actions until they change
         # the combo back to Auto.
@@ -2288,20 +2323,26 @@ class MainWindow(QMainWindow):
         # Drop the Group reference too — next successful open
         # (studio or standalone) will set it anew (issue #6).
         self._current_group = None
+        self._current_csv_relpath = None
         self._signal_tab.set_recompute_enabled(False)
         self._signal_tab.set_analyzed_channel(None)
         self._update_window_title(None, None)
         self.statusBar().showMessage(status_msg)
 
-    def _on_study_file_activated(self, path: str, group_name: str) -> None:
+    def _on_study_file_activated(
+        self, path: str, group_name: str, csv_relpath: str,
+    ) -> None:
         """Handle double-click on a file row in the Studi panel (issue #6).
 
-        Looks up the Group by name and stashes the reference in
-        ``self._current_group`` so that ``_on_recompute`` (Fase 2) can
-        use ``group.config`` as source-of-truth — matching what the
-        batch analyzer used for this Group, so the result fingerprint
-        stays consistent with the cache entry and the dose-response
-        plot can be updated directly (Fase 3).
+        Looks up the Group by name and stashes both the reference in
+        ``self._current_group`` and the per-file ``csv_relpath`` so that
+        ``_on_recompute`` (Fase 2) can use ``group.config`` as
+        source-of-truth — matching what the batch analyzer used for
+        this Group, so the result fingerprint stays consistent with
+        the cache entry — and (Fase 3) write the recomputed result
+        back into the Studi cache via
+        :meth:`StudyPanel.update_entry`, unblocking the dose-response
+        refresh.
 
         Falls back gracefully if the Group has been removed between the
         emit and the slot (rare race — study_changed is the cleaner
@@ -2311,8 +2352,12 @@ class MainWindow(QMainWindow):
         study = self._study_panel.current_study()
         if study is not None:
             self._current_group = find_group(study, group_name)
+            self._current_csv_relpath = (
+                csv_relpath if self._current_group is not None else None
+            )
         else:
             self._current_group = None
+            self._current_csv_relpath = None
         self._run_analysis(path, channel=self._signal_tab.channel_choice())
 
     def _on_study_changed(self) -> None:

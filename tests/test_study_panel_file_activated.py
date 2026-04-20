@@ -99,9 +99,9 @@ class TestFileActivatedSignal:
         panel = StudyPanel()
         panel.set_study(study)
 
-        captured: list[tuple[str, str]] = []
+        captured: list[tuple[str, str, str]] = []
         panel.file_activated.connect(
-            lambda path, gn: captured.append((path, gn)),
+            lambda path, gn, rel: captured.append((path, gn, rel)),
         )
 
         # Craft an item that satisfies the guards in
@@ -118,13 +118,18 @@ class TestFileActivatedSignal:
         assert len(captured) == 1, (
             f"expected exactly one emission, got {len(captured)}"
         )
-        path_emitted, gn_emitted = captured[0]
+        path_emitted, gn_emitted, rel_emitted = captured[0]
         # ``resolve_file_path`` returns an absolute resolved Path; the
         # slot emits ``str(abspath)``.  We compare string-wise because
         # tmp_path may itself be symlinked on macOS (``/private/var``).
         expected_abs = str((tmp_path / "a.csv").resolve())
         assert path_emitted == expected_abs
         assert gn_emitted == group_name
+        # GH #6 Fase 3: the third payload element is the POSIX-style
+        # csv_relpath as stored in the Group's FileEntry — used by
+        # MainWindow to write the recomputed result back into the
+        # Studi batch cache via ``StudyPanel.update_entry``.
+        assert rel_emitted == "a.csv"
 
     def test_double_click_on_non_file_kind_does_not_emit(
         self, qapp, tmp_path,
@@ -139,9 +144,9 @@ class TestFileActivatedSignal:
         panel = StudyPanel()
         panel.set_study(study)
 
-        captured: list[tuple[str, str]] = []
+        captured: list[tuple[str, str, str]] = []
         panel.file_activated.connect(
-            lambda path, gn: captured.append((path, gn)),
+            lambda path, gn, rel: captured.append((path, gn, rel)),
         )
 
         # A "group" kind item — no FILE_INDEX set, would crash in the

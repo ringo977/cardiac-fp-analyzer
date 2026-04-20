@@ -1139,13 +1139,15 @@ class StudyPanel(QWidget):
 
     Signals
     -------
-    file_activated(str, str)
+    file_activated(str, str, str)
         Emitted when the user double-clicks a file row.  Payload is
-        (absolute CSV path, group name).  The group name lets
-        ``MainWindow`` track which Group the active file belongs to, so
-        Ricalcola can use ``group.config`` as source-of-truth instead of
-        the global app config — keeping the fingerprint consistent with
-        the batch cache entry (issue #6).
+        (absolute CSV path, group name, csv_relpath).  The group name
+        + relpath let ``MainWindow`` track which ``(group, file)`` the
+        active file belongs to, so Ricalcola can (a) use
+        ``group.config`` as source-of-truth instead of the global app
+        config — keeping the fingerprint consistent with the batch
+        cache entry — and (b) write the recomputed result back into
+        the batch cache via :meth:`update_entry` (issue #6).
 
     study_changed()
         Emitted after every successful mutation (add / remove / edit /
@@ -1154,7 +1156,7 @@ class StudyPanel(QWidget):
         saved by the time this fires.
     """
 
-    file_activated = Signal(str, str)
+    file_activated = Signal(str, str, str)
     study_changed = Signal()
 
     # ── Construction ──────────────────────────────────────────────────
@@ -2373,7 +2375,8 @@ class StudyPanel(QWidget):
         group = find_group(self._study, group_name)
         if group is None or not (0 <= file_idx < len(group.files)):
             return
-        abspath = resolve_file_path(self._study, group.files[file_idx])
+        fe = group.files[file_idx]
+        abspath = resolve_file_path(self._study, fe)
         if not abspath.is_file():
             QMessageBox.warning(
                 self, self.tr("File mancante"),
@@ -2382,7 +2385,108 @@ class StudyPanel(QWidget):
                 ).format(abspath),
             )
             return
-        self.file_activated.emit(str(abspath), group_name)
+        self.file_activated.emit(str(abspath), group_name, fe.csv_relpath)
+
+    # ── Cache write-back (GH #6 Fase 3) ──────────────────────────────
+
+    def update_entry(
+        self,
+        group_name: str,
+        csv_relpath: str,
+        result_dict: dict,
+        channel: str,
+        config,   # AnalysisConfig — not imported at module scope on purpose
+    ) -> None:
+        """Replace the cached :class:`FileResult` for one file.
+
+        Invoked by :class:`MainWindow` after a successful Ricalcola
+        (GH #6 Fase 3).  Builds a fresh :class:`FileResult` from the
+        pipeline output dict using the exact same extraction pattern
+        as :class:`_BatchWorker.run` (keeps the two paths in lockstep
+        so the Studi tree and the dose-response dialog see the same
+        numbers after a manual edit).
+
+        The new fingerprint is computed from the *actual* config used
+        by the recompute — which, post GH #6 Fase 2, is
+        ``group.config`` when the file belongs to a Group.  This is
+        what makes the cached entry match the current batch
+        fingerprint: the staleness gate stops flagging the row as ●,
+        and aggregates / dose-response pick up the user's edits
+        immediately.
+
+        Parameters
+        ----------
+        group_name : str
+            Name of the :class:`Group` the file belongs to.  Part of
+            the cache key.
+        csv_relpath : str
+            POSIX-style path relative to the study folder.  Part of
+            the cache key.
+        result_dict : dict
+            Pipeline result dict (same shape as
+            :func:`analyze_single_file` output).  Must contain
+            ``file_info``, ``beat_indices``, ``beat_indices_fpd``,
+            and ``summary``.
+        channel : str
+            Channel that was analysed (``"EL1"``, ``"EL2"``, ...).
+            Needed for the fingerprint — ``_result_fingerprint``
+            hashes ``(config, channel)``.
+        config : AnalysisConfig
+            Configuration that produced ``result_dict``.  Typically
+            ``group.config`` for group-scoped recomputes.
+
+        Notes
+        -----
+        No-op if ``self._study is None`` — can't sensibly write into
+        a closed study.  Silently ignores unknown ``group_name`` or
+        ``csv_relpath`` (caller is responsible for passing keys that
+        exist in the current study; we log at debug level but don't
+        raise, since a stale MainWindow state is survivable).
+        """
+        if self._study is None:
+            return
+        group = find_group(self._study, group_name)
+        if group is None:
+            logger.debug(
+                "StudyPanel.update_entry: unknown group %r — ignored",
+                group_name,
+            )
+            return
+        if not any(f.csv_relpath == csv_relpath for f in group.files):
+            logger.debug(
+                "StudyPanel.update_entry: unknown file %r in group %r — ignored",
+                csv_relpath, group_name,
+            )
+            return
+
+        analyzed = (
+            (result_dict.get('file_info') or {}).get('analyzed_channel')
+            or ''
+        )
+        n_total = _len_or_zero(result_dict.get('beat_indices'))
+        fpd_len = _len_or_zero(result_dict.get('beat_indices_fpd'))
+        n_included = fpd_len if fpd_len > 0 else n_total
+        fpd, fpdc, bpm, stv = _extract_summary_metrics(
+            result_dict.get('summary'),
+        )
+
+        fr = FileResult(
+            status='ok',
+            channel_analyzed=str(analyzed),
+            n_included=n_included,
+            n_total=n_total,
+            fingerprint=_result_fingerprint(config, channel),
+            fpd_ms=fpd,
+            fpdc_ms=fpdc,
+            bpm=bpm,
+            stv_ms=stv,
+        )
+        self._results[(group_name, csv_relpath)] = fr
+        # Rebuild so the tree's badge / tooltip / metric columns
+        # reflect the new result straight away — otherwise the user
+        # has to trigger some other refresh (new batch, reopen study)
+        # to see the edit land.
+        self._rebuild_tree()
 
     # ═════════════════════════════════════════════════════════════════
     #  Internal helpers
