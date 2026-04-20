@@ -27,6 +27,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QMenu
 
+from . import theme
+
 
 # How close (in seconds) a click must be to an existing marker to be
 # treated as "on" that marker (i.e. the menu offers Remove instead of Add).
@@ -68,14 +70,13 @@ class SignalViewer(pg.PlotWidget):
         self._show_raw: bool = False
 
         # ─── Style ────────────────────────────────────────────────
-        self.setBackground("#0e1117")
-        for ax_name in ("left", "bottom"):
-            ax = self.getAxis(ax_name)
-            ax.setPen("#cccccc")
-            ax.setTextPen("#cccccc")
-        self.setLabel("bottom", self.tr("Tempo (s)"))
-        self.setLabel("left", self.tr("Ampiezza (µV)"))
-        self.showGrid(x=True, y=True, alpha=0.2)
+        # Palette (background + axis pens + grid alpha) comes from
+        # ``theme.apply_to_plot`` so it tracks the user's Scuro/Chiaro
+        # choice.  We also re-apply on every ``theme_changed`` event so
+        # toggling the menu repaints without a restart.
+        theme.apply_to_plot(self)
+        self._apply_axis_labels()
+        theme.connect(self._on_theme_changed)
 
         # ─── Plot items (created once, data updated in place) ─────
         # Raw line is drawn BEFORE the filtered line so that, when both
@@ -111,6 +112,31 @@ class SignalViewer(pg.PlotWidget):
             rateLimit=60,   # Hz cap → one update every ~16 ms
             slot=self._on_mouse_moved,
         )
+
+    # ─── Theme integration ───────────────────────────────────────
+    def _apply_axis_labels(self) -> None:
+        """Set axis titles with the active theme's foreground colour.
+
+        Axis titles are distinct from tick text: ``setLabel(color=...)``
+        sets the title colour, while ``setTextPen`` (handled inside
+        ``theme.apply_to_plot``) sets the tick text.  Keeping the two
+        in sync via the same palette is the whole reason the theme
+        module exists.
+        """
+        fg = theme.label_color()
+        self.setLabel("bottom", self.tr("Tempo (s)"), color=fg)
+        self.setLabel("left", self.tr("Ampiezza (µV)"), color=fg)
+
+    def _on_theme_changed(self, _mode: str) -> None:
+        """Repaint on live theme toggle.
+
+        Called from the ``theme`` notifier; ``_mode`` is accepted but
+        unused because ``apply_to_plot`` always reads the current
+        palette from QSettings and we want to stay in sync with that
+        single source of truth.
+        """
+        theme.apply_to_plot(self)
+        self._apply_axis_labels()
 
     # ─── Public API ───────────────────────────────────────────────
     def set_result(self, result: dict) -> None:

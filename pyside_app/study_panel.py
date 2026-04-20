@@ -130,6 +130,8 @@ from cardiac_fp_analyzer.study import (
     save_study,
 )
 
+from . import theme
+
 logger = logging.getLogger(__name__)
 
 
@@ -864,18 +866,15 @@ class DoseResponseDialog(QDialog):
         top.addStretch(1)
 
         # ── Plot widget ───────────────────────────────────────────────
-        # Dark background (#0e1117) to stay coherent with the signal
-        # viewer (see ``signal_viewer.py``) and the main plot in
-        # ``main.py``: having one light-themed dialog in an otherwise
-        # dark app is jarring on dark-mode displays.  A proper user-
-        # selectable theme toggle is tracked separately — see Step B of
-        # the theme coherence work.
+        # Palette (background + axis pens + grid alpha) comes from the
+        # shared ``theme`` module so the dose-response dialog stays
+        # coherent with the Signal viewer and the Battiti template
+        # plot.  Live updates on toggle are wired via
+        # ``theme.connect(self._on_theme_changed)`` below.
         self._plot = pg.PlotWidget()
-        self._plot.setBackground('#0e1117')
+        theme.apply_to_plot(self._plot)
         for ax_name in ('left', 'bottom'):
             ax = self._plot.getAxis(ax_name)
-            ax.setPen('#cccccc')
-            ax.setTextPen('#cccccc')
             # Disable SI auto-prefixing — in log-x mode pyqtgraph
             # applies its own prefix to the transformed tick values
             # (which are log10 of the dose), producing nonsensical
@@ -884,12 +883,17 @@ class DoseResponseDialog(QDialog):
             # the tick labels, so we keep the prefixer off on both
             # axes for symmetry.
             ax.enableAutoSIPrefix(False)
-        # Grid helps reading off values at a glance on dose axes.
-        self._plot.showGrid(x=True, y=True, alpha=0.25)
-        # Legend — text must be light on the dark background, otherwise
-        # the entries render black-on-black and appear missing.
+        # Legend — text colour comes from the palette so the entries
+        # are readable against the current background.  The legend is
+        # re-created at most once (here), never in ``_refresh_plot``
+        # (see the long comment there explaining the orphaned-legend
+        # bug that motivated the simplification).
         self._legend = self._plot.addLegend(offset=(10, 10))
-        self._legend.setLabelTextColor('#cccccc')
+        theme.apply_to_legend(self._legend)
+        # Subscribe to live theme toggles — the dialog can stay open
+        # while the user flips Visualizza → Tema.  Unsubscribe on
+        # close so we don't leak if the dialog is re-opened.
+        theme.connect(self._on_theme_changed)
 
         # ── Empty-state overlay ───────────────────────────────────────
         # Shown when no group has fresh-ok results for the chosen
@@ -917,6 +921,20 @@ class DoseResponseDialog(QDialog):
         root.addWidget(self._empty_label)
         root.addWidget(btns)
 
+        self._refresh_plot()
+
+    # ── Theme integration ──────────────────────────────────────────
+
+    def _on_theme_changed(self, _mode: str) -> None:
+        """Live-repaint the dose-response plot on theme toggle.
+
+        Re-applies the palette to both plot and legend and triggers a
+        full redraw so the axis titles pick up ``theme.label_color()``
+        too — ``setLabel(color=...)`` is only honoured at label-set
+        time, hence the ``_refresh_plot`` call.
+        """
+        theme.apply_to_plot(self._plot)
+        theme.apply_to_legend(self._legend)
         self._refresh_plot()
 
     # ── Refresh logic ────────────────────────────────────────────────
@@ -962,8 +980,9 @@ class DoseResponseDialog(QDialog):
         # ``Dose (e27µM)``.  Putting "(µM)" in the label text keeps
         # pyqtgraph from interpreting the string as an SI unit.
         y_axis = label if not unit else f"{label} ({unit})"
-        self._plot.setLabel('bottom', self.tr("Dose (µM)"))
-        self._plot.setLabel('left', y_axis)
+        fg = theme.label_color()
+        self._plot.setLabel('bottom', self.tr("Dose (µM)"), color=fg)
+        self._plot.setLabel('left', y_axis, color=fg)
 
         # Log-x only makes sense when every dose point is > 0; disable
         # the checkbox otherwise so the UI is honest about what's

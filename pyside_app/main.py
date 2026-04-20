@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyside_app import theme
 from pyside_app.signal_viewer import SignalViewer
 from pyside_app.study_panel import StudyPanel
 
@@ -604,21 +605,19 @@ class _BeatsTab(QWidget):
         up_lay.addWidget(self._banner)
 
         # pyqtgraph overlay plot — up to 30 beats (semi-transparent
-        # blue) plus the mean template (red).  Dark palette identical to
-        # the Signal-tab viewer (``#0e1117`` background + ``#cccccc``
-        # axes/text) so the two tabs read as one coherent dark UI.
+        # blue) plus the mean template (red).  The palette (background
+        # + axis pens + grid alpha) comes from the shared ``theme``
+        # module so the Battiti tab stays in sync with the Signal-tab
+        # viewer and the dose-response dialog.  A user toggle in the
+        # Visualizza menu switches Scuro ↔ Chiaro live; see
+        # ``_on_theme_changed`` for the re-apply path.
         self._plot = pg.PlotWidget()
-        self._plot.setBackground("#0e1117")
-        for ax_name in ("left", "bottom"):
-            ax = self._plot.getAxis(ax_name)
-            ax.setPen("#cccccc")
-            ax.setTextPen("#cccccc")
-        self._plot.showGrid(x=True, y=True, alpha=0.2)
-        self._plot.setLabel("bottom", self.tr("Tempo (ms)"),
-                            color="#cccccc")
-        self._plot.setLabel("left", self.tr("Ampiezza (mV)"),
-                            color="#cccccc")
+        theme.apply_to_plot(self._plot)
+        self._apply_template_axis_labels()
         self._plot.setMouseEnabled(x=True, y=True)
+        # Subscribe to live theme toggles; the Battiti tab outlives
+        # every plot it hosts, so we never disconnect.
+        theme.connect(self._on_theme_changed)
 
         # Zoom toolbar (Fase 2.E) — same Pan/Box/Auto/PNG set as the
         # Signal tab, shrunk into a single row above the plot. The
@@ -847,6 +846,23 @@ class _BeatsTab(QWidget):
         self._analyzed_indices = set(
             int(x) for x in (indices if indices is not None else [])
         )
+
+    # ─── Theme integration ───────────────────────────────────────
+    def _apply_template_axis_labels(self) -> None:
+        """Set the template plot's axis titles using the active palette.
+
+        Kept separate from ``theme.apply_to_plot`` so the labels can be
+        retranslated independently (in case Qt's language switcher is
+        ever wired up) while still tracking the theme colour.
+        """
+        fg = theme.label_color()
+        self._plot.setLabel("bottom", self.tr("Tempo (ms)"), color=fg)
+        self._plot.setLabel("left", self.tr("Ampiezza (mV)"), color=fg)
+
+    def _on_theme_changed(self, _mode: str) -> None:
+        """Live-repaint the Battiti template plot on theme toggle."""
+        theme.apply_to_plot(self._plot)
+        self._apply_template_axis_labels()
 
     # ─── Internal: row population ─────────────────────────────────
     def _render_rows(self, indices, time_vector) -> None:
@@ -1821,6 +1837,34 @@ class MainWindow(QMainWindow):
         act_toggle_studies.setShortcut("Ctrl+Shift+P")
         m_studies.addAction(act_toggle_studies)
 
+        # ─── Visualizza menu ───────────────────────────────────────
+        # Hosts the Tema submenu (Scuro / Chiaro).  Built as exclusive
+        # checkable actions via a QActionGroup so the currently-active
+        # theme always carries a ✓ — no radio-button widget needed.
+        # QSettings persistence + live re-apply to every plot is handled
+        # in ``theme.py``; the menu is just a UI over that model.
+        m_view = self.menuBar().addMenu(self.tr("&Visualizza"))
+        m_theme = m_view.addMenu(self.tr("&Tema"))
+        self._theme_group = QActionGroup(self)
+        self._theme_group.setExclusive(True)
+        self._act_theme_dark = QAction(self.tr("Scuro"), self)
+        self._act_theme_dark.setCheckable(True)
+        self._act_theme_dark.setData("dark")
+        self._theme_group.addAction(self._act_theme_dark)
+        m_theme.addAction(self._act_theme_dark)
+        self._act_theme_light = QAction(self.tr("Chiaro"), self)
+        self._act_theme_light.setCheckable(True)
+        self._act_theme_light.setData("light")
+        self._theme_group.addAction(self._act_theme_light)
+        m_theme.addAction(self._act_theme_light)
+        # Reflect the persisted preference in the menu check-state at
+        # startup.  Do this BEFORE wiring ``triggered`` so the initial
+        # setChecked() doesn't fire a spurious save.
+        current = theme.current_mode()
+        (self._act_theme_dark if current == "dark"
+         else self._act_theme_light).setChecked(True)
+        self._theme_group.triggered.connect(self._on_theme_menu_triggered)
+
         # ─── Keyboard shortcuts (global) ───────────────────────────
         # Registered at the MainWindow level so they fire no matter
         # which widget has focus.  Ctrl++ and Ctrl+- match the
@@ -2056,6 +2100,19 @@ class MainWindow(QMainWindow):
             return
         self._run_analysis(str(self._current_csv_path), channel=choice)
 
+    def _on_theme_menu_triggered(self, action: QAction) -> None:
+        """Persist the selected theme and notify subscribers.
+
+        Called from the Visualizza → Tema QActionGroup.  The action
+        carries the mode string (``'dark'`` | ``'light'``) in its
+        ``data()`` slot; ``theme.set_mode`` writes QSettings AND emits
+        the ``theme_changed`` signal, so every subscribed plot
+        repaints on its own without us having to enumerate them here.
+        """
+        mode = action.data()
+        if mode in ("dark", "light"):
+            theme.set_mode(mode)
+
     def _on_settings(self) -> None:
         """Open the Impostazioni dialog and re-run on ``applied`` (task #74).
 
@@ -2243,6 +2300,14 @@ class MainWindow(QMainWindow):
 
 
 def main() -> int:
+    # ``QSettings`` (used by ``pyside_app.theme`` and future prefs)
+    # derives its backing store path from the application's
+    # organisation + application name.  Set both here, before any
+    # widget is created, so the theme module can read/write the user
+    # preference without surprises.
+    QApplication.setOrganizationName("CardiacFP")
+    QApplication.setOrganizationDomain("cardiac-fp-analyzer")
+    QApplication.setApplicationName("Cardiac FP Analyzer")
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
