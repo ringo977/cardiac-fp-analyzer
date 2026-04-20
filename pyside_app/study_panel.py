@@ -877,9 +877,20 @@ class DoseResponseDialog(QDialog):
             ax = self._plot.getAxis(ax_name)
             ax.setPen('#cccccc')
             ax.setTextPen('#cccccc')
+            # Disable SI auto-prefixing — in log-x mode pyqtgraph
+            # applies its own prefix to the transformed tick values
+            # (which are log10 of the dose), producing nonsensical
+            # axes like ``10⁻²⁷…10⁷³`` with a ``(x1e+27)`` suffix.
+            # For concentration data we always want raw µM values on
+            # the tick labels, so we keep the prefixer off on both
+            # axes for symmetry.
+            ax.enableAutoSIPrefix(False)
         # Grid helps reading off values at a glance on dose axes.
         self._plot.showGrid(x=True, y=True, alpha=0.25)
+        # Legend — text must be light on the dark background, otherwise
+        # the entries render black-on-black and appear missing.
         self._legend = self._plot.addLegend(offset=(10, 10))
+        self._legend.setLabelTextColor('#cccccc')
 
         # ── Empty-state overlay ───────────────────────────────────────
         # Shown when no group has fresh-ok results for the chosen
@@ -924,6 +935,9 @@ class DoseResponseDialog(QDialog):
         with contextlib.suppress(Exception):   # noqa: BLE001
             self._legend.scene().removeItem(self._legend)
         self._legend = self._plot.addLegend(offset=(10, 10))
+        # Re-apply light text colour — the legend is re-created on
+        # every metric switch, and addLegend() defaults to black text.
+        self._legend.setLabelTextColor('#cccccc')
 
         metric = self._metric_combo.currentData() or 'fpdc_ms'
         label, unit, decimals = _metric_meta(metric)
