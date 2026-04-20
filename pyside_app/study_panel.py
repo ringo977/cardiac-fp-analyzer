@@ -865,11 +865,18 @@ class DoseResponseDialog(QDialog):
         top.addStretch(1)
 
         # ── Plot widget ───────────────────────────────────────────────
-        # White background — scientific figures are printed, and a
-        # light plot is more familiar to the audience than pyqtgraph's
-        # default dark grey.
+        # Dark background (#0e1117) to stay coherent with the signal
+        # viewer (see ``signal_viewer.py``) and the main plot in
+        # ``main.py``: having one light-themed dialog in an otherwise
+        # dark app is jarring on dark-mode displays.  A proper user-
+        # selectable theme toggle is tracked separately — see Step B of
+        # the theme coherence work.
         self._plot = pg.PlotWidget()
-        self._plot.setBackground('w')
+        self._plot.setBackground('#0e1117')
+        for ax_name in ('left', 'bottom'):
+            ax = self._plot.getAxis(ax_name)
+            ax.setPen('#cccccc')
+            ax.setTextPen('#cccccc')
         # Grid helps reading off values at a glance on dose axes.
         self._plot.showGrid(x=True, y=True, alpha=0.25)
         self._legend = self._plot.addLegend(offset=(10, 10))
@@ -933,8 +940,17 @@ class DoseResponseDialog(QDialog):
 
         # Axis labels — the x label is constant ("Dose (µM)"); y
         # encodes the chosen metric + unit.
+        #
+        # NOTE: we pass the unit INSIDE the label string rather than via
+        # the ``units=`` kwarg.  Passing ``units='µM'`` triggers
+        # pyqtgraph's SI-prefix auto-scaling, which parses the leading
+        # ``µ`` as the micro prefix (10⁻⁶) and then re-applies another
+        # prefix on top — in log-x mode this collapses every real
+        # concentration to a single column at ~10⁻²⁷ and labels the axis
+        # ``Dose (e27µM)``.  Putting "(µM)" in the label text keeps
+        # pyqtgraph from interpreting the string as an SI unit.
         y_axis = label if not unit else f"{label} ({unit})"
-        self._plot.setLabel('bottom', self.tr("Dose"), units='µM')
+        self._plot.setLabel('bottom', self.tr("Dose (µM)"))
         self._plot.setLabel('left', y_axis)
 
         # Log-x only makes sense when every dose point is > 0; disable
