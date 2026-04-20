@@ -78,7 +78,7 @@ def _make_study_with_one_file(tmp_path) -> tuple[Study, str]:
     csv.write_text("Time (s),EL1 (V)\n0.000,0.0\n0.001,0.0\n")
     group = Group(
         name="DoseX",
-        files=[FileEntry(csv_relpath="a.csv", label="")],
+        files=[FileEntry(csv_relpath="a.csv")],
     )
     study = Study(name="TestStudy", folder=tmp_path, groups=[group])
     save_study(study)
