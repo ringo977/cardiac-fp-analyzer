@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from cardiac_fp_analyzer.study import Group, find_group
 from pyside_app import theme
 from pyside_app.signal_viewer import SignalViewer
 from pyside_app.study_panel import StudyPanel
@@ -1736,6 +1737,12 @@ class MainWindow(QMainWindow):
         # Parametri + Aritmie.  ``None`` before the first file is loaded.
         self._current_result: dict | None = None
         self._current_csv_path: Path | None = None
+        # Set when the active CSV was opened from the Studi panel
+        # (double-click on a file row).  ``None`` when opened via
+        # ``File → Apri CSV`` standalone.  Holds the Group so Ricalcola
+        # can read ``group.config`` as source-of-truth (issue #6),
+        # guaranteeing fingerprint consistency with the batch cache.
+        self._current_group: Group | None = None
         # Config used for the current analysis; kept at window scope so
         # the Impostazioni dialog (task #74) can mutate ONE shared
         # instance and see the change reflected on the next Apri CSV
@@ -1823,12 +1830,9 @@ class MainWindow(QMainWindow):
         # path, honouring whatever channel the user has selected.  The
         # file entry's own ``channel`` field is not plumbed through in
         # the PoC (step 2): that's a step-3 refinement once batch-per-
-        # group lands.
-        self._study_panel.file_activated.connect(
-            lambda path: self._run_analysis(
-                path, channel=self._signal_tab.channel_choice(),
-            )
-        )
+        # group lands.  The slot also stashes the Group so Ricalcola
+        # can later read ``group.config`` (issue #6).
+        self._study_panel.file_activated.connect(self._on_study_file_activated)
         self._study_panel.study_changed.connect(self._on_study_changed)
 
         m_studies = self.menuBar().addMenu(self.tr("&Studi"))
@@ -2082,6 +2086,10 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        # Standalone open: the file is not associated with a Study /
+        # Group, so Ricalcola will fall back to the global
+        # ``self._config`` (issue #6).
+        self._current_group = None
         # Respect any channel the user previously picked in this session
         # — preference is sticky across Open actions until they change
         # the combo back to Auto.
@@ -2264,10 +2272,35 @@ class MainWindow(QMainWindow):
         self._current_result = None
         self._current_csv_path = None
         self._current_config = None
+        # Drop the Group reference too — next successful open
+        # (studio or standalone) will set it anew (issue #6).
+        self._current_group = None
         self._signal_tab.set_recompute_enabled(False)
         self._signal_tab.set_analyzed_channel(None)
         self._update_window_title(None, None)
         self.statusBar().showMessage(status_msg)
+
+    def _on_study_file_activated(self, path: str, group_name: str) -> None:
+        """Handle double-click on a file row in the Studi panel (issue #6).
+
+        Looks up the Group by name and stashes the reference in
+        ``self._current_group`` so that ``_on_recompute`` (Fase 2) can
+        use ``group.config`` as source-of-truth — matching what the
+        batch analyzer used for this Group, so the result fingerprint
+        stays consistent with the cache entry and the dose-response
+        plot can be updated directly (Fase 3).
+
+        Falls back gracefully if the Group has been removed between the
+        emit and the slot (rare race — study_changed is the cleaner
+        signal for that) by leaving ``_current_group = None``; Ricalcola
+        will then fall back to the global config, same as standalone.
+        """
+        study = self._study_panel.current_study()
+        if study is not None:
+            self._current_group = find_group(study, group_name)
+        else:
+            self._current_group = None
+        self._run_analysis(path, channel=self._signal_tab.channel_choice())
 
     def _on_study_changed(self) -> None:
         """Status-bar hint when a study is opened / created (task #84)."""

@@ -1139,9 +1139,13 @@ class StudyPanel(QWidget):
 
     Signals
     -------
-    file_activated(str)
-        Emitted when the user double-clicks a file row.  Payload is the
-        **absolute** CSV path, ready to hand to ``MainWindow._run_analysis``.
+    file_activated(str, str)
+        Emitted when the user double-clicks a file row.  Payload is
+        (absolute CSV path, group name).  The group name lets
+        ``MainWindow`` track which Group the active file belongs to, so
+        Ricalcola can use ``group.config`` as source-of-truth instead of
+        the global app config — keeping the fingerprint consistent with
+        the batch cache entry (issue #6).
 
     study_changed()
         Emitted after every successful mutation (add / remove / edit /
@@ -1150,7 +1154,7 @@ class StudyPanel(QWidget):
         saved by the time this fires.
     """
 
-    file_activated = Signal(str)
+    file_activated = Signal(str, str)
     study_changed = Signal()
 
     # ── Construction ──────────────────────────────────────────────────
@@ -2378,7 +2382,7 @@ class StudyPanel(QWidget):
                 ).format(abspath),
             )
             return
-        self.file_activated.emit(str(abspath))
+        self.file_activated.emit(str(abspath), group_name)
 
     # ═════════════════════════════════════════════════════════════════
     #  Internal helpers
