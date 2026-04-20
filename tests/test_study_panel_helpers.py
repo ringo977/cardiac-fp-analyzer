@@ -68,6 +68,8 @@ _format_concentration_from_dose_uM = sp._format_concentration_from_dose_uM
 _enrich_file_info_for_export = sp._enrich_file_info_for_export
 _collect_export_inputs = sp._collect_export_inputs
 _suggest_study_id = sp._suggest_study_id
+# Task #91 — study-wide batch helper.
+_collect_batch_inputs = sp._collect_batch_inputs
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1759,4 +1761,167 @@ class TestSuggestStudyId:
 
     def test_preserves_digits(self):
         assert _suggest_study_id('study2026') == 'STUDY2026'
+
+
+# ─────────────────────────────────────────────────────────────────────────
+#  _collect_batch_inputs — study-wide + per-group batch collector (#91).
+#
+#  The collector is the shared foundation of both "Analizza gruppo" and
+#  "Analizza studio": it resolves CSV paths via the study folder,
+#  clamps each file's ``channel`` to the known triple, and splits the
+#  (group, file) pairs into submittable (ready) vs. pre-flagged
+#  (missing).  These tests cover the split logic end-to-end without
+#  Qt — the UI-side threadpool / progress-dialog plumbing is exercised
+#  at a higher level, but a regression in collection would quietly
+#  mis-attribute or drop files, which is the kind of bug the user
+#  won't notice until results are wrong.
+# ─────────────────────────────────────────────────────────────────────────
+
+from cardiac_fp_analyzer.study import (  # noqa: E402 — after sp import
+    FileEntry,
+    Group,
+    Study,
+)
+
+
+def _make_study(tmp_path, layout):
+    """Build a :class:`Study` on disk with the requested ``layout``.
+
+    ``layout`` is a list of ``(group_name, [(csv_relpath, exists, channel)])``
+    — a tiny DSL so tests read top-down.  Missing files are represented
+    by ``exists=False`` and no file is actually created on disk; the
+    study folder itself always exists.
+    """
+    folder = tmp_path / "study"
+    folder.mkdir()
+    groups = []
+    for gname, files in layout:
+        fes = []
+        for rel, exists, ch in files:
+            if exists:
+                p = folder / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text("time,el1\n0,0\n", encoding="utf-8")
+            fes.append(FileEntry(csv_relpath=rel, channel=ch))
+        groups.append(Group(name=gname, files=fes))
+    return Study(name="t", folder=str(folder), groups=groups)
+
+
+class TestCollectBatchInputs:
+    def test_empty_groups_list_yields_empty_result(self, tmp_path):
+        study = _make_study(tmp_path, [])
+        ready, missing = _collect_batch_inputs(study, [])
+        assert ready == []
+        assert missing == {}
+
+    def test_single_group_all_ready(self, tmp_path):
+        study = _make_study(
+            tmp_path,
+            [("g1", [("a.csv", True, "auto"), ("b.csv", True, "EL1")])],
+        )
+        ready, missing = _collect_batch_inputs(study, study.groups)
+        assert missing == {}
+        assert len(ready) == 2
+        # Channels preserved; order follows group.files.
+        assert [r[1].csv_relpath for r in ready] == ["a.csv", "b.csv"]
+        assert [r[3] for r in ready] == ["auto", "EL1"]
+        # Each ready entry references the same Group instance — the
+        # run-batch layer relies on this to read per-group config.
+        assert all(r[0] is study.groups[0] for r in ready)
+
+    def test_missing_file_populates_missing_dict(self, tmp_path):
+        study = _make_study(
+            tmp_path,
+            [("g1", [("there.csv", True, "auto"),
+                     ("gone.csv", False, "auto")])],
+        )
+        ready, missing = _collect_batch_inputs(study, study.groups)
+        assert len(ready) == 1
+        assert ready[0][1].csv_relpath == "there.csv"
+        # Missing file lands in the cache-ready dict keyed by
+        # (group_name, csv_relpath) with an Italian error message —
+        # the UI merges this straight into _results before the pool
+        # starts, so ✗ badges appear without phantom "pending" rows.
+        assert ("g1", "gone.csv") in missing
+        fr = missing[("g1", "gone.csv")]
+        assert fr.status == "error"
+        assert "non trovato" in fr.error.lower()
+        assert fr.error.endswith("gone.csv")
+
+    def test_cross_group_study_wide(self, tmp_path):
+        # Two groups × two files each — mirrors the real dose-response
+        # shape (baseline + dose).  Study-wide batch must see every
+        # (group, file) pair and keep the per-group Group reference so
+        # each worker can honour that group's AnalysisConfig.
+        study = _make_study(
+            tmp_path,
+            [
+                ("baseline", [("b1.csv", True, "auto"),
+                              ("b2.csv", True, "auto")]),
+                ("dose-10nM", [("d1.csv", True, "EL2"),
+                               ("d2.csv", False, "auto")]),
+            ],
+        )
+        ready, missing = _collect_batch_inputs(study, study.groups)
+        # One missing (d2), three ready.
+        assert len(ready) == 3
+        assert set(missing.keys()) == {("dose-10nM", "d2.csv")}
+        # Group references survive the collection — the run-batch
+        # layer compares ``r[0] is group`` when looking up per-group
+        # config.
+        group_by_name = {g.name: g for g in study.groups}
+        for group, fe, _abs, _ch in ready:
+            assert group is group_by_name[group.name]
+
+    def test_unknown_channel_clamps_to_auto(self, tmp_path):
+        # Legacy / corrupted sidecar might carry 'EL3' or a typo like
+        # 'el1'; the collector must fall back to 'auto' rather than
+        # propagate a bogus label into ``analyze_single_file``.
+        study = _make_study(
+            tmp_path,
+            [("g1", [
+                ("a.csv", True, "EL3"),     # unknown
+                ("b.csv", True, "el1"),      # wrong case
+                ("c.csv", True, ""),         # empty
+                ("d.csv", True, "EL1"),      # valid → preserved
+                ("e.csv", True, "auto"),     # valid → preserved
+                ("f.csv", True, "EL2"),      # valid → preserved
+            ])],
+        )
+        ready, _ = _collect_batch_inputs(study, study.groups)
+        channels = [r[3] for r in ready]
+        # First three clamped, last three preserved exactly.
+        assert channels == ["auto", "auto", "auto", "EL1", "auto", "EL2"]
+
+    def test_empty_group_is_skipped_silently(self, tmp_path):
+        # A group with no files contributes nothing — not an error,
+        # not a missing row.  The "Analizza studio" caller already
+        # filters these out for cleaner logs, but the collector must
+        # tolerate them anyway (defence in depth + future callers).
+        study = _make_study(
+            tmp_path,
+            [
+                ("empty", []),
+                ("populated", [("a.csv", True, "auto")]),
+            ],
+        )
+        ready, missing = _collect_batch_inputs(study, study.groups)
+        assert len(ready) == 1
+        assert ready[0][0].name == "populated"
+        assert missing == {}
+
+    def test_subset_of_groups_honoured(self, tmp_path):
+        # The per-group flow passes ``[selected]``; the collector must
+        # see only the requested group(s), never sibling groups — a
+        # regression here would leak analysis work across groups.
+        study = _make_study(
+            tmp_path,
+            [
+                ("g1", [("a.csv", True, "auto")]),
+                ("g2", [("b.csv", True, "auto")]),
+            ],
+        )
+        ready, missing = _collect_batch_inputs(study, [study.groups[0]])
+        assert [r[1].csv_relpath for r in ready] == ["a.csv"]
+        assert missing == {}
         assert _suggest_study_id('2026-q2') == '2026-Q2'

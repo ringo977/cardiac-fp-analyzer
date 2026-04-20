@@ -352,6 +352,71 @@ _DOSE_RESPONSE_METRICS: tuple[tuple[str, str, str, int], ...] = (
 #    just emits the result and lets the UI thread store it.
 
 
+def _collect_batch_inputs(
+    study: Study,
+    groups: list[Group],
+) -> tuple[
+    list[tuple[Group, FileEntry, Path, str]],
+    dict[tuple[str, str], FileResult],
+]:
+    """Split every ``(group, file)`` pair across ``groups`` into ready + missing.
+
+    Pure helper pulled out of :meth:`StudyPanel._on_analyze_group` so
+    both the per-group and the study-wide batch flows can share one
+    ready/missing split, and so the collection logic can be unit-tested
+    without spinning up Qt.
+
+    Parameters
+    ----------
+    study
+        The owning :class:`Study` — used by :func:`resolve_file_path`
+        to anchor relative CSV paths against ``study.folder``.
+    groups
+        Subset of ``study.groups`` to batch.  Pass a single-group list
+        for *Analizza gruppo*, or ``study.groups`` for *Analizza studio*.
+        The caller decides scope; this helper doesn't second-guess the
+        selection.
+
+    Returns
+    -------
+    ready
+        One tuple per resolvable CSV: ``(group, file_entry, abspath,
+        channel)``.  ``channel`` is clamped to one of
+        ``'auto' | 'EL1' | 'EL2'`` — legacy or corrupted sidecar values
+        fall back to ``'auto'`` rather than propagate a bogus label
+        into the pipeline.  The order mirrors ``groups`` then
+        ``group.files`` so the batch's submission order is deterministic
+        (matters only for the progress label — pool scheduling is not
+        order-preserving).
+    missing
+        Dict keyed by ``(group_name, csv_relpath)`` mapping to a
+        pre-built ``FileResult(status='error', ...)``.  The caller is
+        expected to merge this into its result cache before running
+        the pool, so the tree shows ✗ badges even for files that
+        never got submitted (no phantom "pending" rows).
+    """
+    ready: list[tuple[Group, FileEntry, Path, str]] = []
+    missing: dict[tuple[str, str], FileResult] = {}
+    for group in groups:
+        for fe in group.files:
+            abspath = resolve_file_path(study, fe)
+            key = (group.name, fe.csv_relpath)
+            if not abspath.is_file():
+                # Plain Italian here (no ``tr()``): the string is
+                # assembled outside a ``QObject`` context so we can
+                # keep this helper Qt-free.  The wider i18n pass
+                # (bilingual UI, see project_i18n memory) will route
+                # this through ``QCoreApplication.translate`` later.
+                missing[key] = FileResult(
+                    status='error',
+                    error=f"File non trovato: {abspath}",
+                )
+                continue
+            ch = fe.channel if fe.channel in ('auto', 'EL1', 'EL2') else 'auto'
+            ready.append((group, fe, abspath, ch))
+    return ready, missing
+
+
 class _BatchWorkerSignals(QObject):
     """Signal carrier for :class:`_BatchWorker` — one result per file.
 
@@ -1123,6 +1188,7 @@ class StudyPanel(QWidget):
             self.tr("Impostazioni gruppo..."), self,
         )
         self._act_remove = QAction(self.tr("Rimuovi"), self)
+        self._act_analyze_study = QAction(self.tr("Analizza studio..."), self)
         self._act_analyze_group = QAction(self.tr("Analizza gruppo..."), self)
         self._act_dose_response = QAction(self.tr("Dose-risposta..."), self)
         self._act_export_cdisc = QAction(self.tr("Esporta CDISC..."), self)
@@ -1143,6 +1209,12 @@ class StudyPanel(QWidget):
         self._toolbar.addAction(self._act_remove)
         self._toolbar.addSeparator()
         # Group 3 — analysis (batch + cross-group plot + CDISC export).
+        # "Analizza studio" first because it's the broadest action —
+        # Marco's complaint was that re-analysing groups one by one was
+        # "un inferno", so the single-click "whole study" path is the
+        # primary affordance and "Analizza gruppo" is the surgical
+        # re-run after config tweaks.
+        self._toolbar.addAction(self._act_analyze_study)
         self._toolbar.addAction(self._act_analyze_group)
         self._toolbar.addAction(self._act_dose_response)
         self._toolbar.addAction(self._act_export_cdisc)
@@ -1158,6 +1230,7 @@ class StudyPanel(QWidget):
         self._act_add_folder.triggered.connect(self._on_add_folder)
         self._act_group_settings.triggered.connect(self._on_group_settings)
         self._act_remove.triggered.connect(self._on_remove)
+        self._act_analyze_study.triggered.connect(self._on_analyze_study)
         self._act_analyze_group.triggered.connect(self._on_analyze_group)
         self._act_dose_response.triggered.connect(self._on_dose_response)
         self._act_export_cdisc.triggered.connect(self._on_export_cdisc)
@@ -1623,37 +1696,16 @@ class StudyPanel(QWidget):
         the duration of the batch (tree redraws, mouse moves, even
         tooltips still work while 4 files process in parallel).
 
-        Behaviour:
+        This is the single-group entry point; the actual batch
+        machinery lives in :meth:`_run_batch`, which is shared with
+        :meth:`_on_analyze_study`.  See that method's docstring for
+        the cross-group batch contract.  Per-group-specific bits
+        handled here:
 
-        * Channel selection follows :attr:`FileEntry.channel`.  The
-          default value is ``'auto'`` (assigned by ``make_file_entry``)
-          so out-of-the-box batch picks the best electrode per file via
-          :func:`select_best_channel`.  Users who have explicitly pinned
-          EL1 / EL2 on a file (e.g. because they know the other
-          electrode is dead on that chip) keep that preference.
-        * Each group carries its own :class:`AnalysisConfig` — batch
-          honours it, so a baseline group and a dose group can use
-          different QC thresholds without touching global settings.
-        * Files whose CSV is missing are rejected up-front (before any
-          worker is submitted) so the pool only ever runs useful work.
-        * Parallelism is capped at
-          ``min(idealThreadCount(), _BATCH_MAX_THREADS)`` — pragmatic
-          ceiling, see the top-of-module rationale.
-        * Results are cached by (group_name, csv_relpath) in
-          :attr:`_results`; badges in the tree reflect ✓ / ✗ / — and
-          tooltips carry the error message or beat counts.  The full
-          :class:`AnalysisResult` is **not** cached (memory) — a
-          double-click on a file still re-runs the pipeline to
-          populate the editing tabs.
-        * Cancel aborts *pending* workers immediately via
-          ``pool.clear()``; workers already running finish their
-          current file and their results are discarded.  The tree is
-          still rebuilt so the already-completed files show their
-          badges.
-
-        Audit note: exceptions from the scientific pipeline are
-        logged via ``logger.exception`` with the file path, so a
-        terminal audit shows *which* file failed and why.
+        * Pre-flight: a group must be selected in the tree (unlike
+          *Analizza studio* which is selection-agnostic).
+        * Empty group → info dialog instead of a silent no-op; the
+          user almost certainly mis-targeted the action.
         """
         if self._study is None:
             return
@@ -1677,36 +1729,161 @@ class StudyPanel(QWidget):
             )
             return
 
-        n = len(group.files)
+        self._run_batch(
+            groups=[group],
+            window_title=self.tr("Analisi gruppo"),
+            header_text=self.tr("Analisi gruppo “{0}”...").format(group.name),
+            include_group_in_row_label=False,
+        )
+
+    def _on_analyze_study(self) -> None:
+        """Run the full pipeline on every file of every group in the study.
+
+        One-click equivalent of *Analizza gruppo* repeated over the
+        whole study — the UX Marco asked for after complaining that
+        re-running groups one by one was "un inferno".  Critical
+        differences vs. the per-group flow:
+
+        * One progress dialog, one Cancel button, one
+          :class:`QThreadPool` for the entire study.  Inter-group
+          order does not matter for correctness; the pool schedules
+          workers by availability, not by group boundary, so the
+          overall wall-clock is governed by file count and
+          ``_BATCH_MAX_THREADS`` — not by the number of groups.
+        * Per-file label includes the group name so the user can see
+          at a glance which group is currently processing.
+        * A confirmation dialog *always* precedes the batch, doubling
+          as a pre-flight readout of totals (``N file in M gruppi``).
+          The dialog defaults to Yes so one Enter keypress proceeds;
+          the purpose is to surface the scope, not add friction.
+
+        Gating: the toolbar action is disabled via ``_refresh_actions``
+        when the study has no files anywhere, so the empty-state
+        branch here is only reached via programmatic triggering (or
+        as a race if the last file was just removed).
+        """
+        if self._study is None:
+            return
+        study = self._study
+        groups_with_files = [g for g in study.groups if g.files]
+        if not groups_with_files:
+            QMessageBox.information(
+                self, self.tr("Studio vuoto"),
+                self.tr(
+                    "Lo studio “{0}” non contiene file da analizzare.  "
+                    "Aggiungi almeno un CSV a un gruppo prima di "
+                    "avviare l'analisi dell'intero studio."
+                ).format(study.name),
+            )
+            return
+
+        n_files = sum(len(g.files) for g in groups_with_files)
+        n_groups = len(groups_with_files)
+
+        answer = QMessageBox.question(
+            self, self.tr("Analizza studio"),
+            self.tr(
+                "Analizzare {0} file in {1} gruppi dello studio “{2}”?\n\n"
+                "L'operazione analizzerà tutti i file di tutti i gruppi "
+                "e può richiedere alcuni minuti."
+            ).format(n_files, n_groups, study.name),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        self._run_batch(
+            groups=groups_with_files,
+            window_title=self.tr("Analisi studio"),
+            header_text=self.tr("Analisi studio “{0}”...").format(study.name),
+            include_group_in_row_label=True,
+        )
+
+    def _run_batch(
+        self,
+        *,
+        groups: list[Group],
+        window_title: str,
+        header_text: str,
+        include_group_in_row_label: bool,
+    ) -> None:
+        """Drive one :class:`QThreadPool` batch across the given groups.
+
+        Shared machinery behind *Analizza gruppo* (``groups=[selected]``)
+        and *Analizza studio* (``groups=study.groups``).  Kept as a
+        single method so both entry points exercise identical code for
+        cancellation, fingerprinting, progress accounting and cache
+        writes — subtle divergence here would be exactly the kind of
+        bug that shows up only on real data.
+
+        Behaviour (invariant across both callers):
+
+        * Channel selection follows :attr:`FileEntry.channel`.  The
+          default ``'auto'`` (assigned by ``make_file_entry``) lets the
+          pipeline pick the best electrode per file; users who pinned
+          EL1 / EL2 on a file keep that preference.
+        * Each group carries its own :class:`AnalysisConfig` — baseline
+          and dose groups can use different QC thresholds, and each
+          worker is submitted with its own group's config so the
+          fingerprint and the staleness logic work cross-group.
+        * Files whose CSV is missing are rejected up-front: their ✗
+          rows land in the cache before any worker starts, so the
+          progress bar's denominator matches the tree's badge count.
+        * Parallelism is capped at
+          ``min(idealThreadCount(), _BATCH_MAX_THREADS)`` — pragmatic
+          ceiling, see the top-of-module rationale.
+        * Results are cached by ``(group_name, csv_relpath)`` in
+          :attr:`_results`; only the summary is kept — double-click
+          re-runs the pipeline to populate the editing tabs.
+        * Cancel aborts *pending* workers immediately via
+          ``pool.clear()``; in-flight workers finish their current
+          file and their results are dropped.  The tree is rebuilt
+          either way so completed files show their badges.
+
+        Audit note: exceptions from the scientific pipeline are
+        logged via ``logger.exception`` with the file path (inside
+        :class:`_BatchWorker.run`), so a terminal / log-file audit
+        shows *which* file failed and why across any size of batch.
+
+        Parameters
+        ----------
+        groups
+            Groups to iterate.  Empty groups are tolerated
+            (``_collect_batch_inputs`` just skips them) but a caller
+            that's already filtered them out gets cleaner logs.
+        window_title, header_text
+            Title bar and initial body text for the progress dialog.
+            The body text is overwritten with a per-file label once
+            the first worker completes.
+        include_group_in_row_label
+            ``True`` for study-wide batch — the label becomes
+            ``"group / file.csv"`` so the user can track which group
+            the currently-displayed file belongs to.  ``False`` for
+            single-group batch where the group name is already in
+            the header and repeating it per row is noise.
+        """
+        # Callers gate on ``self._study is not None`` before arriving
+        # here; the assert is a defensive anchor for future callers
+        # who might forget.
+        assert self._study is not None
+        study = self._study
 
         # ── 1. Resolve paths + split into (ready | missing) up-front ──
-        # Missing files don't become runnables — we write their error
-        # straight into the cache and account for them in the progress
-        # total.  This keeps the pool honest (no fake work) and means
-        # the per-file progress bar represents real pipeline work.
-        ready: list[tuple[int, Path, str]] = []  # (idx, abspath, channel)
-        for i, fe in enumerate(group.files):
-            key = (group.name, fe.csv_relpath)
-            abspath = resolve_file_path(self._study, fe)
-            if not abspath.is_file():
-                self._results[key] = FileResult(
-                    status='error',
-                    error=self.tr(
-                        "File non trovato: {0}"
-                    ).format(abspath),
-                )
-                continue
-            # Clamp the per-file channel field.  We only trust the
-            # three known values; anything else (legacy / corrupt
-            # sidecar) falls back to 'auto' rather than propagating a
-            # bogus label into the pipeline.
-            ch = fe.channel if fe.channel in ('auto', 'EL1', 'EL2') else 'auto'
-            ready.append((i, abspath, ch))
+        ready, missing = _collect_batch_inputs(study, groups)
+        # Missing files don't become runnables — merging their errors
+        # into the cache up-front means the pool only ever runs useful
+        # work, and the progress bar's (k/n) honestly reflects what's
+        # left to do on the pipeline side.
+        self._results.update(missing)
+
+        n = sum(len(g.files) for g in groups)
 
         logger.info(
-            "StudyPanel: batch analyze — group=%r, n_files=%d "
+            "StudyPanel: batch analyze — groups=%s, n_files=%d "
             "(ready=%d, missing=%d), study=%s",
-            group.name, n, len(ready), n - len(ready), self._study.folder,
+            [g.name for g in groups], n, len(ready), n - len(ready),
+            study.folder,
         )
 
         # ── 2. Short-circuit: every file missing → just refresh tree ──
@@ -1716,17 +1893,23 @@ class StudyPanel(QWidget):
 
         # ── 3. Wire up progress dialog + result collector + event loop ──
         progress = QProgressDialog(
-            self.tr("Analisi gruppo “{0}”...").format(group.name),
-            self.tr("Annulla"),
-            0, n, self,
+            header_text, self.tr("Annulla"), 0, n, self,
         )
-        progress.setWindowTitle(self.tr("Analisi gruppo"))
+        progress.setWindowTitle(window_title)
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)   # show immediately for small N
-        # Missing files already counted in the cache — reflect them in
-        # the progress bar so the user sees "(k/n) …" honestly.
         already_done = n - len(ready)
         progress.setValue(already_done)
+
+        # Parallel lookup table for the done-slot.  ``_BatchWorker``
+        # echoes back an opaque submission id (reusing its
+        # ``file_index`` parameter), and we resolve it here into
+        # ``(group, file_entry)`` so the cache key survives the
+        # cross-group batch — the worker itself doesn't need to know
+        # which group owns its file.
+        submissions: list[tuple[Group, FileEntry]] = [
+            (group, fe) for group, fe, _abs, _ch in ready
+        ]
 
         loop = QEventLoop(self)
         signals = _BatchWorkerSignals()
@@ -1739,22 +1922,27 @@ class StudyPanel(QWidget):
         # mutate without needing ``nonlocal`` (keeps the diff local).
         state = {'completed': already_done, 'cancelled': False}
 
-        def _on_file_done(file_idx: int, result: FileResult) -> None:
+        def _on_file_done(submission_id: int, result: FileResult) -> None:
             # Runs on the UI thread (QueuedConnection), so it's safe to
             # touch ``self._results``, the progress dialog, and the
-            # tree.  We swallow results that come in after a cancel —
+            # tree.  Results that arrive after a cancel are swallowed —
             # the worker was already committed to its file, but the
             # user has moved on.
             if state['cancelled']:
                 return
-            fe = group.files[file_idx]
+            group, fe = submissions[submission_id]
             key = (group.name, fe.csv_relpath)
             self._results[key] = result
             state['completed'] += 1
             progress.setValue(state['completed'])
+            row_label = (
+                f"{group.name} / {fe.csv_relpath}"
+                if include_group_in_row_label
+                else fe.csv_relpath
+            )
             progress.setLabelText(
                 self.tr("({0}/{1}) {2}").format(
-                    state['completed'], n, fe.csv_relpath,
+                    state['completed'], n, row_label,
                 )
             )
             if state['completed'] >= n:
@@ -1781,10 +1969,10 @@ class StudyPanel(QWidget):
         # knob, the in-flight workers still stamp their results with
         # the old fingerprint — the rebuilt tree will then correctly
         # flag them ● against the new current config.
-        for file_idx, abspath, ch in ready:
+        for submission_id, (group, _fe, abspath, ch) in enumerate(ready):
             fp = _result_fingerprint(group.config, ch)
             worker = _BatchWorker(
-                file_index=file_idx,
+                file_index=submission_id,
                 abspath=str(abspath),
                 channel=ch,
                 config=group.config,
@@ -2429,6 +2617,16 @@ class StudyPanel(QWidget):
         # a group) is selected" rule — we walk up to the group in
         # ``_selected_group`` so either kind is a valid anchor.
         self._act_analyze_group.setEnabled(can_edit_group)
+        # "Analizza studio" is selection-agnostic — it iterates over
+        # every group in the study — so we gate it on "study loaded
+        # AND at least one group has at least one file".  The second
+        # half catches the edge case where the user creates a study,
+        # adds empty groups, then clicks Analizza studio: we'd rather
+        # grey the button out than pop an empty-state dialog.
+        has_any_file = has_study and any(
+            bool(g.files) for g in self._study.groups
+        )
+        self._act_analyze_study.setEnabled(has_any_file)
         # Dose-response is a *study-wide* action — it doesn't need a
         # selection, only a loaded study with at least one fresh-ok
         # result somewhere.  Walking the whole cache once per selection
