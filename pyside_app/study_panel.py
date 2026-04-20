@@ -76,7 +76,6 @@ research, corrections are part of the scientific record):
 """
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import logging
@@ -925,19 +924,18 @@ class DoseResponseDialog(QDialog):
     def _refresh_plot(self, *_args) -> None:
         """Recompute aggregates for the current metric and redraw."""
         pg = self._pg
-        # Clear previous plot items.  ``clear()`` wipes everything on
-        # the ViewBox; ``_legend`` is attached to the PlotItem, so we
-        # recreate it after clearing to avoid stale legend entries.
+        # Clear previous plot items.  ``PlotItem.clear()`` iterates
+        # ``self.items`` and for each one calls ``legend.removeItem``,
+        # so the existing legend is emptied automatically — we must
+        # NOT detach the legend from the scene here.  A previous
+        # attempt did ``self._legend.scene().removeItem(self._legend)``
+        # followed by ``addLegend(...)``, but ``PlotItem.addLegend``
+        # only creates a new ``LegendItem`` when ``self.legend is
+        # None``; after removing from the scene the PlotItem still
+        # holds the now-orphaned reference, and every subsequent
+        # ``plot(name=...)`` registered to the orphan, so no legend
+        # entries ever showed up on screen.
         self._plot.clear()
-        # PyQtGraph legend-detachment API differs slightly across
-        # versions — suppress broadly, the only consequence of failure
-        # is a duplicated legend slot, not a crash.
-        with contextlib.suppress(Exception):   # noqa: BLE001
-            self._legend.scene().removeItem(self._legend)
-        self._legend = self._plot.addLegend(offset=(10, 10))
-        # Re-apply light text colour — the legend is re-created on
-        # every metric switch, and addLegend() defaults to black text.
-        self._legend.setLabelTextColor('#cccccc')
 
         metric = self._metric_combo.currentData() or 'fpdc_ms'
         label, unit, decimals = _metric_meta(metric)
@@ -998,13 +996,20 @@ class DoseResponseDialog(QDialog):
                 symbolBrush=brush, symbolPen=pg.mkPen('k', width=0.5),
                 symbolSize=9, name=legend_name,
             )
-            # Error bars — one segment per point.  pyqtgraph expects
-            # numpy-friendly inputs; plain lists work on all recent
-            # versions but we wrap in the module's own converter to
-            # stay forward-compatible.
+            # Error bars — one segment per point.  Unlike
+            # ``PlotDataItem`` (used by ``self._plot.plot(...)``),
+            # ``ErrorBarItem`` does NOT auto-transform its x values
+            # when the PlotItem is in log-x mode: the ViewBox
+            # coordinate system is already log10, so we must feed it
+            # ``log10(xs)``.  Passing raw µM values would plot the
+            # bars at plot-space positions 0.1…100 — which the axis
+            # renders as 10^0.1…10^100 and drags the auto-range up
+            # to 10^100, collapsing every real dose to the left edge.
             import numpy as np
+            xs_arr = np.asarray(xs, dtype=float)
+            xs_plot = np.log10(xs_arr) if use_log else xs_arr
             err_item = pg.ErrorBarItem(
-                x=np.asarray(xs, dtype=float),
+                x=xs_plot,
                 y=np.asarray(ys, dtype=float),
                 height=2.0 * np.asarray(errs, dtype=float),
                 beam=0.0,
