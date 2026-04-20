@@ -118,6 +118,7 @@ from PySide6.QtWidgets import (
 
 from cardiac_fp_analyzer.study import (
     STUDY_FILENAME,
+    FileEntry,
     Group,
     Study,
     add_file_to_group,
@@ -468,6 +469,201 @@ class _BatchWorker(QRunnable):
             stv_ms=stv,
         )
         self._signals.done.emit(self._file_index, fr)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Background export worker (step 6 of task #84 / #89)
+# ═══════════════════════════════════════════════════════════════════════
+#
+#  The export pipeline re-runs :func:`analyze_single_file` on every
+#  fresh-ok file in the study, enriches the per-file ``file_info`` with
+#  study-level metadata, and calls :func:`export_send_package` on the
+#  collected list.  All of that is CPU-bound (numpy / pandas / xport
+#  writers), so we do it on a background :class:`QRunnable` and keep
+#  the UI event loop responsive via a modal :class:`QProgressDialog`.
+#
+#  Unlike :class:`_BatchWorker` — which parallelises one worker per
+#  file — the export runs sequentially: the CDISC build step is not
+#  embarrassingly parallel (it walks a single list of results and
+#  merges them into shared DataFrames), and running the per-file
+#  pipeline sequentially keeps the progress reporting linear and the
+#  error attribution obvious ("fails on file 7" rather than "fails
+#  somewhere in the pool").  Studies are small (≤ ~50 files), so
+#  single-threaded re-analysis finishes in under a minute on Marco's
+#  Mac — the serialisation cost is worth the simpler control flow.
+#
+#  The worker emits three kinds of signals:
+#
+#  * ``progress(int done, int total, str filename)`` — per-file tick,
+#    drives the progress dialog label + bar.
+#  * ``finished(result)`` — terminal success: ``result`` is the dict
+#    returned by :func:`export_send_package`.
+#  * ``failed(str)`` — terminal failure: ``str`` is a user-facing
+#    message.  Exceptions are caught and logged (``logger.exception``)
+#    so the audit log captures the full traceback.
+#
+#  Only one of ``finished`` / ``failed`` is ever emitted; ``progress``
+#  fires only up to the failure point.
+
+
+class _ExportWorkerSignals(QObject):
+    """Signal carrier for :class:`_ExportWorker`.
+
+    Uses a separate QObject because ``QRunnable`` isn't a ``QObject``
+    and cannot own signals — same pattern as :class:`_BatchWorkerSignals`.
+    """
+
+    # (completed_index, total, csv_relpath) — relpath is the label
+    # the worker wants the UI to show next to the progress bar.
+    progress = Signal(int, int, str)
+    # Terminal success: exporter result dict (see export_send_package).
+    finished = Signal(object)
+    # Terminal failure: user-facing message (already localised in the
+    # worker — keeps the UI slot free of format-string logic).
+    failed = Signal(str)
+
+
+class _ExportWorker(QRunnable):
+    """One-shot worker that builds a CDISC SEND package for a study.
+
+    Parameters
+    ----------
+    study : Study
+        Study being exported — consumed read-only.  The worker takes
+        no lock; the UI thread must not mutate ``study.groups`` while
+        the export is in flight (enforced in practice by the modal
+        progress dialog, which blocks all toolbar actions).
+    pairs : list[tuple[Group, FileEntry]]
+        Fresh-ok ``(group, file)`` pairs produced by
+        :func:`_collect_export_inputs`.  Captured here rather than
+        re-walked inside ``run`` so the snapshot is deterministic
+        even if the UI somehow mutates the study concurrently.
+    output_dir : str
+        Destination folder for the SEND package (``.xpt`` + define.xml).
+        The :func:`export_send_package` function creates it if missing.
+    study_id : str
+        User-chosen CDISC ``STUDYID`` — typically coming from
+        :func:`_suggest_study_id` with a chance for the user to edit.
+    study_title, sponsor : str
+        Pass-through to ``export_send_package``.
+    signals : _ExportWorkerSignals
+        Shared signal carrier for progress / finished / failed.
+    """
+
+    def __init__(
+        self,
+        *,
+        study: Study,
+        pairs: list[tuple[Group, FileEntry]],
+        output_dir: str,
+        study_id: str,
+        study_title: str,
+        sponsor: str,
+        signals: _ExportWorkerSignals,
+    ) -> None:
+        super().__init__()
+        self._study = study
+        self._pairs = pairs
+        self._output_dir = output_dir
+        self._study_id = study_id
+        self._study_title = study_title
+        self._sponsor = sponsor
+        self._signals = signals
+        # Cancellation flag written from the UI thread (setter).  GIL-
+        # protected bool read in the loop — no lock needed.
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Request cancellation.  Safe to call from any thread.
+
+        The worker checks the flag between files; an already-running
+        ``analyze_single_file`` call finishes (no cooperative cancel
+        inside numpy), but subsequent files are skipped and the worker
+        terminates with a ``failed`` signal.
+        """
+        self._cancelled = True
+
+    def run(self) -> None:   # noqa: D401 — Qt virtual
+        # Import here (not at module top) so the panel still loads
+        # even if the scientific / CDISC cores have an import error —
+        # same rationale as :class:`_BatchWorker`.
+        try:
+            from cardiac_fp_analyzer.analyze import analyze_single_file
+            from cardiac_fp_analyzer.cdisc_export import export_send_package
+        except Exception as exc:   # noqa: BLE001
+            logger.exception("ExportWorker: failed to import scientific core")
+            self._signals.failed.emit(
+                f"{type(exc).__name__}: {exc}"
+            )
+            return
+
+        enriched_results: list[dict] = []
+        total = len(self._pairs)
+
+        for i, (group, fe) in enumerate(self._pairs):
+            if self._cancelled:
+                self._signals.failed.emit("__cancelled__")
+                return
+
+            abspath = resolve_file_path(self._study, fe)
+            self._signals.progress.emit(i, total, fe.csv_relpath)
+
+            try:
+                raw = analyze_single_file(
+                    str(abspath),
+                    channel=fe.channel if fe.channel in ('auto', 'EL1', 'EL2') else 'auto',
+                    verbose=False,
+                    config=group.config,
+                )
+            except Exception as exc:   # noqa: BLE001
+                logger.exception(
+                    "ExportWorker: analyze_single_file failed for %s", abspath,
+                )
+                self._signals.failed.emit(
+                    f"{fe.csv_relpath}: {type(exc).__name__}: {exc}"
+                )
+                return
+
+            if raw is None:
+                # Pipeline returned empty — don't silently drop the
+                # file; surface it so the user knows the export isn't
+                # a complete snapshot of the study.
+                self._signals.failed.emit(
+                    f"{fe.csv_relpath}: pipeline ritornata vuota"
+                )
+                return
+
+            enriched = _enrich_file_info_for_export(raw, group, fe)
+            enriched_results.append(enriched)
+
+        # Final tick so the progress bar reaches N/N before the modal
+        # dialog closes.
+        self._signals.progress.emit(total, total, '')
+
+        if self._cancelled:
+            self._signals.failed.emit("__cancelled__")
+            return
+
+        if not enriched_results:
+            self._signals.failed.emit("Nessun risultato fresco-ok da esportare.")
+            return
+
+        try:
+            out = export_send_package(
+                enriched_results,
+                self._output_dir,
+                study_id=self._study_id,
+                study_title=self._study_title,
+                sponsor=self._sponsor,
+            )
+        except Exception as exc:   # noqa: BLE001
+            logger.exception("ExportWorker: export_send_package failed")
+            self._signals.failed.emit(
+                f"export_send_package: {type(exc).__name__}: {exc}"
+            )
+            return
+
+        self._signals.finished.emit(out)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -875,6 +1071,7 @@ class StudyPanel(QWidget):
         self._act_remove = QAction(self.tr("Rimuovi"), self)
         self._act_analyze_group = QAction(self.tr("Analizza gruppo..."), self)
         self._act_dose_response = QAction(self.tr("Dose-risposta..."), self)
+        self._act_export_cdisc = QAction(self.tr("Esporta CDISC..."), self)
         self._act_delete_study = QAction(
             self.tr("Elimina sidecar studio..."), self,
         )
@@ -891,9 +1088,10 @@ class StudyPanel(QWidget):
         self._toolbar.addAction(self._act_group_settings)
         self._toolbar.addAction(self._act_remove)
         self._toolbar.addSeparator()
-        # Group 3 — analysis (batch + cross-group plot).
+        # Group 3 — analysis (batch + cross-group plot + CDISC export).
         self._toolbar.addAction(self._act_analyze_group)
         self._toolbar.addAction(self._act_dose_response)
+        self._toolbar.addAction(self._act_export_cdisc)
         self._toolbar.addSeparator()
         # Group 4 — destructive. Distanced from the editing group on purpose.
         self._toolbar.addAction(self._act_delete_study)
@@ -908,6 +1106,7 @@ class StudyPanel(QWidget):
         self._act_remove.triggered.connect(self._on_remove)
         self._act_analyze_group.triggered.connect(self._on_analyze_group)
         self._act_dose_response.triggered.connect(self._on_dose_response)
+        self._act_export_cdisc.triggered.connect(self._on_export_cdisc)
         self._act_delete_study.triggered.connect(self._on_delete_study)
 
         # ── Tree ──────────────────────────────────────────────────────
@@ -1578,6 +1777,220 @@ class StudyPanel(QWidget):
         )
         dlg.exec()
 
+    def _on_export_cdisc(self) -> None:
+        """Export a CDISC SEND package for the whole study (step 6 / #89).
+
+        Flow:
+
+        1. Collect the fresh-ok ``(group, file)`` pairs via
+           :func:`_collect_export_inputs`.  If the result is empty we
+           show a "nothing to export" dialog and bail — no silent no-op.
+        2. Ask for a CDISC ``STUDYID`` (prefilled from
+           :func:`_suggest_study_id`) and an output folder.  The
+           folder can be anywhere on disk; we don't force it under
+           the study folder because regulatory submissions usually
+           live in a separate tree.
+        3. Launch :class:`_ExportWorker` on the shared ``QThreadPool``
+           with a modal :class:`QProgressDialog`.  The dialog's Cancel
+           button calls :meth:`_ExportWorker.cancel`; already-running
+           ``analyze_single_file`` finishes but subsequent files are
+           skipped and the worker terminates with a ``failed`` signal
+           carrying the sentinel ``"__cancelled__"``.
+        4. On success, show a summary dialog with the backend used
+           (``pyreadstat`` / ``xport`` / ``csv_fallback``) and the
+           output folder.  The user can then open the folder in
+           Finder / Explorer and ship the ``.xpt`` package to
+           Pinnacle 21.
+
+        Why we re-run the pipeline at export time (instead of caching
+        the full result): see module-level rationale above
+        :func:`_enrich_file_info_for_export`.  The short version:
+        caching ~50 full result dicts would blow the memory floor
+        :class:`FileResult` was introduced to protect; re-running
+        costs a minute and the user expects a wait for "make me a
+        regulatory package" anyway.
+        """
+        if self._study is None:
+            return
+
+        # ── 1. Harvest fresh-ok pairs ─────────────────────────────────
+        pairs = _collect_export_inputs(self._study, self._results)
+        if not pairs:
+            QMessageBox.information(
+                self, self.tr("Nessun risultato esportabile"),
+                self.tr(
+                    "Lo studio non ha ancora risultati freschi (✓) da "
+                    "esportare.  Esegui “Analizza gruppo” su almeno un "
+                    "gruppo prima di creare il pacchetto CDISC."
+                ),
+            )
+            return
+
+        # ── 2. Ask the user for STUDYID + output folder ───────────────
+        suggested = _suggest_study_id(self._study.name)
+        study_id, ok = QInputDialog.getText(
+            self, self.tr("Export CDISC SEND"),
+            self.tr(
+                "STUDYID (identificativo CDISC — massimo 32 caratteri "
+                "A-Z / 0-9 / -):"
+            ),
+            text=suggested,
+        )
+        if not ok:
+            return
+        study_id = _suggest_study_id(study_id)   # normalise user input
+
+        out_folder = QFileDialog.getExistingDirectory(
+            self,
+            self.tr("Cartella di destinazione per il pacchetto CDISC"),
+        )
+        if not out_folder:
+            return
+
+        # ── 3. Progress dialog + worker ───────────────────────────────
+        n = len(pairs)
+        progress = QProgressDialog(
+            self.tr("Preparazione export CDISC..."),
+            self.tr("Annulla"),
+            0, n, self,
+        )
+        progress.setWindowTitle(self.tr("Export CDISC SEND"))
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        signals = _ExportWorkerSignals()
+        worker = _ExportWorker(
+            study=self._study,
+            pairs=pairs,
+            output_dir=out_folder,
+            study_id=study_id,
+            study_title='CiPA In Vitro Cardiac Safety - hiPSC-CM Field Potential',
+            sponsor='',
+            signals=signals,
+        )
+
+        loop = QEventLoop(self)
+        outcome = {'result': None, 'error': None}
+
+        def _on_progress(done: int, total: int, name: str) -> None:
+            # Runs on the UI thread (QueuedConnection).
+            progress.setMaximum(total)
+            progress.setValue(done)
+            if name:
+                progress.setLabelText(
+                    self.tr("({0}/{1}) {2}").format(done, total, name)
+                )
+
+        def _on_finished(result: object) -> None:
+            outcome['result'] = result
+            loop.quit()
+
+        def _on_failed(msg: str) -> None:
+            outcome['error'] = msg
+            loop.quit()
+
+        signals.progress.connect(_on_progress, Qt.QueuedConnection)
+        signals.finished.connect(_on_finished, Qt.QueuedConnection)
+        signals.failed.connect(_on_failed, Qt.QueuedConnection)
+
+        progress.canceled.connect(worker.cancel)
+
+        logger.info(
+            "StudyPanel: CDISC export started — study=%r, study_id=%r, "
+            "n_pairs=%d, output_dir=%s",
+            self._study.name, study_id, n, out_folder,
+        )
+
+        pool = QThreadPool(self)
+        pool.start(worker)
+
+        loop.exec()
+        # Worker has either emitted finished or failed; either way the
+        # pool has no more work.  We still waitForDone so any log
+        # flushes from the worker settle before we pop the result dialog.
+        pool.waitForDone()
+        progress.close()
+
+        # ── 4. Report outcome ─────────────────────────────────────────
+        if outcome['error'] is not None:
+            err = outcome['error']
+            if err == "__cancelled__":
+                logger.info(
+                    "StudyPanel: CDISC export cancelled by user — "
+                    "study=%r", self._study.name,
+                )
+                QMessageBox.information(
+                    self, self.tr("Export annullato"),
+                    self.tr(
+                        "Export CDISC annullato.  Nessun file "
+                        "garantito completo nella cartella scelta."
+                    ),
+                )
+                return
+            logger.error(
+                "StudyPanel: CDISC export failed — study=%r, error=%s",
+                self._study.name, err,
+            )
+            QMessageBox.critical(
+                self, self.tr("Export CDISC fallito"),
+                self.tr(
+                    "Impossibile completare l'export CDISC.\n\n"
+                    "Dettaglio:\n{0}"
+                ).format(err),
+            )
+            return
+
+        result = outcome['result']
+        if not isinstance(result, dict):
+            # Belt-and-braces: the worker must emit a dict on
+            # ``finished`` by contract, but we refuse to deref if
+            # something went wrong upstream.
+            logger.error(
+                "StudyPanel: CDISC export returned non-dict result: %r",
+                type(result).__name__,
+            )
+            QMessageBox.critical(
+                self, self.tr("Export CDISC fallito"),
+                self.tr("Risultato dell'export in formato inatteso."),
+            )
+            return
+
+        backend = result.get('backend_used', '?')
+        files = result.get('files', []) or []
+        n_files = len(files)
+        logger.info(
+            "StudyPanel: CDISC export OK — study=%r, backend=%s, "
+            "files=%d, output_dir=%s",
+            self._study.name, backend, n_files, out_folder,
+        )
+
+        # Backend-aware messaging: CSV fallback is NOT regulatory-grade
+        # and the user should know up-front.
+        if backend == 'csv_fallback':
+            QMessageBox.warning(
+                self, self.tr("Export CDISC completato (fallback CSV)"),
+                self.tr(
+                    "Il pacchetto è stato creato in {0} ma usa il "
+                    "fallback CSV: né pyreadstat né xport sono "
+                    "installati, quindi i file .xpt sono in realtà "
+                    "CSV e NON sono conformi alla sottomissione "
+                    "regolatoria.\n\n"
+                    "Per produrre .xpt veri installa pyreadstat "
+                    "(consigliato) o xport."
+                ).format(out_folder),
+            )
+        else:
+            QMessageBox.information(
+                self, self.tr("Export CDISC completato"),
+                self.tr(
+                    "Pacchetto CDISC SEND generato con backend "
+                    "“{0}”.\n\n"
+                    "Cartella: {1}\n"
+                    "File scritti: {2}"
+                ).format(backend, out_folder, n_files),
+            )
+
     def _on_delete_study(self) -> None:
         """Delete the study **sidecar** from disk, keep CSVs intact.
 
@@ -1967,9 +2380,15 @@ class StudyPanel(QWidget):
         # result somewhere.  Walking the whole cache once per selection
         # change is O(N files) which is cheap (studies are small); the
         # payoff is the button grays out until there's data to plot.
-        self._act_dose_response.setEnabled(
-            has_study and self._any_fresh_ok_result()
-        )
+        has_fresh_ok = has_study and self._any_fresh_ok_result()
+        self._act_dose_response.setEnabled(has_fresh_ok)
+        # CDISC export follows the same gating as dose-response: we
+        # only let the user click it once at least one fresh-ok
+        # result exists.  Export runs the scientific pipeline again
+        # under the hood (see :class:`_ExportWorker`), so having
+        # anything staler than ``ok`` would either be wasted work
+        # (errors) or confused by re-run-then-mismatch logic (stale).
+        self._act_export_cdisc.setEnabled(has_fresh_ok)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -2621,3 +3040,196 @@ def _safe_getlogin_available() -> bool:
     except OSError:
         return False
     return True
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Step 6 — CDISC SEND export per study (task #89)
+# ═══════════════════════════════════════════════════════════════════════
+#
+#  The step-5 dose-response dialog renders cached scalars; step 6 hands
+#  the *same* fresh-ok universe to :func:`cdisc_export.export_send_package`
+#  so the user can drop a SEND submission into Pinnacle 21.
+#
+#  FileResult only caches scalars by documented design (memory floor):
+#  ``export_send_package`` needs the full pipeline dict per file
+#  (``file_info`` / ``summary`` / beat arrays).  We therefore re-run
+#  :func:`analyze_single_file` at export time on every fresh-ok
+#  (group, file) pair — same contract as a double-click deep-dive, but
+#  repeated in a background worker with a progress dialog so the UI
+#  stays responsive.  The re-run is pure: the returned dict is a fresh
+#  object built from CSV + AnalysisConfig, and no module-level mutable
+#  state is touched.  Costs: ~1-3 s per file × ≤ ~50 files per study =
+#  at most a minute, which matches the user's export mental model
+#  ("make me the regulatory package, I'll grab coffee").
+#
+#  Why "fresh-ok only":
+#
+#  * Stale rows may have been analysed with a config the user has since
+#    rewritten — exporting them would mislabel the dataset against the
+#    current AnalysisConfig.  The user sees the ● badge in the tree
+#    and knows those files need a re-run before export.
+#  * Error rows have no scientific signal; including them would produce
+#    rows full of NaN that waste reviewer time.
+#
+#  The per-file ``file_info`` from the pipeline encodes
+#  (experiment, chip, chamber, analyzed_channel) for USUBJID, but NOT
+#  the study-level (drug, concentration, is_baseline) trio.  Those
+#  belong to the :class:`Group` in our sidecar — the analyse step
+#  doesn't get to read group metadata, by design (files are portable,
+#  the study is the overlay).  The enrichment step below patches those
+#  three fields into a shallow copy of ``file_info`` on the way into
+#  ``export_send_package``, so the CDISC builders see a coherent view.
+#  We never mutate the original pipeline result — the worker returns
+#  its own dict and we hand that dict to the exporter.
+
+
+def _format_concentration_from_dose_uM(
+    dose_uM: float | None, *, drug: str = ''
+) -> str:
+    """Render a :class:`Group.dose_uM` as a CDISC-parseable string.
+
+    Called at export time to synthesise the ``file_info.concentration``
+    string expected by :func:`cdisc_export._parse_concentration` (which
+    wants input like ``"10 uM"`` → ``(10.0, 'umol/L')``).
+
+    Rules:
+
+    * ``dose_uM is None`` (baseline group) → ``''``.  The exporter's
+      ``_is_baseline`` / ``_is_control`` short-circuits on empty drug
+      AND baseline heuristics, and EX rows are skipped entirely for
+      baseline subjects — so returning an empty string is correct.
+    * ``drug`` is empty → still render the dose (user may use the
+      drug field as a ``condition`` label, e.g. "vehicle-2x").  The
+      exporter will treat it as CONTROL and drop it from EX, but a
+      numeric dose_uM may still be informative if it gets echoed to
+      TX (it is today).
+    * Otherwise → ``"<value> uM"`` with ``:g`` formatting so 0.010
+      renders as ``"0.01 uM"`` (scientists read that as "10 nM") and
+      100 renders as ``"100 uM"``.
+
+    We always emit "uM" (not "nM" / "mM") because:
+
+    * the study sidecar stores dose in µM as its single unit of truth
+      (see :class:`Group`);
+    * :func:`cdisc_export._parse_concentration` maps ``um`` →
+      ``umol/L`` in its unit whitelist, so the round-trip is lossless;
+    * emitting a unit keeps ``EXDOSU`` informative in the exported
+      submission instead of falling back to the default ``'nmol/L'``.
+    """
+    if dose_uM is None:
+        return ''
+    # ``:g`` strips trailing zeros for clean output (0.010 → "0.01").
+    return f"{dose_uM:g} uM"
+
+
+def _enrich_file_info_for_export(
+    result: dict, group: Group, file: FileEntry
+) -> dict:
+    """Return a copy of ``result`` with ``file_info`` overlaid from the study.
+
+    The scientific pipeline doesn't know that a CSV belongs to a group
+    named ``dof-10nM`` with drug ``Dofetilide`` and dose ``0.010 µM`` —
+    those live in the study sidecar.  Before handing the result to
+    :func:`cdisc_export.export_send_package` we patch the three
+    study-level fields the exporter reads:
+
+    * ``drug``          → :attr:`Group.drug` (raw string; the exporter
+      normalises to CDISC CT in ``_canonical_drug_send``).
+    * ``concentration`` → derived from :attr:`Group.dose_uM`; see
+      :func:`_format_concentration_from_dose_uM`.
+    * ``is_baseline``   → True when ``dose_uM is None`` (study-level
+      baseline).  The exporter ORs its own heuristic with this flag so
+      baseline rows land in DM/ARMCD=CONTROL instead of spurious EX
+      rows.  We write it even if the exporter already has its own
+      ``_is_baseline`` (drug/filename substring), because making the
+      study model the single source of truth avoids ambiguity when
+      the user named the group "baseline" but kept the drug field
+      populated for traceability.
+
+    The ``file.note`` field is intentionally ignored: it's free-text
+    user annotation, not a CDISC input.
+
+    Returns a shallow copy of ``result`` with a new ``file_info``
+    dict — does NOT mutate the caller's ``result``.  We deep-copy
+    only ``file_info`` (not ``summary`` or beat arrays) because
+    nothing downstream of the exporter re-reads those nested structures.
+    """
+    enriched = dict(result)
+    fi_src = result.get('file_info') or {}
+    fi = dict(fi_src)  # shallow-copy the sub-dict so we don't mutate
+    fi['drug'] = group.drug or ''
+    fi['concentration'] = _format_concentration_from_dose_uM(
+        group.dose_uM, drug=group.drug or '',
+    )
+    fi['is_baseline'] = group.dose_uM is None
+    enriched['file_info'] = fi
+    return enriched
+
+
+def _collect_export_inputs(
+    study: Study,
+    results_cache: dict,
+) -> list[tuple[Group, FileEntry]]:
+    """Walk a study and return the ``(group, file)`` pairs that are ready to export.
+
+    "Ready" = the cache holds a fresh, ``status='ok'`` :class:`FileResult`
+    for ``(group.name, file.csv_relpath)``.  Stale and error rows are
+    dropped by design (see module-level rationale for step 6).  Missing
+    cache entries (user never clicked "Analizza gruppo" on this group)
+    are also dropped — the caller can surface a "nothing fresh to
+    export" dialog instead of producing a misleading half-dataset.
+
+    The result preserves study/group/file ordering so the exported
+    USUBJID / EXSEQ sequences come out in the same order the user sees
+    in the tree, which is easier to audit against the study sidecar.
+
+    ``O(total files)`` — studies are small (≤ ~50 files).
+    """
+    pairs: list[tuple[Group, FileEntry]] = []
+    for group in study.groups:
+        for f in group.files:
+            r = results_cache.get((group.name, f.csv_relpath))
+            if r is None or r.status != 'ok':
+                continue
+            if _is_stale(r, group.config, f.channel):
+                continue
+            pairs.append((group, f))
+    return pairs
+
+
+def _suggest_study_id(name: str) -> str:
+    """Slugify a free-form study name into a CDISC-safe STUDYID.
+
+    SENDIG 3.1 requires ``STUDYID`` to be a short identifier — there
+    is no formal regex, but Pinnacle 21 and reviewers expect
+    ``[A-Z0-9_-]{1,32}`` in practice.  We:
+
+    1. Uppercase everything so the result is stable under
+       case-insensitive filesystems when the sidecar round-trips.
+    2. Replace any non-alphanumeric run with a single ``-`` so
+       ``"Exp6 · dof-rr"`` → ``"EXP6-DOF-RR"``.
+    3. Strip leading/trailing dashes so the result doesn't start
+       with ``-`` (would trip some CDISC validators).
+    4. Cap at 32 characters (pragmatic ceiling — SENDIG variable
+       length for STUDYID is 40 chars, but reviewers prefer short).
+    5. Fall back to ``'STUDY'`` when the slug is empty (e.g. the
+       user named the study with only punctuation).
+
+    The result is a *default* the user can overwrite in the input
+    dialog — we never commit it to disk without their confirmation.
+    """
+    # Walk the string and replace any non-[A-Z0-9] sequence with '-'.
+    out_chars: list[str] = []
+    prev_dash = False
+    for ch in (name or '').upper():
+        if ch.isalnum():
+            out_chars.append(ch)
+            prev_dash = False
+        else:
+            if not prev_dash:
+                out_chars.append('-')
+                prev_dash = True
+    slug = ''.join(out_chars).strip('-')
+    if not slug:
+        return 'STUDY'
+    return slug[:32]

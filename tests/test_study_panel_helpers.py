@@ -63,6 +63,11 @@ _collect_dose_response_points = sp._collect_dose_response_points
 _assemble_dose_response_series = sp._assemble_dose_response_series
 _can_plot_log_x = sp._can_plot_log_x
 _drug_colour = sp._drug_colour
+# Step 6 — CDISC export helpers.
+_format_concentration_from_dose_uM = sp._format_concentration_from_dose_uM
+_enrich_file_info_for_export = sp._enrich_file_info_for_export
+_collect_export_inputs = sp._collect_export_inputs
+_suggest_study_id = sp._suggest_study_id
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1510,3 +1515,248 @@ class TestDrugColour:
             assert isinstance(c, str)
             assert c.startswith('#')
             assert len(c) == 7
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  Step 6 — CDISC SEND export helpers (task #89).
+#
+#  These exercise the pure Python glue that marshals a study + results
+#  cache into the list[dict] shape :func:`cardiac_fp_analyzer.cdisc_export
+#  .export_send_package` expects.  The worker itself needs Qt and the
+#  scientific core on real signals — that's validated on Marco's
+#  laptop; CI only covers the deterministic transform here.
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestFormatConcentrationFromDoseUM:
+    def test_none_returns_empty_string(self):
+        # Baseline groups have dose_uM=None — the CDISC exporter
+        # routes them to CONTROL based on is_baseline / drug heuristics,
+        # so we emit '' rather than an ambiguous '0 uM'.
+        assert _format_concentration_from_dose_uM(None) == ''
+
+    def test_small_dose_uses_g_format(self):
+        # :g strips trailing zeros — 0.010 µM should read "0.01 uM"
+        # (i.e. 10 nM), which is what a scientist expects.
+        assert _format_concentration_from_dose_uM(0.010) == '0.01 uM'
+
+    def test_whole_number_dose(self):
+        assert _format_concentration_from_dose_uM(100) == '100 uM'
+
+    def test_fractional_dose(self):
+        assert _format_concentration_from_dose_uM(0.5) == '0.5 uM'
+
+    def test_drug_argument_is_accepted_but_does_not_change_unit(self):
+        # Signature allows a drug hint for future specialisation; it
+        # must not change the rendered unit today.
+        assert _format_concentration_from_dose_uM(
+            1.0, drug='Dofetilide',
+        ) == '1 uM'
+
+    def test_roundtrips_through_exporter_parser(self):
+        # Contract: whatever we emit must be parseable by the exporter's
+        # _parse_concentration helper — otherwise EXDOSE would silently
+        # fall back to 0.0 and EXDOSU to the default nmol/L.
+        from cardiac_fp_analyzer.cdisc_export import _parse_concentration
+        for dose in (0.01, 0.1, 1.0, 10.0, 100.0):
+            s = _format_concentration_from_dose_uM(dose)
+            val, unit = _parse_concentration(s)
+            assert val == dose, f"roundtrip lost value for {dose}"
+            assert unit == 'umol/L', f"roundtrip lost unit for {dose}"
+
+
+class TestEnrichFileInfoForExport:
+    def test_adds_drug_and_concentration_from_group(self):
+        g = _FakeGroup(
+            name='dose-0.01', drug='Dofetilide', dose_uM=0.01,
+            files=[], config=object(),
+        )
+        f = _FakeFile(csv_relpath='a.csv')
+        raw = {
+            'file_info': {'chip': 'A', 'analyzed_channel': 'EL1'},
+            'summary': {'fpd_ms_median': 400.0},
+        }
+        out = _enrich_file_info_for_export(raw, g, f)
+        assert out['file_info']['drug'] == 'Dofetilide'
+        assert out['file_info']['concentration'] == '0.01 uM'
+        assert out['file_info']['is_baseline'] is False
+        # Pipeline-owned keys (chip, analyzed_channel) survive untouched.
+        assert out['file_info']['chip'] == 'A'
+        assert out['file_info']['analyzed_channel'] == 'EL1'
+
+    def test_does_not_mutate_original_result(self):
+        g = _FakeGroup(
+            name='dose-0.01', drug='Dofetilide', dose_uM=0.01,
+            files=[], config=object(),
+        )
+        f = _FakeFile(csv_relpath='a.csv')
+        raw = {
+            'file_info': {'chip': 'A', 'drug': '', 'concentration': ''},
+            'summary': {},
+        }
+        out = _enrich_file_info_for_export(raw, g, f)
+        # Original dict and its nested file_info must be unchanged.
+        assert raw['file_info']['drug'] == ''
+        assert raw['file_info']['concentration'] == ''
+        assert out['file_info'] is not raw['file_info']
+
+    def test_baseline_group_marks_is_baseline(self):
+        g = _FakeGroup(
+            name='baseline', drug='', dose_uM=None,
+            files=[], config=object(),
+        )
+        f = _FakeFile(csv_relpath='ctrl.csv')
+        raw = {'file_info': {}, 'summary': {}}
+        out = _enrich_file_info_for_export(raw, g, f)
+        assert out['file_info']['drug'] == ''
+        assert out['file_info']['concentration'] == ''
+        assert out['file_info']['is_baseline'] is True
+
+    def test_summary_and_other_top_level_keys_passthrough(self):
+        # The exporter reads file_info + summary + metadata; anything
+        # else in the result dict must round-trip so future fields don't
+        # need changes here.
+        g = _FakeGroup(
+            name='g', drug='X', dose_uM=1.0, files=[], config=object(),
+        )
+        f = _FakeFile(csv_relpath='x.csv')
+        raw = {
+            'file_info': {'chip': 'A'},
+            'summary': {'bpm_mean': 58.0},
+            'metadata': {'filename': 'x.csv'},
+            'beat_indices': [1, 2, 3],
+        }
+        out = _enrich_file_info_for_export(raw, g, f)
+        # Summary/metadata/beat_indices must be the same objects —
+        # we only shallow-copy ``file_info``.
+        assert out['summary'] is raw['summary']
+        assert out['metadata'] is raw['metadata']
+        assert out['beat_indices'] is raw['beat_indices']
+
+
+class TestCollectExportInputs:
+    def test_empty_study_returns_empty(self):
+        assert _collect_export_inputs(_FakeStudy(groups=[]), {}) == []
+
+    def test_fresh_ok_file_included(self):
+        g = _FakeGroup(
+            name='dose', drug='dof', dose_uM=0.01,
+            files=[_FakeFile('a.csv')], config=object(),
+        )
+        study = _FakeStudy(groups=[g])
+        cache = {('dose', 'a.csv'): _ok(fpdc_ms=410.0)}
+        out = _collect_export_inputs(study, cache)
+        assert len(out) == 1
+        assert out[0][0] is g
+        assert out[0][1].csv_relpath == 'a.csv'
+
+    def test_error_file_excluded(self):
+        g = _FakeGroup(
+            name='dose', drug='dof', dose_uM=0.01,
+            files=[_FakeFile('a.csv'), _FakeFile('b.csv')],
+            config=object(),
+        )
+        study = _FakeStudy(groups=[g])
+        cache = {
+            ('dose', 'a.csv'): _ok(),
+            ('dose', 'b.csv'): _err('pipeline crash'),
+        }
+        out = _collect_export_inputs(study, cache)
+        assert len(out) == 1
+        assert out[0][1].csv_relpath == 'a.csv'
+
+    def test_missing_cache_entry_excluded(self):
+        # Never-analysed file → dropped.  Exporter only sees files the
+        # user has actually batch-analysed.
+        g = _FakeGroup(
+            name='dose', drug='dof', dose_uM=0.01,
+            files=[_FakeFile('a.csv'), _FakeFile('b.csv')],
+            config=object(),
+        )
+        study = _FakeStudy(groups=[g])
+        cache = {('dose', 'a.csv'): _ok()}
+        out = _collect_export_inputs(study, cache)
+        assert len(out) == 1
+        assert out[0][1].csv_relpath == 'a.csv'
+
+    def test_stale_file_excluded(self):
+        # Stale = fingerprint mismatch between cache and current
+        # (config, channel).  The cache's fingerprint is a bogus
+        # non-empty hex string; the live fingerprint is computed by
+        # _result_fingerprint on the current config, so they won't match.
+        cfg = object()
+        g = _FakeGroup(
+            name='dose', drug='dof', dose_uM=0.01,
+            files=[_FakeFile('a.csv', channel='EL1')],
+            config=cfg,
+        )
+        study = _FakeStudy(groups=[g])
+        stale_fr = FileResult(
+            status='ok', n_included=10, n_total=10,
+            fingerprint='deadbeefcafe',   # non-empty → triggers compare
+            channel_analyzed='EL1',
+        )
+        cache = {('dose', 'a.csv'): stale_fr}
+        out = _collect_export_inputs(study, cache)
+        assert out == []
+
+    def test_preserves_study_group_file_order(self):
+        g1 = _FakeGroup(
+            name='baseline', drug='', dose_uM=None,
+            files=[_FakeFile('ctrl.csv')],
+            config=object(),
+        )
+        g2 = _FakeGroup(
+            name='dose-0.01', drug='dof', dose_uM=0.01,
+            files=[_FakeFile('a.csv'), _FakeFile('b.csv')],
+            config=object(),
+        )
+        study = _FakeStudy(groups=[g1, g2])
+        cache = {
+            ('baseline', 'ctrl.csv'): _ok(),
+            ('dose-0.01', 'a.csv'): _ok(),
+            ('dose-0.01', 'b.csv'): _ok(),
+        }
+        out = _collect_export_inputs(study, cache)
+        rels = [f.csv_relpath for _, f in out]
+        assert rels == ['ctrl.csv', 'a.csv', 'b.csv']
+
+
+class TestSuggestStudyId:
+    def test_basic_slug(self):
+        assert _suggest_study_id('Exp6 dof-rr') == 'EXP6-DOF-RR'
+
+    def test_strips_punctuation(self):
+        # Middle dot, non-ASCII punctuation and mixed whitespace must
+        # all collapse to single dashes.
+        assert _suggest_study_id('Exp6 · dof-rr') == 'EXP6-DOF-RR'
+
+    def test_strips_leading_and_trailing_dashes(self):
+        assert _suggest_study_id('!!Exp6!!') == 'EXP6'
+
+    def test_empty_input_returns_default(self):
+        assert _suggest_study_id('') == 'STUDY'
+
+    def test_all_punctuation_returns_default(self):
+        assert _suggest_study_id('!!!') == 'STUDY'
+        assert _suggest_study_id('...---...') == 'STUDY'
+
+    def test_cap_at_32_characters(self):
+        long = 'a' * 50
+        out = _suggest_study_id(long)
+        assert len(out) == 32
+        assert out == 'A' * 32
+
+    def test_is_idempotent(self):
+        # Running the slugifier twice is a no-op — the dialog calls
+        # it on both the suggested default AND on the user-edited
+        # value before passing to export_send_package, so idempotence
+        # is load-bearing.
+        for s in ['Exp6 dof-rr', 'CIPA001', 'study-2025-04']:
+            a = _suggest_study_id(s)
+            b = _suggest_study_id(a)
+            assert a == b
+
+    def test_preserves_digits(self):
+        assert _suggest_study_id('study2026') == 'STUDY2026'
+        assert _suggest_study_id('2026-q2') == '2026-Q2'
