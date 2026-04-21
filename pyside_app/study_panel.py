@@ -2394,7 +2394,6 @@ class StudyPanel(QWidget):
         group_name: str,
         csv_relpath: str,
         result_dict: dict,
-        channel: str,
         config,   # AnalysisConfig — not imported at module scope on purpose
     ) -> None:
         """Replace the cached :class:`FileResult` for one file.
@@ -2405,6 +2404,16 @@ class StudyPanel(QWidget):
         as :class:`_BatchWorker.run` (keeps the two paths in lockstep
         so the Studi tree and the dose-response dialog see the same
         numbers after a manual edit).
+
+        Channel canonicalisation — critical for the fingerprint
+        contract.  :class:`_BatchWorker` and :func:`_is_stale` both
+        stamp / read the fingerprint using the *FileEntry* channel
+        (``'auto' / 'EL1' / 'EL2'``), NOT the channel the pipeline
+        actually resolved (``'EL1'`` etc.).  We therefore look up
+        the FileEntry here and reuse its channel — otherwise the
+        cached entry carries a fingerprint that diverges from what
+        the batch staleness gate expects, and the badge stays ●
+        after a Ricalcola even though the numbers are correct.
 
         The new fingerprint is computed from the *actual* config used
         by the recompute — which, post GH #6 Fase 2, is
@@ -2427,10 +2436,6 @@ class StudyPanel(QWidget):
             :func:`analyze_single_file` output).  Must contain
             ``file_info``, ``beat_indices``, ``beat_indices_fpd``,
             and ``summary``.
-        channel : str
-            Channel that was analysed (``"EL1"``, ``"EL2"``, ...).
-            Needed for the fingerprint — ``_result_fingerprint``
-            hashes ``(config, channel)``.
         config : AnalysisConfig
             Configuration that produced ``result_dict``.  Typically
             ``group.config`` for group-scoped recomputes.
@@ -2452,13 +2457,28 @@ class StudyPanel(QWidget):
                 group_name,
             )
             return
-        if not any(f.csv_relpath == csv_relpath for f in group.files):
+        fe = next(
+            (f for f in group.files if f.csv_relpath == csv_relpath),
+            None,
+        )
+        if fe is None:
             logger.debug(
                 "StudyPanel.update_entry: unknown file %r in group %r — ignored",
                 csv_relpath, group_name,
             )
             return
 
+        # Canonicalise exactly like _BatchWorker submission (line 680)
+        # and _is_stale (line 2608).  Anything non-standard collapses
+        # to 'auto' — this is what the staleness gate expects to see
+        # when it re-hashes the current config against the cached
+        # fingerprint.
+        fe_channel = (
+            fe.channel if fe.channel in ('auto', 'EL1', 'EL2') else 'auto'
+        )
+        # The pipeline records the *resolved* channel in file_info —
+        # this is user-facing display info ("we actually analysed
+        # EL1"), independent of the fingerprint canonicalisation.
         analyzed = (
             (result_dict.get('file_info') or {}).get('analyzed_channel')
             or ''
@@ -2475,7 +2495,7 @@ class StudyPanel(QWidget):
             channel_analyzed=str(analyzed),
             n_included=n_included,
             n_total=n_total,
-            fingerprint=_result_fingerprint(config, channel),
+            fingerprint=_result_fingerprint(config, fe_channel),
             fpd_ms=fpd,
             fpdc_ms=fpdc,
             bpm=bpm,

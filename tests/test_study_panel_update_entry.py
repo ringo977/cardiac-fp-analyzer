@@ -3,30 +3,51 @@
 Fase 3 of the Group-config-as-source-of-truth work (GH #6) introduces
 a public cache write-back method on :class:`StudyPanel`: after a
 Ricalcola, :class:`MainWindow` calls
-``update_entry(group_name, csv_relpath, result_dict, channel, config)``
-to replace the stale :class:`FileResult` in ``_results`` with one
-built from the recomputed pipeline output.  This is the step that
-makes the Studi tree and the dose-response dialog reflect the user's
+``update_entry(group_name, csv_relpath, result_dict, config)`` to
+replace the stale :class:`FileResult` in ``_results`` with one built
+from the recomputed pipeline output.  This is the step that makes
+the Studi tree and the dose-response dialog reflect the user's
 manual beat edits *immediately* — without it, a Ricalcola of a file
 in a Group produces a fresh in-memory ``_current_result`` but the
 cache (and therefore every aggregate downstream) stays frozen on the
 value the batch wrote.
+
+Channel canonicalisation is a critical part of this contract: the
+batch (:class:`_BatchWorker`) stamps fingerprints using the
+:class:`FileEntry` channel (typically ``'auto'``), while the
+pipeline output records the *resolved* channel in
+``file_info.analyzed_channel`` (typically ``'EL1'``).  If
+``update_entry`` used the pipeline's resolved channel for the
+fingerprint, it would diverge from what :func:`_is_stale` expects
+on its next pass — which is exactly the bug Marco hit during
+Fase 3 manual testing: the ● badge persisted after Ricalcola even
+though the numbers had been updated.  The regression test
+:meth:`test_fingerprint_uses_fileentry_channel_not_analyzed`
+pins this behaviour.
 
 The tests here cover:
 
 1. **Happy path** — a plausible pipeline output dict goes through
    ``update_entry`` and the cached :class:`FileResult` picks up the
    new FPD / FPDc / BPM / STV scalars from the supplied summary.
-   Fingerprint matches ``_result_fingerprint(group.config, channel)``
-   so the staleness gate stops flagging the row as ●.
+   Fingerprint matches what the batch would stamp, so the staleness
+   gate stops flagging the row as ●.
 
-2. **Unknown group name** — silently ignored, no exception, cache
+2. **Channel canonicalisation** — FileEntry.channel='auto' must
+   produce a fingerprint matching ``_result_fingerprint(cfg, 'auto')``
+   even when the pipeline resolved to ``EL1``.  This is the
+   staleness-gate-after-Ricalcola regression.
+
+3. **Different config fingerprint** — sanity check that the
+   fingerprint really reflects the config passed in.
+
+4. **Unknown group name** — silently ignored, no exception, cache
    untouched.  Covers the rare race where the Group was removed
    between the Ricalcola emit and the slot dispatch.
 
-3. **Unknown csv_relpath** — same as above at the file level.
+5. **Unknown csv_relpath** — same as above at the file level.
 
-4. **Closed study** — ``_study is None`` → no-op, no exception.
+6. **Closed study** — ``_study is None`` → no-op, no exception.
 
 Skipped automatically on environments without PySide6 widget support
 (sandbox has no libEGL/libGL — same pattern as every other Qt test
@@ -142,12 +163,14 @@ class TestUpdateEntry:
         panel, _study, group = _make_panel_with_study(tmp_path)
         key = (group.name, "a.csv")
 
-        # Pre-seed a "batch-done" FileResult to verify update_entry
-        # replaces rather than merges.
-        old_fp = _result_fingerprint(group.config, "EL1")
+        # Pre-seed a "batch-done" FileResult with the SAME canonical
+        # channel the batch would use for this FileEntry ('auto' is
+        # the default in Group-level Studies).  update_entry should
+        # replace this row, not merge with it.
+        old_fp = _result_fingerprint(group.config, "auto")
         panel._results[key] = FileResult(
             status='ok',
-            channel_analyzed="EL1",
+            channel_analyzed="EL1",   # resolved channel, display-only
             n_included=50,
             n_total=50,
             fingerprint=old_fp,
@@ -173,7 +196,6 @@ class TestUpdateEntry:
             group_name=group.name,
             csv_relpath="a.csv",
             result_dict=new_result,
-            channel="EL1",
             config=group.config,
         )
 
@@ -189,10 +211,72 @@ class TestUpdateEntry:
         assert fr.bpm == pytest.approx(58.0)
         assert fr.stv_ms == pytest.approx(3.1)
         # Fingerprint matches what a batch rerun with the same
-        # (group.config, channel) would compute — the whole point of
-        # GH #6 Fase 2 + 3.
-        expected_fp = _result_fingerprint(group.config, "EL1")
+        # (group.config, fe.channel) would compute — the whole point
+        # of GH #6 Fase 2 + 3.  FileEntry.channel defaults to 'auto'
+        # and that's what the fingerprint is keyed on, NOT the
+        # resolved analyzed_channel (which is display-only).
+        expected_fp = _result_fingerprint(group.config, "auto")
         assert fr.fingerprint == expected_fp
+
+    def test_fingerprint_uses_fileentry_channel_not_analyzed(
+        self, qapp, tmp_path,
+    ):
+        """Regression: fingerprint keyed on FileEntry.channel, not on
+        the pipeline's resolved ``analyzed_channel``.
+
+        This is the exact bug Marco reported during Fase 3 manual
+        validation: after Ricalcola the ● badge persisted because the
+        cached fingerprint diverged from what :func:`_is_stale`
+        recomputed on the next pass.  Root cause:
+
+        - ``_BatchWorker`` canonicalises ``fe.channel`` to one of
+          ``'auto' / 'EL1' / 'EL2'`` (falling back to ``'auto'`` for
+          anything else) before hashing — see ``study_panel.py``
+          line ~680.
+        - The pipeline then resolves ``'auto'`` → ``'EL1'`` (say) and
+          writes that to ``file_info.analyzed_channel``.
+        - Pre-fix, ``update_entry`` happily hashed the *resolved*
+          channel ('EL1'), so the next batch pass compared its
+          ``'auto'``-keyed recompute against the cache's
+          ``'EL1'``-keyed entry and always flagged ● stale.
+
+        Post-fix, ``update_entry`` looks up the FileEntry internally
+        and uses ITS channel ('auto' by default) — matching the
+        batch.  This test pins that invariant.
+        """
+        panel, _study, group = _make_panel_with_study(tmp_path)
+        # Confirm the precondition: the FileEntry channel is 'auto'.
+        # If the Study model ever changes its default, this test
+        # should fail loudly and get updated, not silently pass.
+        assert group.files[0].channel == 'auto'
+
+        # Pipeline reports 'EL1' as the actually-analysed channel —
+        # this is the exact shape analyze_single_file emits after
+        # resolving 'auto'.
+        result = _fake_pipeline_result(
+            analyzed_channel="EL1",
+            n_beats=20, n_fpd=20,
+            fpd_ms=300.0, fpdc_ms=310.0, bpm=60.0, stv_ms=2.0,
+        )
+        panel.update_entry(
+            group_name=group.name,
+            csv_relpath="a.csv",
+            result_dict=result,
+            config=group.config,
+        )
+
+        fr = panel._results[(group.name, "a.csv")]
+        # channel_analyzed is display-only and DOES carry the resolved
+        # value — no regression on that front.
+        assert fr.channel_analyzed == "EL1"
+        # The load-bearing assertion: fingerprint is keyed on 'auto'
+        # (the FileEntry channel), NOT 'EL1' (the analyzed channel).
+        assert fr.fingerprint == _result_fingerprint(group.config, "auto")
+        assert fr.fingerprint != _result_fingerprint(group.config, "EL1"), (
+            "fingerprint must not leak the resolved channel — "
+            "otherwise the staleness gate flags ● after every "
+            "Ricalcola, which is the GH #6 Fase 3 bug."
+        )
 
     def test_different_config_produces_different_fingerprint(
         self, qapp, tmp_path,
@@ -234,12 +318,16 @@ class TestUpdateEntry:
             group_name=group.name,
             csv_relpath="a.csv",
             result_dict=result,
-            channel="EL1",
             config=rogue,
         )
 
         fr = panel._results[(group.name, "a.csv")]
-        group_fp = _result_fingerprint(group.config, "EL1")
+        # FileEntry.channel defaults to 'auto' — that's what the
+        # batch uses, so that's what the canonical fingerprint is
+        # keyed on.  update_entry stamps _result_fingerprint(rogue,
+        # 'auto'); the group's own config would hash to something
+        # different, proving the config param is load-bearing.
+        group_fp = _result_fingerprint(group.config, "auto")
         assert fr.fingerprint != group_fp, (
             "fingerprint must reflect the config actually used — "
             "otherwise the staleness gate can't detect divergence."
@@ -264,7 +352,6 @@ class TestUpdateEntry:
             group_name="GhostGroup",
             csv_relpath="a.csv",
             result_dict=result,
-            channel="EL1",
             config=_study_config_or_default(panel),
         )
 
@@ -286,7 +373,6 @@ class TestUpdateEntry:
             group_name=group.name,
             csv_relpath="ghost.csv",
             result_dict=result,
-            channel="EL1",
             config=group.config,
         )
 
@@ -307,7 +393,6 @@ class TestUpdateEntry:
             group_name="AnyGroup",
             csv_relpath="whatever.csv",
             result_dict=result,
-            channel="EL1",
             config=cfg,
         )
 

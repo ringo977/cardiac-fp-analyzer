@@ -2031,23 +2031,23 @@ class MainWindow(QMainWindow):
         # from the Studi panel (``_current_group`` and
         # ``_current_csv_relpath`` are set together by
         # ``_on_study_file_activated``).  Standalone files have no
-        # cache row to update.  The fingerprint is recomputed from
-        # ``recompute_config`` (= ``group.config`` post Fase 2) and
-        # the channel actually analysed in ``new_result``, so it
-        # matches what the next batch run would produce.
+        # cache row to update.
+        #
+        # Channel canonicalisation is done inside ``update_entry`` by
+        # looking up the FileEntry — critical, because the batch
+        # stamps the fingerprint with ``fe.channel`` (``'auto'`` by
+        # default) while the pipeline output reports the *resolved*
+        # channel (``'EL1'``).  Earlier Fase 3 code passed the
+        # resolved channel here and the two fingerprints diverged,
+        # leaving the badge ● after Ricalcola.
         if (
             self._current_group is not None
             and self._current_csv_relpath is not None
         ):
-            analyzed_channel = (
-                (new_result.get('file_info') or {}).get('analyzed_channel')
-                or self._signal_tab.channel_choice()
-            )
             self._study_panel.update_entry(
                 self._current_group.name,
                 self._current_csv_relpath,
                 new_result,
-                channel=str(analyzed_channel),
                 config=recompute_config,
             )
 
