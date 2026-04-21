@@ -2611,11 +2611,30 @@ class StudyPanel(QWidget):
                 csv_relpath, group_name,
             )
             return False
-        # Canonicalise exactly like _BatchWorker (line 680) and
-        # update_entry above — auto/EL1/EL2 only.  Anything else
-        # collapses to 'auto' so fingerprints stay consistent with
-        # the batch path.
-        canon = new_channel if new_channel in ('auto', 'EL1', 'EL2') else 'auto'
+        # Canonicalise — accept both combo-style lowercase
+        # (``'auto'``, ``'el1'``, ``'el2'`` — what the Signal-tab
+        # combo emits, see main.py ``_CHANNEL_VALUES``) and
+        # batch-style uppercase (``'auto'``, ``'EL1'``, ``'EL2'`` —
+        # what :class:`_BatchWorker` and :func:`_is_stale` key their
+        # fingerprint on).  We write back the **batch-style** form so
+        # the fingerprint re-stamp below matches whatever the batch
+        # produced, otherwise the ● badge would never light up for
+        # files whose cached entry was stamped by the batch (the
+        # common case).  The convention is therefore:
+        #   * model stores uppercase ``'auto'`` / ``'EL1'`` / ``'EL2'``
+        #   * Signal tab combo speaks lowercase — callers that pass
+        #     combo values to :meth:`Signal tab.set_channel` must
+        #     lowercase after reading ``fe.channel`` (MainWindow does
+        #     this in ``_on_study_file_activated``).
+        low = (new_channel or '').lower()
+        if low == 'auto':
+            canon = 'auto'
+        elif low == 'el1':
+            canon = 'EL1'
+        elif low == 'el2':
+            canon = 'EL2'
+        else:
+            canon = 'auto'
         if fe.channel == canon:
             # No-op: nothing to persist, nothing to mark stale.
             return False

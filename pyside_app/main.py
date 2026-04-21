@@ -2390,6 +2390,14 @@ class MainWindow(QMainWindow):
         # show right now.  Falls back to the current combo value (and
         # thereby to Auto on the first open of a session) when the
         # file entry isn't reachable — preserves prior behaviour.
+        #
+        # Case note: ``FileEntry.channel`` is stored in batch-style
+        # uppercase (``'auto'``/``'EL1'``/``'EL2'`` — see
+        # ``StudyPanel.set_entry_channel`` and ``_BatchWorker``), while
+        # the Signal-tab combo and ``analyze_single_file`` both speak
+        # lowercase (``'auto'``/``'el1'``/``'el2'``).  We lowercase
+        # here to bridge the two conventions; unknown values fall back
+        # to Auto the same way ``_CHANNEL_VALUES`` enforces.
         channel = self._signal_tab.channel_choice()
         if self._current_group is not None and self._current_csv_relpath:
             fe = next(
@@ -2400,12 +2408,15 @@ class MainWindow(QMainWindow):
                 None,
             )
             if fe is not None and fe.channel:
-                channel = fe.channel
-                # Sync the combo so the user sees the channel that will
-                # actually be analysed.  set_channel blocks the
-                # ``channel_changed`` signal, so this does NOT trigger a
-                # second ``_on_channel_changed`` round-trip.
-                self._signal_tab.set_channel(fe.channel)
+                combo_value = fe.channel.lower()
+                if combo_value in ('auto', 'el1', 'el2'):
+                    channel = combo_value
+                    # Sync the combo so the user sees the channel that
+                    # will actually be analysed.  set_channel blocks
+                    # the ``channel_changed`` signal, so this does NOT
+                    # trigger a second ``_on_channel_changed``
+                    # round-trip.
+                    self._signal_tab.set_channel(combo_value)
         self._run_analysis(path, channel=channel)
 
     def _on_study_changed(self) -> None:

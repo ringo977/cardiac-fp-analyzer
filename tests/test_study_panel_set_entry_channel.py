@@ -181,6 +181,37 @@ class TestSetEntryChannel:
         assert changed is False
         assert fe.channel == 'auto'
 
+    def test_lowercase_combo_value_el2_is_stored_as_uppercase(
+        self, qapp, tmp_path,
+    ):
+        # The Signal-tab combo emits lowercase 'el1'/'el2' (see
+        # _CHANNEL_VALUES in main.py).  _BatchWorker and _is_stale
+        # fingerprint on uppercase 'EL1'/'EL2'.  set_entry_channel
+        # must bridge: accept lowercase, store uppercase — otherwise
+        # the ● stale badge never fires on real user input.  This is
+        # the regression pinned by Marco's smoke test where the
+        # combo change silently produced a no-op.
+        panel, _study, group, fe = _make_panel_with_study(
+            tmp_path, fe_channel='auto', with_cached_result=True,
+        )
+        changed = panel.set_entry_channel(group.name, "a.csv", 'el2')
+
+        assert changed is True
+        assert fe.channel == 'EL2'
+        cached = panel._results[(group.name, "a.csv")]
+        assert _is_stale(cached, group.config, fe.channel)
+
+    def test_lowercase_el1_is_stored_as_uppercase(
+        self, qapp, tmp_path,
+    ):
+        panel, _study, group, fe = _make_panel_with_study(
+            tmp_path, fe_channel='auto', with_cached_result=True,
+        )
+        changed = panel.set_entry_channel(group.name, "a.csv", 'el1')
+
+        assert changed is True
+        assert fe.channel == 'EL1'
+
     def test_unknown_channel_canonicalises_when_fe_is_el1(
         self, qapp, tmp_path,
     ):
