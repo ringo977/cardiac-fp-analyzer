@@ -77,12 +77,20 @@ def _make_panel_with_study(
     *,
     fe_channel: str = 'auto',
     with_cached_result: bool = True,
+    cached_channel_analyzed: str = 'EL2',
 ) -> tuple[StudyPanel, Study, Group, FileEntry]:
     """Build a ``StudyPanel`` loaded with a 1-group / 1-file Study.
 
     Optionally seeds the cache with a FileResult whose fingerprint
     matches the current (config, channel) so ``_is_stale`` starts at
     False — the test then asserts the method flips it to True.
+
+    ``cached_channel_analyzed`` defaults to ``'EL2'`` so that the common
+    ``auto→EL1`` test vector is GENUINELY stale (auto had picked EL2,
+    the user now explicitly overrides to EL1 — different signal, must
+    re-run).  Tests that need the semantic-equal shortcut from Fix #1
+    override this to match the explicit target (see
+    ``test_auto_to_analyzed_channel_semantic_equal_no_stale``).
     """
     csv = tmp_path / "a.csv"
     csv.write_text("Time (s),EL1 (V)\n0.000,0.0\n0.001,0.0\n")
@@ -102,7 +110,7 @@ def _make_panel_with_study(
         fp = _result_fingerprint(group.config, fe_channel)
         panel._results[(group.name, "a.csv")] = FileResult(
             status='ok',
-            channel_analyzed='EL1',
+            channel_analyzed=cached_channel_analyzed,
             n_included=5,
             n_total=6,
             fingerprint=fp,
@@ -191,8 +199,15 @@ class TestSetEntryChannel:
         # the ● stale badge never fires on real user input.  This is
         # the regression pinned by Marco's smoke test where the
         # combo change silently produced a no-op.
+        #
+        # We pin ``cached_channel_analyzed='EL1'`` so the auto→EL2
+        # transition is genuinely stale (auto had picked EL1, user
+        # overrides to EL2 — different signal).  The semantic-equal
+        # shortcut (Fix #1) is covered by
+        # ``test_auto_to_analyzed_channel_semantic_equal_no_stale``.
         panel, _study, group, fe = _make_panel_with_study(
             tmp_path, fe_channel='auto', with_cached_result=True,
+            cached_channel_analyzed='EL1',
         )
         changed = panel.set_entry_channel(group.name, "a.csv", 'el2')
 
@@ -271,3 +286,87 @@ class TestSetEntryChannel:
         panel.set_study(None)
         changed = panel.set_entry_channel('DoseX', "a.csv", 'EL1')
         assert changed is False
+
+    # ─── Fix #1 (GH #7 followup) — semantic-equal shortcut ────────────
+    # When ``auto`` has already picked ``EL1`` and the user now
+    # explicitly selects ``EL1`` from the Signal-tab combo, the cached
+    # numbers are literally the ones we'd get re-running on ``EL1`` —
+    # same config, same samples, same beats.  Stamping the row as stale
+    # (●) would be a false positive: Ricalcola would just reprocess
+    # identical input.  The contract below pins this: the channel is
+    # persisted (important for auditing / export — the explicit label
+    # is meaningful) but the fingerprint is re-anchored to the NEW
+    # ``(config, canon)`` so ``_is_stale`` stays False.
+    # ─────────────────────────────────────────────────────────────────
+
+    def test_auto_to_analyzed_channel_semantic_equal_no_stale(
+        self, qapp, tmp_path,
+    ):
+        # auto had picked EL1 → user now explicitly selects EL1 → no ●.
+        panel, _study, group, fe = _make_panel_with_study(
+            tmp_path, fe_channel='auto', with_cached_result=True,
+            cached_channel_analyzed='EL1',
+        )
+        changed = panel.set_entry_channel(group.name, "a.csv", 'EL1')
+
+        # Choice is persisted — important for export/audit.
+        assert changed is True
+        assert fe.channel == 'EL1'
+
+        # Cache body preserved (the numbers are correct for EL1 anyway).
+        cached_after = panel._results[(group.name, "a.csv")]
+        assert cached_after.fpd_ms == pytest.approx(320.0)
+        assert cached_after.amp_uv == pytest.approx(450.0)
+        assert cached_after.channel_analyzed == 'EL1'
+
+        # Fingerprint re-anchored to (config, 'EL1') — NOT stale.  The
+        # row should render with ✓ on the next repaint, not ●.
+        assert not _is_stale(cached_after, group.config, fe.channel)
+        assert cached_after.fingerprint == _result_fingerprint(
+            group.config, 'EL1',
+        )
+
+        # And of course the channel choice survived to disk.
+        reloaded = load_study(str(tmp_path))
+        assert reloaded is not None
+        assert reloaded.groups[0].files[0].channel == 'EL1'
+
+    def test_auto_to_non_analyzed_channel_is_genuinely_stale(
+        self, qapp, tmp_path,
+    ):
+        # auto had picked EL1 but user now overrides to EL2 → ● (stale).
+        # This is the complementary case: semantic-equal must NOT fire
+        # when the explicit target differs from what auto had chosen.
+        panel, _study, group, fe = _make_panel_with_study(
+            tmp_path, fe_channel='auto', with_cached_result=True,
+            cached_channel_analyzed='EL1',
+        )
+        changed = panel.set_entry_channel(group.name, "a.csv", 'EL2')
+
+        assert changed is True
+        assert fe.channel == 'EL2'
+
+        cached_after = panel._results[(group.name, "a.csv")]
+        assert _is_stale(cached_after, group.config, fe.channel)
+        assert cached_after.fingerprint == _result_fingerprint(
+            group.config, 'auto',
+        )
+
+    def test_semantic_equal_case_insensitive_on_cached_channel(
+        self, qapp, tmp_path,
+    ):
+        # ``cached.channel_analyzed`` COULD be lowercase (legacy cache
+        # payloads, future pipeline refactors, etc.).  The semantic-
+        # equal comparison must match case-insensitively so the
+        # shortcut fires even when the cache hasn't been re-canonicalised.
+        panel, _study, group, fe = _make_panel_with_study(
+            tmp_path, fe_channel='auto', with_cached_result=True,
+            cached_channel_analyzed='el2',   # lowercase, unusual
+        )
+        changed = panel.set_entry_channel(group.name, "a.csv", 'EL2')
+
+        assert changed is True
+        assert fe.channel == 'EL2'
+
+        cached_after = panel._results[(group.name, "a.csv")]
+        assert not _is_stale(cached_after, group.config, fe.channel)

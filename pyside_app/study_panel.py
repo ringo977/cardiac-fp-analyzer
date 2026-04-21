@@ -2640,20 +2640,56 @@ class StudyPanel(QWidget):
             return False
 
         old_channel = fe.channel
+        cached = self._results.get((group_name, csv_relpath))
+
+        # ── Semantic-equal shortcut (Fix #1, GH #7 followup) ──────────
+        # When the previous channel is ``'auto'`` and the user now picks
+        # the very channel that ``auto`` had already selected (stored in
+        # ``cached.channel_analyzed``), the cached numbers are literally
+        # the ones we'd produce re-running on that explicit channel —
+        # same samples, same config, same beats.  Showing ● in that case
+        # would be a false positive: nothing is actually stale, the
+        # Ricalcola button would just reprocess identical input.  So we
+        # persist the user's choice (important: they may want the
+        # explicit label for auditing or export) but leave the
+        # fingerprint matching the CURRENT ``(config, canon)`` pair so
+        # :func:`_is_stale` returns False on the next repaint.
+        semantic_equal = (
+            old_channel == 'auto'
+            and canon in ('EL1', 'EL2')
+            and cached is not None
+            and cached.fingerprint
+            and (cached.channel_analyzed or '').upper() == canon
+        )
+
         fe.channel = canon
 
-        # Mark the cached FileResult (if any) stale by re-stamping its
-        # fingerprint with the *old* channel.  _is_stale re-hashes the
-        # current (group.config, fe.channel) on every repaint — since
-        # fe.channel just changed, that current hash will differ from
-        # the stored one and the row gets the ● badge.  We deliberately
-        # keep the result body (metrics, n_included, …) so aggregates
-        # stay usable while the user decides whether to Ricalcola.
-        cached = self._results.get((group_name, csv_relpath))
-        if cached is not None and cached.fingerprint:
-            # Rebuild the FileResult with a fingerprint anchored to the
-            # *old* channel.  Using dataclass replace() would be cleaner
-            # but FileResult is tiny and re-constructing is explicit.
+        if semantic_equal:
+            # Re-anchor the fingerprint to the NEW (config, canon) pair
+            # so _is_stale returns False — numbers are identical to a
+            # fresh run on ``canon``.
+            self._results[(group_name, csv_relpath)] = FileResult(
+                status=cached.status,
+                channel_analyzed=cached.channel_analyzed,
+                n_included=cached.n_included,
+                n_total=cached.n_total,
+                error=cached.error,
+                fingerprint=_result_fingerprint(group.config, canon),
+                fpd_ms=cached.fpd_ms,
+                fpdc_ms=cached.fpdc_ms,
+                bpm=cached.bpm,
+                stv_ms=cached.stv_ms,
+                amp_uv=cached.amp_uv,
+            )
+        elif cached is not None and cached.fingerprint:
+            # Mark the cached FileResult stale by re-stamping its
+            # fingerprint with the *old* channel.  _is_stale re-hashes
+            # the current (group.config, fe.channel) on every repaint —
+            # since fe.channel just changed, that current hash will
+            # differ from the stored one and the row gets the ● badge.
+            # We deliberately keep the result body (metrics, n_included,
+            # …) so aggregates stay usable while the user decides
+            # whether to Ricalcola.
             self._results[(group_name, csv_relpath)] = FileResult(
                 status=cached.status,
                 channel_analyzed=cached.channel_analyzed,

@@ -2419,6 +2419,37 @@ class MainWindow(QMainWindow):
                     self._signal_tab.set_channel(combo_value)
         self._run_analysis(path, channel=channel)
 
+        # ── Fix #3 (GH #7 followup) — clear ● after a deep-dive ──────
+        # Double-clicking a row in the Studi tree is an implicit
+        # "Ricalcola this file on the currently-configured channel".
+        # When the user had switched channel from the Signal combo,
+        # the Studi cache carries a stale ● fingerprint anchored to
+        # the OLD channel; after the fresh analysis completes
+        # (``_run_analysis`` populates ``self._current_result``), we
+        # mirror the Ricalcola behaviour and push the new result into
+        # the cache via ``update_entry``.  ``_is_stale`` then sees a
+        # matching fingerprint on the next repaint and the row flips
+        # back from ● to ✓ — no user action required.
+        #
+        # Guards:
+        #   * ``_current_result`` may be None if the pipeline errored;
+        #     no cache update in that case (the row keeps its ● and
+        #     the error will surface in the Signal tab).
+        #   * ``_current_group`` / ``_current_csv_relpath`` may be None
+        #     if the group was removed between the emit and this slot;
+        #     skip silently — the cache has already been pruned.
+        if (
+            self._current_result is not None
+            and self._current_group is not None
+            and self._current_csv_relpath
+        ):
+            self._study_panel.update_entry(
+                self._current_group.name,
+                self._current_csv_relpath,
+                self._current_result,
+                self._current_group.config,
+            )
+
     def _on_study_changed(self) -> None:
         """Status-bar hint when a study is opened / created (task #84)."""
         s = self._study_panel.current_study()
