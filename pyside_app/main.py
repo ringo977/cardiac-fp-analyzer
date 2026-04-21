@@ -2151,9 +2151,34 @@ class MainWindow(QMainWindow):
         own state already reflects the new choice (the signal fires
         *after* the combo updates); ``_run_analysis`` will update the
         side label with whatever the pipeline ends up analysing.
+
+        When the file was opened from a Study (GH #7, task #95), the
+        new channel is also **persisted** into the owning
+        :class:`FileEntry`.  ``StudyPanel.set_entry_channel`` additionally
+        re-stamps the cached :class:`FileResult` fingerprint so the row
+        gets the ``●`` stale badge — the visual cue that the group
+        aggregate is now out of sync with the viewer's channel choice.
+        The user then decides whether to Ricalcola (which refreshes the
+        cache against the new channel and removes the badge).
+
+        Persist happens *before* ``_run_analysis`` on purpose: the
+        batch-fingerprint contract is "fe.channel is the single source
+        of truth for what this file will analyse on", so we want the
+        model to be consistent with the run even if the pipeline call
+        blows up midway through.
         """
         if self._current_csv_path is None:
             return
+        if self._current_group is not None and self._current_csv_relpath:
+            # Best-effort persist; returns False when the choice didn't
+            # actually change (auto→auto) or when the study / group /
+            # file has disappeared underneath us.  Either way we still
+            # want the viewer to re-run on the new channel.
+            self._study_panel.set_entry_channel(
+                self._current_group.name,
+                self._current_csv_relpath,
+                choice,
+            )
         self._run_analysis(str(self._current_csv_path), channel=choice)
 
     def _on_theme_menu_triggered(self, action: QAction) -> None:
@@ -2358,7 +2383,30 @@ class MainWindow(QMainWindow):
         else:
             self._current_group = None
             self._current_csv_relpath = None
-        self._run_analysis(path, channel=self._signal_tab.channel_choice())
+        # Pick the channel from the FileEntry when available (GH #7,
+        # task #95) — the Study model owns the per-file preference,
+        # so opening a file should respect what the user picked last
+        # time they looked at it, not whatever the combo happens to
+        # show right now.  Falls back to the current combo value (and
+        # thereby to Auto on the first open of a session) when the
+        # file entry isn't reachable — preserves prior behaviour.
+        channel = self._signal_tab.channel_choice()
+        if self._current_group is not None and self._current_csv_relpath:
+            fe = next(
+                (
+                    f for f in self._current_group.files
+                    if f.csv_relpath == self._current_csv_relpath
+                ),
+                None,
+            )
+            if fe is not None and fe.channel:
+                channel = fe.channel
+                # Sync the combo so the user sees the channel that will
+                # actually be analysed.  set_channel blocks the
+                # ``channel_changed`` signal, so this does NOT trigger a
+                # second ``_on_channel_changed`` round-trip.
+                self._signal_tab.set_channel(fe.channel)
+        self._run_analysis(path, channel=channel)
 
     def _on_study_changed(self) -> None:
         """Status-bar hint when a study is opened / created (task #84)."""

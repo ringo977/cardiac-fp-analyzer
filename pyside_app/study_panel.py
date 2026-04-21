@@ -2540,6 +2540,123 @@ class StudyPanel(QWidget):
         # to see the edit land.
         self._rebuild_tree()
 
+    # ── Channel persistence from Signal tab (#82 follow-up) ─────────
+
+    def set_entry_channel(
+        self,
+        group_name: str,
+        csv_relpath: str,
+        new_channel: str,
+    ) -> bool:
+        """Persist a user-picked channel for one file in a Group.
+
+        Called by :class:`MainWindow` when the user changes the Signal
+        tab's channel combo for a file that was opened from a Study.
+        Writes the new value into :attr:`FileEntry.channel`, leaves the
+        cached :class:`FileResult` in place (so aggregates stay
+        populated and the Ricalcola deep-dive still has a baseline)
+        but re-stamps its fingerprint with the **previous** channel so
+        :func:`_is_stale` now flags the row with ``●`` — the user's
+        visual cue that the cached aggregate is out of sync with their
+        viewer-level choice.
+
+        The in-memory study is saved to disk (same pattern as
+        :meth:`_save_and_refresh`) because channel is a per-file
+        configuration decision that should survive app restart — losing
+        it on every close would be worse than the small I/O cost.
+
+        Parameters
+        ----------
+        group_name : str
+            Name of the :class:`Group` the file belongs to.
+        csv_relpath : str
+            POSIX-style path relative to the study folder.
+        new_channel : str
+            One of ``'auto'``, ``'EL1'``, ``'EL2'``.  Anything else
+            canonicalises to ``'auto'`` — same rule as
+            :class:`_BatchWorker` so fingerprints stay consistent.
+
+        Returns
+        -------
+        bool
+            ``True`` if the channel was actually changed (triggers a
+            save + rebuild).  ``False`` when the study is closed, the
+            group / file is unknown, or the canonicalised new channel
+            equals the current one — caller can skip redundant work
+            but mostly uses this for tests.
+
+        Notes
+        -----
+        We do NOT re-run the pipeline here; that's :class:`MainWindow`'s
+        job via ``_run_analysis``.  This method is strictly about
+        persisting the decision and flagging the cache as stale.
+        """
+        if self._study is None:
+            return False
+        group = find_group(self._study, group_name)
+        if group is None:
+            logger.debug(
+                "StudyPanel.set_entry_channel: unknown group %r — ignored",
+                group_name,
+            )
+            return False
+        fe = next(
+            (f for f in group.files if f.csv_relpath == csv_relpath),
+            None,
+        )
+        if fe is None:
+            logger.debug(
+                "StudyPanel.set_entry_channel: unknown file %r in group %r — "
+                "ignored",
+                csv_relpath, group_name,
+            )
+            return False
+        # Canonicalise exactly like _BatchWorker (line 680) and
+        # update_entry above — auto/EL1/EL2 only.  Anything else
+        # collapses to 'auto' so fingerprints stay consistent with
+        # the batch path.
+        canon = new_channel if new_channel in ('auto', 'EL1', 'EL2') else 'auto'
+        if fe.channel == canon:
+            # No-op: nothing to persist, nothing to mark stale.
+            return False
+
+        old_channel = fe.channel
+        fe.channel = canon
+
+        # Mark the cached FileResult (if any) stale by re-stamping its
+        # fingerprint with the *old* channel.  _is_stale re-hashes the
+        # current (group.config, fe.channel) on every repaint — since
+        # fe.channel just changed, that current hash will differ from
+        # the stored one and the row gets the ● badge.  We deliberately
+        # keep the result body (metrics, n_included, …) so aggregates
+        # stay usable while the user decides whether to Ricalcola.
+        cached = self._results.get((group_name, csv_relpath))
+        if cached is not None and cached.fingerprint:
+            # Rebuild the FileResult with a fingerprint anchored to the
+            # *old* channel.  Using dataclass replace() would be cleaner
+            # but FileResult is tiny and re-constructing is explicit.
+            self._results[(group_name, csv_relpath)] = FileResult(
+                status=cached.status,
+                channel_analyzed=cached.channel_analyzed,
+                n_included=cached.n_included,
+                n_total=cached.n_total,
+                error=cached.error,
+                fingerprint=_result_fingerprint(group.config, old_channel),
+                fpd_ms=cached.fpd_ms,
+                fpdc_ms=cached.fpdc_ms,
+                bpm=cached.bpm,
+                stv_ms=cached.stv_ms,
+                amp_uv=cached.amp_uv,
+            )
+
+        # Persist + repaint + notify observers.  _save_and_refresh does
+        # all three but also runs _prune_cache, which is harmless here
+        # (nothing to prune — we didn't remove any files) and keeps
+        # the "any structural edit goes through _save_and_refresh" rule
+        # consistent.
+        self._save_and_refresh()
+        return True
+
     # ═════════════════════════════════════════════════════════════════
     #  Internal helpers
     # ═════════════════════════════════════════════════════════════════
