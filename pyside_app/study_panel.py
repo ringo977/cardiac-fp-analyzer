@@ -201,14 +201,14 @@ class FileResult:
         cached entries pre-3c: those are tolerated as "fresh" rather
         than flagged stale, on the assumption that the user hasn't
         touched the config since loading the study.
-    fpd_ms, fpdc_ms, bpm, stv_ms : float
+    fpd_ms, fpdc_ms, bpm, stv_ms, amp_uv : float
         Scalar batch metrics extracted from ``result['summary']``
         (step 4 — per-group aggregate).  All default to ``NaN`` so
         legacy cached entries pre-step-4 (and error results) keep
         rendering without breaking the aggregate helpers — aggregate
         / tooltip code must tolerate NaN via :func:`math.isnan`.
 
-        Choice of these four is scientific:
+        Choice of these five is scientific:
 
         * ``fpd_ms``   — field-potential duration median, raw
           (primary electrophysiology endpoint).
@@ -217,6 +217,24 @@ class FileResult:
         * ``bpm``      — mean beat rate (chronotropic effect).
         * ``stv_ms``   — short-term variability (arrhythmogenic
           risk proxy — small ≈ stable, high ≈ unstable).
+        * ``amp_uv``   — peak-to-peak spike amplitude median, passed
+          through as-is from ``summary['spike_amplitude_mV_median']``.
+          The pipeline's field name says ``_mV`` but the effective
+          unit for standard MCS CSV exports (mV-scale raw) is **µV**
+          after the ``*1000`` at ``parameters.py:212`` — see the
+          "mV (o µV con gain)" caveat in ``DOCUMENTATION.md:364``.
+          Typical cardiomyocyte field-potential amplitudes are
+          50–1000 µV, which matches the values the dose-response
+          plot actually shows on real studies, so we label the axis
+          as µV here.  (A V-scale raw CSV would produce values in
+          the 0.1–1 range and be mislabeled — noted as a future
+          fix; for now this matches the Battiti-tab tile dynamic
+          scaling path and the way users read the numbers.)
+          Used as a dose-response sanity check: a strong amplitude
+          drop across doses usually indicates loss of coupling /
+          electrode contact rather than a real drug effect, so the
+          user wants to see both FPDc and amplitude curves before
+          interpreting FPDc.
 
         We deliberately store point estimates (not arrays) — the
         per-beat distribution stays in the pipeline's result dict
@@ -236,6 +254,7 @@ class FileResult:
     fpdc_ms: float = float('nan')
     bpm: float = float('nan')
     stv_ms: float = float('nan')
+    amp_uv: float = float('nan')
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -315,6 +334,15 @@ _DOSE_RESPONSE_METRICS: tuple[tuple[str, str, str, int], ...] = (
     ('fpd_ms', 'FPD', 'ms', 0),
     ('bpm', 'BPM', '', 0),
     ('stv_ms', 'STV', 'ms', 1),
+    # Amplitude p2p (issue #4): pass-through of the pipeline's
+    # ``spike_amplitude_mV_median``.  For MCS mV-scale CSV exports
+    # the effective unit is µV (``parameters.py:212`` multiplies by
+    # 1000; the ``_mV`` suffix is legacy — see
+    # ``DOCUMENTATION.md:364``).  Integer decimals are readable in
+    # the typical 50–1000 µV cardiomyocyte FP range.  Kept last in
+    # the dropdown because it's a secondary / sanity-check metric,
+    # not a primary pharmacological endpoint.
+    ('amp_uv', 'Ampiezza p2p', 'µV', 0),
 )
 
 
@@ -517,11 +545,13 @@ class _BatchWorker(QRunnable):
         fpd_len = _len_or_zero(result.get('beat_indices_fpd'))
         n_included = fpd_len if fpd_len > 0 else n_total
 
-        # Step 4 — pull the four per-group-aggregate scalars out of
+        # Step 4 — pull the five per-group-aggregate scalars out of
         # ``summary``.  All may be NaN on degenerate signals (e.g.
         # no beats with valid repol); downstream aggregate/tooltip
         # tolerates that.
-        fpd, fpdc, bpm, stv = _extract_summary_metrics(result.get('summary'))
+        fpd, fpdc, bpm, stv, amp_uv = _extract_summary_metrics(
+            result.get('summary'),
+        )
 
         fr = FileResult(
             status='ok',
@@ -533,6 +563,7 @@ class _BatchWorker(QRunnable):
             fpdc_ms=fpdc,
             bpm=bpm,
             stv_ms=stv,
+            amp_uv=amp_uv,
         )
         self._signals.done.emit(self._file_index, fr)
 
@@ -2486,7 +2517,7 @@ class StudyPanel(QWidget):
         n_total = _len_or_zero(result_dict.get('beat_indices'))
         fpd_len = _len_or_zero(result_dict.get('beat_indices_fpd'))
         n_included = fpd_len if fpd_len > 0 else n_total
-        fpd, fpdc, bpm, stv = _extract_summary_metrics(
+        fpd, fpdc, bpm, stv, amp_uv = _extract_summary_metrics(
             result_dict.get('summary'),
         )
 
@@ -2500,6 +2531,7 @@ class StudyPanel(QWidget):
             fpdc_ms=fpdc,
             bpm=bpm,
             stv_ms=stv,
+            amp_uv=amp_uv,
         )
         self._results[(group_name, csv_relpath)] = fr
         # Rebuild so the tree's badge / tooltip / metric columns
@@ -2876,15 +2908,17 @@ def _to_float_or_nan(x) -> float:
     return f
 
 
-def _extract_summary_metrics(summary: dict | None) -> tuple[float, float, float, float]:
-    """Pull ``(fpd_ms, fpdc_ms, bpm, stv_ms)`` out of a pipeline summary.
+def _extract_summary_metrics(
+    summary: dict | None,
+) -> tuple[float, float, float, float, float]:
+    """Pull ``(fpd_ms, fpdc_ms, bpm, stv_ms, amp_uv)`` out of a pipeline summary.
 
     The scientific-core ``summary`` dict is rich (~30 keys); we only
-    surface the four scalars the study-panel UI shows at a glance.
-    For FPD / FPDc we prefer **median** over mean because the per-beat
-    distribution is heavy-tailed on marginal recordings (a handful of
-    ectopic beats drag the mean more than clinicians expect).  Median
-    is also what gets reported in papers.
+    surface the five scalars the study-panel UI shows at a glance.
+    For FPD / FPDc / amplitude we prefer **median** over mean because
+    the per-beat distribution is heavy-tailed on marginal recordings
+    (a handful of ectopic beats drag the mean more than clinicians
+    expect).  Median is also what gets reported in papers.
 
     Units:
 
@@ -2894,12 +2928,26 @@ def _extract_summary_metrics(summary: dict | None) -> tuple[float, float, float,
       via the generic parameter loop (``*_median`` lives alongside
       ``*_mean``).  We read the ms one directly.
     * ``bpm`` is beats-per-minute (``summary['bpm_mean']``).
+    * ``amp_uv`` is peak-to-peak spike amplitude, passed through
+      as-is from ``summary['spike_amplitude_mV_median']``.  The
+      pipeline's field name says ``_mV`` but its effective unit
+      for standard MCS CSV exports (mV-scale raw) is **µV** — the
+      ``*1000`` at ``parameters.py:212`` scales a mV-scale delta
+      into µV, so the stored field's magnitude lives in the typical
+      50–1000 µV field-potential range (see ``DOCUMENTATION.md:364``
+      — "mV (o µV con gain)" documents the legacy naming).  We
+      relabel on the UI side rather than renaming the pipeline
+      field, which would ripple through CDISC/PDF/cache schemas.
+      For Volt-scale raw CSVs the stored value would be mV (0.1–1
+      range) and the µV label would be incorrect — a future
+      enhancement would auto-detect the raw unit like the Battiti
+      tile does via ``ptp < 1e-3``.
 
     Any missing / NaN source becomes NaN in the output — downstream
     aggregate / tooltip code already tolerates NaN.
     """
     if not summary:
-        return (float('nan'),) * 4
+        return (float('nan'),) * 5
 
     # FPD/FPDc are ms in the summary (see parameters.py generic loop
     # over ``['fpd_ms', 'fpdc_ms', ...]`` filling ``_median`` keys).
@@ -2913,7 +2961,16 @@ def _extract_summary_metrics(summary: dict | None) -> tuple[float, float, float,
 
     bpm = _to_float_or_nan(summary.get('bpm_mean'))
     stv = _to_float_or_nan(summary.get('stv_ms'))
-    return fpd, fpdc, bpm, stv
+
+    # Amplitude: pass through the pipeline value untouched.  Median
+    # first (robust to ectopic beats), mean as legacy fallback.
+    # The ``_uv`` suffix reflects the effective unit for standard
+    # MCS CSVs — see the docstring.
+    amp_uv = _to_float_or_nan(summary.get('spike_amplitude_mV_median'))
+    if math.isnan(amp_uv):
+        amp_uv = _to_float_or_nan(summary.get('spike_amplitude_mV_mean'))
+
+    return fpd, fpdc, bpm, stv, amp_uv
 
 
 def _result_fingerprint(config, channel: str) -> str:
@@ -3157,6 +3214,7 @@ def _aggregate_group_metrics(
             'fpdc_ms': (mean, sd, n_finite),
             'bpm':     (mean, sd, n_finite),
             'stv_ms':  (mean, sd, n_finite),
+            'amp_uv':  (mean, sd, n_finite),
         }
 
     ``n_finite`` per metric may be lower than ``n`` when some files
@@ -3172,6 +3230,7 @@ def _aggregate_group_metrics(
     fpdc_vals: list[float] = []
     bpm_vals: list[float] = []
     stv_vals: list[float] = []
+    amp_vals: list[float] = []
     n_fresh_ok = 0
     for r, s in zip(results, stale):
         if r is None or r.status != 'ok' or s:
@@ -3181,6 +3240,7 @@ def _aggregate_group_metrics(
         fpdc_vals.append(r.fpdc_ms)
         bpm_vals.append(r.bpm)
         stv_vals.append(r.stv_ms)
+        amp_vals.append(r.amp_uv)
 
     return {
         'n': n_fresh_ok,
@@ -3189,6 +3249,7 @@ def _aggregate_group_metrics(
         'fpdc_ms': _mean_sd_n(fpdc_vals),
         'bpm': _mean_sd_n(bpm_vals),
         'stv_ms': _mean_sd_n(stv_vals),
+        'amp_uv': _mean_sd_n(amp_vals),
     }
 
 

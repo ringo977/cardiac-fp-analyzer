@@ -750,43 +750,73 @@ class TestExtractSummaryMetrics:
             'fpdc_ms_median': 410.0, 'fpdc_ms_mean': 420.0,
             'bpm_mean': 58.0,
             'stv_ms': 2.1,
+            # Helper passes spike amplitude through untouched.  For
+            # standard MCS CSVs the pipeline field's effective unit
+            # is µV despite the ``_mV`` suffix — see the docstring
+            # of :func:`_extract_summary_metrics` and
+            # ``DOCUMENTATION.md:364``.  A realistic FP median in
+            # µV is in the 50–1000 range.
+            'spike_amplitude_mV_median': 500.0,
+            'spike_amplitude_mV_mean': 520.0,
         }
-        fpd, fpdc, bpm, stv = _extract_summary_metrics(summary)
+        fpd, fpdc, bpm, stv, amp_uv = _extract_summary_metrics(summary)
         # Median preferred — matches scientific convention for
         # heavy-tailed FPD distributions.
         assert fpd == 385.0
         assert fpdc == 410.0
         assert bpm == 58.0
         assert stv == 2.1
+        # Amplitude: median preferred over mean, no unit rescaling.
+        assert amp_uv == pytest.approx(500.0)
 
     def test_mean_fallback_when_median_missing(self):
         # Older result schemas may have only ``*_mean`` — we should
         # still produce a number rather than NaN.
         summary = {'fpd_ms_mean': 400.0, 'fpdc_ms_mean': 420.0,
-                   'bpm_mean': 60.0, 'stv_ms': 1.9}
-        fpd, fpdc, bpm, stv = _extract_summary_metrics(summary)
+                   'bpm_mean': 60.0, 'stv_ms': 1.9,
+                   'spike_amplitude_mV_mean': 150.0}
+        fpd, fpdc, bpm, stv, amp_uv = _extract_summary_metrics(summary)
         assert fpd == 400.0
         assert fpdc == 420.0
+        # Amplitude: median absent, mean fallback engaged; no rescale.
+        assert amp_uv == pytest.approx(150.0)
 
     def test_empty_summary_is_all_nan(self):
-        fpd, fpdc, bpm, stv = _extract_summary_metrics({})
-        assert all(math.isnan(v) for v in (fpd, fpdc, bpm, stv))
+        metrics = _extract_summary_metrics({})
+        # 5-tuple: (fpd, fpdc, bpm, stv, amp_uv) — all NaN on empty.
+        assert len(metrics) == 5
+        assert all(math.isnan(v) for v in metrics)
 
     def test_none_summary_is_all_nan(self):
         # Defensive — the pipeline returning ``result['summary'] = None``
         # must not crash the worker.
-        fpd, fpdc, bpm, stv = _extract_summary_metrics(None)
-        assert all(math.isnan(v) for v in (fpd, fpdc, bpm, stv))
+        metrics = _extract_summary_metrics(None)
+        assert len(metrics) == 5
+        assert all(math.isnan(v) for v in metrics)
 
     def test_partial_summary_only_fills_known_fields(self):
         # Degenerate signal: beats detected but no valid FPD → rate
         # is measurable, FPD is not.  Aggregate must keep the rate.
+        # Amplitude also absent here (extreme noise edge case).
         summary = {'bpm_mean': 72.0, 'stv_ms': 1.5}
-        fpd, fpdc, bpm, stv = _extract_summary_metrics(summary)
+        fpd, fpdc, bpm, stv, amp_uv = _extract_summary_metrics(summary)
         assert math.isnan(fpd)
         assert math.isnan(fpdc)
         assert bpm == 72.0
         assert stv == 1.5
+        assert math.isnan(amp_uv)
+
+    def test_amp_is_passed_through_unconverted(self):
+        # Regression test: an earlier version of this helper silently
+        # multiplied amplitude by 1000 on the assumption that the raw
+        # CSV was always in Volts.  For the standard MCS mV-scale
+        # export, that double-scaled the dose-response plot by 1000×
+        # (values shown in the 10^5 range on a "µV" axis).  Pass-through
+        # matches the pipeline's effective unit for that export — see
+        # the docstring for the V-scale caveat.
+        summary = {'spike_amplitude_mV_median': 237.0}
+        _fpd, _fpdc, _bpm, _stv, amp_uv = _extract_summary_metrics(summary)
+        assert amp_uv == pytest.approx(237.0)
 
 
 class TestMeanSdN:
@@ -902,6 +932,24 @@ class TestAggregateGroupMetrics:
         _, _, bpm_n = agg['bpm']
         assert fpdc_n == 2
         assert bpm_n == 3
+
+    def test_amp_uv_is_aggregated(self):
+        # Issue #4 / task #93: amplitude is a sanity-check metric the
+        # dose-response dialog plots alongside FPDc.  If the aggregator
+        # silently dropped ``amp_uv``, the dialog's series would be
+        # empty and the dropdown entry would look broken (no points
+        # rendered). Pin that the aggregate is produced and reflects
+        # only fresh-ok rows — same contract as the other metrics.
+        results = [
+            self._fresh_ok(fpdc_ms=400.0, amp_uv=200.0),
+            self._fresh_ok(fpdc_ms=420.0, amp_uv=240.0),
+            self._fresh_ok(fpdc_ms=410.0, amp_uv=220.0),
+        ]
+        agg = _aggregate_group_metrics(results, [False, False, False])
+        amp_mean, amp_sd, amp_n = agg['amp_uv']
+        assert amp_n == 3
+        assert amp_mean == pytest.approx(220.0)
+        assert amp_sd > 0
 
 
 class TestFmtMeanSd:
