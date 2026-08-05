@@ -83,6 +83,92 @@ def _select_corrected_fpd(fpd_ms, fpdc_fridericia_ms, fpdc_bazett_ms,
     return fpdc_fridericia_ms
 
 
+# ─── True local RR ───
+
+#: Two genuine depolarizations cannot be closer than the tissue's
+#: refractory period, so anything nearer than this is the *same* beat
+#: seen at a slightly different index — which happens when
+#: re-segmentation shifts a position by a few samples. Well below any
+#: real RR, well above the jitter.
+_SAME_BEAT_TOL_S = 0.05
+
+
+def compute_local_rr(accepted_indices, all_indices, fs,
+                     same_beat_tol_s=_SAME_BEAT_TOL_S):
+    """Interval from each accepted beat to its *real* predecessor.
+
+    Rate correction is a per-beat, physiological relationship:
+    repolarization duration depends on the cycle that preceded it
+    (restitution). The correct RR for beat *N* is therefore the time since
+    the depolarization immediately before it — whatever the analysis later
+    decided to do with that depolarization.
+
+    QC rejects beats on spike amplitude and on template correlation, i.e.
+    on *waveform shape*. A rejected beat still depolarized the tissue and
+    still set the diastolic interval for the next one. Computing RR from
+    the surviving beats alone therefore measures intervals that span the
+    gaps and inflates them — up to 3.7x on real recordings, which deflates
+    FPDc by up to 55% and inflates CV(BP) by up to 250 percentage points.
+
+    Parameters
+    ----------
+    accepted_indices : sequence of int
+        Sample positions of the beats being characterised.
+    all_indices : sequence of int
+        Sample positions of *every* detected beat, QC-rejected included.
+        Must be sorted ascending.
+    fs : float
+        Sampling rate in Hz.
+    same_beat_tol_s : float
+        Raw beats closer than this to the accepted position are treated
+        as the *same* beat rather than as its predecessor. Without it,
+        a beat whose index moved by a few samples during re-segmentation
+        would be rate-corrected against itself, yielding an RR of a few
+        milliseconds and an absurdly large FPDc.
+
+    Returns
+    -------
+    list of (float or None)
+        One entry per accepted beat: seconds since its true predecessor,
+        or ``None`` when there is none (the first beat of the recording,
+        whose FPDc is undefined by construction).
+
+    Notes
+    -----
+    Indexing trap this exists to avoid: ``beat_periods[i-1]`` walks the
+    *accepted* list while a raw period array walks the *raw* list. Once
+    anything is rejected the two stop lining up and each beat silently
+    receives another beat's RR. The alignment must go through sample
+    positions, never through list positions.
+    """
+    accepted = np.asarray(accepted_indices)
+    allb = np.asarray(all_indices)
+    if len(accepted) == 0:
+        return []
+    if len(allb) == 0:
+        return [None] * len(accepted)
+
+    # Index of the first raw beat at or after each accepted position.
+    pos = np.searchsorted(allb, accepted, side='left')
+
+    tol_samples = max(0.0, float(same_beat_tol_s) * fs)
+
+    out = []
+    for acc_idx, p in zip(accepted, pos):
+        # Walk back to the last raw beat that is genuinely *before* this
+        # one. Skip any raw beat at or after the accepted position, and any
+        # within the same-beat tolerance — those are this beat itself, not
+        # its predecessor.
+        prev_pos = int(p) - 1
+        while prev_pos >= 0 and (acc_idx - allb[prev_pos]) <= tol_samples:
+            prev_pos -= 1
+        if prev_pos < 0:
+            out.append(None)          # no predecessor: first beat
+        else:
+            out.append(float(acc_idx - allb[prev_pos]) / fs)
+    return out
+
+
 # ─── FPD reliability gate (Sprint 3 #1, Fix C) ───
 
 def apply_fpd_reliability_gate(summary, all_params, cfg):
@@ -320,7 +406,8 @@ def extract_beat_parameters(beat_data, beat_time, fs, rr_interval=None,
     return params
 
 
-def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
+def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None,
+                           all_beat_indices=None):
     """
     Extract parameters for all beats and compute summary statistics.
 
@@ -331,7 +418,24 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
 
     Parameters
     ----------
+    beat_indices : sequence of int
+        Sample positions of the beats to characterise (post-QC).
     cfg : RepolarizationConfig or None
+    all_beat_indices : sequence of int or None
+        Sample positions of *every* detected beat, QC-rejected included.
+
+        When given, each beat's RR is measured against its real
+        predecessor (see :func:`compute_local_rr`) and the beat-period
+        summary describes the full detected rhythm. This is the correct
+        behaviour: rate correction depends on the physical cycle length,
+        and a QC-rejected beat still happened.
+
+        When ``None`` the function falls back to deriving RR from
+        ``beat_indices`` alone. That is the legacy path — it measures
+        intervals that span QC gaps, inflating RR and CV and deflating
+        FPDc — and is kept only so that callers which genuinely have no
+        raw train (unit tests, ``recompute_from_beats`` on an edited set)
+        keep working.
     """
     rc = _get_repol_cfg(cfg)
     from .beat_detection import compute_beat_periods
@@ -348,7 +452,24 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
         logger.warning("extract_all_parameters: no beats to process")
         return [], {}
 
-    beat_periods = compute_beat_periods(beat_indices, fs)
+    # ─── Beat periods and per-beat RR ───
+    # Two distinct quantities that the legacy code conflated:
+    #   * ``beat_periods``  — the rhythm of the preparation, used for the
+    #     summary statistics and for the adaptive FPD window. Must describe
+    #     every detected beat, otherwise QC rejections masquerade as
+    #     bradycardia and as rhythm irregularity.
+    #   * ``local_rr[i]``   — the cycle length preceding accepted beat *i*,
+    #     used to rate-correct that beat's FPD.
+    if all_beat_indices is not None and len(all_beat_indices) > 0:
+        beat_periods = compute_beat_periods(all_beat_indices, fs)
+        local_rr = compute_local_rr(beat_indices, all_beat_indices, fs)
+    else:
+        # Legacy fallback — see the ``all_beat_indices`` docstring.
+        beat_periods = compute_beat_periods(beat_indices, fs)
+        local_rr = [
+            beat_periods[i - 1] if 0 < i <= len(beat_periods) else None
+            for i in range(len(beat_indices))
+        ]
 
     # ─── Template averaging for FPD reference ───
     template = build_beat_template(beats_data, fs, cfg=cfg)
@@ -425,7 +546,7 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
             )
 
     for i, (bd, bt) in enumerate(zip(beats_data, beats_time)):
-        rr = beat_periods[i-1] if i > 0 and i-1 < len(beat_periods) else None
+        rr = local_rr[i] if i < len(local_rr) else None
         # Use per-beat RR for adaptive min FPD; fall back to median
         bp_for_beat = rr if rr is not None else median_bp_s
 

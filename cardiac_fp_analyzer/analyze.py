@@ -343,8 +343,14 @@ def _analyze_from_beats(
                           f"→ true median RR={_median_bp_post_s*1000:.0f} ms)")
 
     # Use (possibly filtered and re-segmented) beats for parameter extraction.
+    # ``bi`` is the full detected train; ``bi_fpd`` is what survived QC and
+    # the rhythm/RR filters. Passing both lets each accepted beat be
+    # rate-corrected against its real predecessor instead of against the
+    # next surviving beat, and lets the beat-period summary describe the
+    # actual rhythm rather than the QC rejection pattern.
     all_p, summary = extract_all_parameters(bd_fpd, btm_fpd, bi_fpd, fs,
-                                             cfg=rep_cfg)
+                                             cfg=rep_cfg,
+                                             all_beat_indices=bi)
     if _resegmented_info is not None:
         summary['resegmentation_info'] = _resegmented_info
     # Merge rhythm-classification-derived fields into summary (additive).
