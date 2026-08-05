@@ -716,7 +716,18 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
                 ar.classification = 'Baseline (reference)'
 
     # ─── Inclusion criteria ───
-    results = apply_inclusion_criteria(results, verbose=verbose, cfg=config.inclusion)
+    # Capture the structured exclusion provenance and attach it to every
+    # result, so downstream consumers (Excel/PDF report, PySide study
+    # panel, CDISC export) can show *which* dose-response groups were
+    # dropped and why. A removed group produces no %ΔFPDcF at all, and
+    # that absence is otherwise invisible in the outputs.
+    inclusion_report = {}
+    results = apply_inclusion_criteria(results, verbose=verbose,
+                                       cfg=config.inclusion,
+                                       report_out=inclusion_report)
+    for r in results:
+        if r is not None:
+            r['inclusion_report'] = inclusion_report
 
     # ─── Baseline-relative residual analysis (pass 2) ───
     # Collect baseline templates per group (chip+channel), then re-run
