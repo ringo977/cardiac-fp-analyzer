@@ -170,6 +170,26 @@ def apply_inclusion_criteria(results, verbose=True, cfg=None, report_out=None):
                 fail_criterion = 'fpdc_physiol'
                 n_bl_physiol_fail += 1
 
+        # Criterion 1b: precision of the FPDc reference (opt-in).
+        # Measures what the baseline is actually for — see
+        # ``max_baseline_fpdc_rsem`` in config.py. Placed after the rhythm
+        # criteria so that, when both are on, the more specific reason wins
+        # the report.
+        if fail_reason is None and getattr(cfg, 'enabled_baseline_precision', False):
+            sd = summary.get('fpdc_ms_std', np.nan)
+            n_fpd = summary.get('fpd_ms_n', np.nan)
+            max_rsem = getattr(cfg, 'max_baseline_fpdc_rsem', 3.0)
+            if (not np.isnan(fpdc) and fpdc > 0 and not np.isnan(sd)
+                    and not np.isnan(n_fpd) and n_fpd >= 1):
+                rsem = (sd / fpdc * 100.0) / np.sqrt(n_fpd)
+                if rsem > max_rsem:
+                    fail_reason = (
+                        f'Baseline FPDc reference imprecise: rSEM={rsem:.2f}% '
+                        f'> {max_rsem}% (SD={sd:.0f}ms, mean={fpdc:.0f}ms, '
+                        f'n={int(n_fpd)})'
+                    )
+                    fail_criterion = 'baseline_precision'
+
         # Criterion 4b: FPD / RR ratio (physiological, rate-independent).
         # Repolarization cannot occupy the whole cycle. A ratio at or near
         # 100% means the detected "T wave" is an afterpotential or the next

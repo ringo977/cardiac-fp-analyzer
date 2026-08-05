@@ -479,6 +479,41 @@ class InclusionConfig:
     max_cv_bp: float = 25.0            # % — paper standard
     enabled_cv: bool = True
 
+    # ── Precision of the baseline FPDc reference ──
+    # What a baseline is *for* is to supply a reference FPDc against which
+    # the drug value is compared. What matters is therefore how precisely
+    # that reference is determined — the relative standard error of the
+    # mean, SD/(mean·sqrt(n)) — not how regular the rhythm happened to be.
+    #
+    # CV(RR) was standing in for this and does it badly. Measured on the 36
+    # calibration baselines with corrected RR, CV(RR) explains only ~38% of
+    # the variance in FPDc dispersion (r = 0.61), and the CV<25% gate has
+    # 5 false positives against 0 false negatives — it discards precise
+    # references and catches nothing a precision criterion would miss:
+    #
+    #   chipC_ch2_baseline   CV(RR) 29.3%   rSEM 1.68%   n=70   QC C
+    #   chipD_ch2_baseline   CV(RR) 38.5%   rSEM 1.63%   n=17   QC B
+    #   chipD_ch3_baseline   CV(RR) 29.2%   rSEM 1.25%   n=65   QC B
+    #   chip4_ch3_BASELINE   CV(RR) 26.2%   rSEM 1.14%   n=84   QC B
+    #
+    # An irregular but well-sampled preparation gives a perfectly usable
+    # reference; the averaging absorbs the irregularity. Rejecting it costs
+    # an entire dose-response group.
+    #
+    # Threshold rationale: the classification threshold is a 15% change in
+    # FPDc, so a reference uncertain to 3% contributes at most a fifth of
+    # the effect being called. Distribution over the 36 baselines: median
+    # 1.41%, p75 2.31%, p90 3.84%, max 6.37%.
+    #
+    # Caveat: rSEM falls with beat count, so a short recording of a healthy
+    # preparation scores worse than a long one. That is arguably correct —
+    # a shorter recording *does* give a less precise reference — but it
+    # means this measures the reference, not the biology. Preparation
+    # quality is the QC grade's job, and physiological plausibility the
+    # FPD/RR ratio's.
+    max_baseline_fpdc_rsem: float = 3.0    # %
+    enabled_baseline_precision: bool = False   # opt-in until validated
+
     # FPDcF plausibility range (ms) — wide safety net
     fpdc_range_min: float = 100.0
     fpdc_range_max: float = 1200.0
