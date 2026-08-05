@@ -118,7 +118,13 @@ def _provenance(cfg):
     """Everything needed to know what a result set was produced with."""
     from cardiac_fp_analyzer import __version__ as pkg_version
 
-    dirty = bool(_git('status', '--porcelain'))
+    # Only *tracked* modifications matter for reproducibility: untracked
+    # files are not part of the package and cannot change its behaviour.
+    # Counting them too would make this flag true in any working repo,
+    # which is exactly how a warning stops being read.
+    modified = _git('status', '--porcelain', '--untracked-files=no')
+    dirty = bool(modified)
+    untracked = _git('ls-files', '--others', '--exclude-standard')
     return {
         'timestamp_utc': datetime.now(timezone.utc).isoformat(timespec='seconds'),
         'package_version': pkg_version,
@@ -126,8 +132,10 @@ def _provenance(cfg):
         'git_branch': _git('rev-parse', '--abbrev-ref', 'HEAD',
                            default='unknown'),
         'git_dirty': dirty,
+        'git_modified_files': modified.splitlines() if modified else [],
+        'git_untracked_count': len(untracked.splitlines()) if untracked else 0,
         'git_dirty_note': (
-            'Working tree had uncommitted changes: this result set is NOT '
+            'Tracked files were modified: this result set is NOT '
             'reproducible from the commit alone.' if dirty else ''
         ),
         'python': sys.version.split()[0],
@@ -270,7 +278,8 @@ def diff_manifests(old_path: Path, new_path: Path):
     print("=" * 78)
     for lbl, m in (('prima', old), ('dopo ', new)):
         p = m['provenance']
-        dirty = '  [tree sporco]' if p.get('git_dirty') else ''
+        dirty = ('  [FILE TRACCIATI MODIFICATI — non riproducibile]'
+                 if p.get('git_dirty') else '')
         print(f"  {lbl}: {p['git_commit'][:10]} ({p['git_branch']})  "
               f"v{p['package_version']}  {p['timestamp_utc']}{dirty}")
     cd_o = old['provenance'].get('config_non_default', {})
@@ -370,8 +379,14 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     prov = _provenance(cfg)
     if prov['git_dirty']:
-        print("  ATTENZIONE: working tree con modifiche non committate.")
-        print("  Questo set di risultati non è riproducibile dal commit.\n")
+        print("  ATTENZIONE: file tracciati modificati e non committati.")
+        print("  Questo set di risultati non è riproducibile dal commit.")
+        for line in prov['git_modified_files'][:10]:
+            print(f"    {line}")
+        extra = len(prov['git_modified_files']) - 10
+        if extra > 0:
+            print(f"    (+{extra} altri)")
+        print()
 
     manifest = {'provenance': prov, 'datasets': {}}
     for d in dirs:
