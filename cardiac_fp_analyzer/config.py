@@ -577,6 +577,27 @@ class NormalizationConfig:
     norm_max_cv_bp: float = 50.0           # %
     norm_max_cv_enabled: bool = False       # OFF by default (opt-in)
 
+    # ── FPD reliability filter ──
+    # ``RepolarizationConfig.min_valid_fpd_ratio`` already makes
+    # parameters.py stamp ``summary['fpd_reliable'] = False`` when the
+    # repolarization wave was measurable on too few beats.  That flag was
+    # computed but never consulted here, so a recording whose FPDcF came
+    # from (say) 1 of 7 beats — the documented "FPDcF 318.8 ± 0.0" case —
+    # still contributed a %ΔFPDcF and could flip a drug classification.
+    #
+    # Two independent switches, deliberately:
+    #
+    #   * the flag is ALWAYS propagated into the normalization dict
+    #     (``baseline_fpd_reliable`` / ``drug_fpd_reliable`` /
+    #     ``fpd_reliable``), so the condition is visible in reports and in
+    #     the CDISC export whatever the setting;
+    #   * exclusion from drug-level classification is opt-in, matching the
+    #     QC-grade and CV filters above, so enabling it is an explicit,
+    #     documented analysis decision rather than a silent change.
+    #
+    # Turning this ON is recommended for anything reported externally.
+    norm_require_fpd_reliable: bool = False   # OFF by default (opt-in)
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #   ARRHYTHMIA DETECTION

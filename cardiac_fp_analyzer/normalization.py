@@ -19,9 +19,12 @@ TdP risk scoring (from Ando et al. 2017):
   Score  3: strong prolongation (%FPDcF ≥ HIGH) or arrhythmic events
 """
 
+import logging
 from collections import defaultdict
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # ─── Thresholds (module-level defaults, overridden by NormalizationConfig) ───
 THRESHOLD_LOW = 10.0    # %FPDcF change ≥ 10%
@@ -202,6 +205,13 @@ def compute_normalized_parameters(result, baseline_result, cfg=None):
         'exceeds_MID': False,
         'exceeds_HIGH': False,
         'tdp_score': 0,
+        # FPD reliability provenance — see ``norm_require_fpd_reliable`` in
+        # config.py.  Always present so downstream consumers (reports, CDISC
+        # export, UI badges) can surface the condition without having to
+        # reach back into the two source summaries.
+        'baseline_fpd_reliable': True,
+        'drug_fpd_reliable': True,
+        'fpd_reliable': True,
     }
 
     if baseline_result is None:
@@ -221,6 +231,31 @@ def compute_normalized_parameters(result, baseline_result, cfg=None):
 
     norm['has_baseline'] = True
     norm['baseline_file'] = baseline_result.get('metadata', {}).get('filename', '')
+
+    # ── FPD reliability provenance ──
+    # A %ΔFPDcF is only as trustworthy as the weaker of its two operands,
+    # so the pair reliability is the AND of both.  Default True keeps
+    # results produced before the reliability gate existed usable.
+    bl_reliable = bool(bl_summary.get('fpd_reliable', True))
+    dr_reliable = bool(dr_summary.get('fpd_reliable', True))
+    norm['baseline_fpd_reliable'] = bl_reliable
+    norm['drug_fpd_reliable'] = dr_reliable
+    norm['fpd_reliable'] = bl_reliable and dr_reliable
+
+    if not norm['fpd_reliable']:
+        which = []
+        if not bl_reliable:
+            which.append('baseline')
+        if not dr_reliable:
+            which.append('drug')
+        logger.warning(
+            "%%ΔFPDcF computed from unreliable FPD (%s): %s vs baseline %s. "
+            "Enable AnalysisConfig.norm_require_fpd_reliable to exclude such "
+            "recordings from drug classification.",
+            '+'.join(which),
+            result.get('metadata', {}).get('filename', '?'),
+            norm['baseline_file'] or '?',
+        )
 
     # BP change
     if bl_bp and not np.isnan(bl_bp) and bl_bp > 0:
@@ -346,9 +381,12 @@ def classify_drug(results_list, cfg=None):
     cv_filter_on = getattr(cfg, 'norm_max_cv_enabled', False)
     cv_max = getattr(cfg, 'norm_max_cv_bp', 50.0)
 
+    fpd_filter_on = getattr(cfg, 'norm_require_fpd_reliable', False)
+
     # Group by drug — collect FPDcF data for classification
     drug_data = defaultdict(list)
     n_qc_excluded = 0
+    n_fpd_excluded = 0
     for r in results_list:
         if _is_baseline(r) or _is_control(r):
             continue
@@ -381,12 +419,34 @@ def classify_drug(results_list, cfg=None):
                     n_qc_excluded += 1
                     continue
 
+        # Apply FPD reliability filter (opt-in).
+        # ``fpd_reliable`` is the AND of the drug and baseline recordings —
+        # a %ΔFPDcF is only as trustworthy as the weaker operand. Recordings
+        # analysed before this key existed default to True.
+        if fpd_filter_on and not norm.get('fpd_reliable', True):
+            n_fpd_excluded += 1
+            logger.info(
+                "Excluded from classification (FPD unreliable): %s",
+                r.get('metadata', {}).get('filename', '?'),
+            )
+            continue
+
         if drug and not np.isnan(pct):
             drug_data[drug].append({
                 'concentration': conc,
                 'pct_fpdc_change': pct,
                 'tdp_score': norm.get('tdp_score', 0),
             })
+
+    # Surface how many recordings the opt-in filters removed. Without this
+    # an enabled filter silently shrinks the classification denominator,
+    # which is exactly the kind of change that must be visible in a log.
+    if n_qc_excluded or n_fpd_excluded:
+        logger.info(
+            "Classification filters excluded %d recording(s): "
+            "%d by QC/CV, %d by FPD reliability.",
+            n_qc_excluded + n_fpd_excluded, n_qc_excluded, n_fpd_excluded,
+        )
 
     # Collect cessation data per drug (from ALL drug recordings, not just those
     # with valid FPD — the whole point is to catch drugs that destroy waveforms)
