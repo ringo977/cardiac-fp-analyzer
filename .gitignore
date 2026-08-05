@@ -17,8 +17,21 @@ build/
 .DS_Store
 
 # Analysis outputs
-analysis_results/
+# The glob matters: analysis_results_v2/, _v3.6/, _qc_max/ and friends
+# accumulated as untracked clutter because only the bare name was listed.
+analysis_results*/
 comparison_results/
+
+# Re-analysis runs (tools/reanalyze.py) — xlsx/pdf reports plus manifest.
+# The manifest is worth keeping when a run is a reference point; commit
+# it explicitly with `git add -f` rather than tracking the whole tree.
+reanalysis/
+
+# Transfer artifacts. *.dat is here because git bundles were once renamed
+# to .dat to slip past the *.bundle rule.
+*.patch
+*.diff
+*.dat
 
 # Signal images (local reference data)
 SIGNAL IMAGES/
