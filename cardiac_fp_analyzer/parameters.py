@@ -36,6 +36,53 @@ from .repolarization import (
 logger = logging.getLogger(__name__)
 
 
+# ─── Rate-correction selection ───
+
+#: Correction formulas understood by :func:`_select_corrected_fpd`.
+#: Kept in sync with ``RepolarizationConfig.correction`` (config.py) and with
+#: the ``--correction`` CLI choices in analyze.py.
+VALID_CORRECTIONS = ('fridericia', 'bazett', 'none')
+
+
+def _select_corrected_fpd(fpd_ms, fpdc_fridericia_ms, fpdc_bazett_ms,
+                          correction):
+    """Return the rate-corrected FPD selected by *correction*.
+
+    Parameters
+    ----------
+    fpd_ms : float
+        Uncorrected FPD in milliseconds (used when ``correction='none'``).
+    fpdc_fridericia_ms, fpdc_bazett_ms : float
+        Pre-computed corrected values, in milliseconds.
+    correction : str
+        One of :data:`VALID_CORRECTIONS`.
+
+    Returns
+    -------
+    float
+        The selected value.
+
+    Notes
+    -----
+    An unrecognised *correction* falls back to Fridericia (the package
+    default) and logs a warning rather than raising, so that a typo in a
+    hand-edited sidecar degrades to the documented default instead of
+    aborting a batch run. ``AnalysisConfig.from_dict`` does not validate
+    this field, so a typo is reachable in practice.
+    """
+    if correction == 'fridericia':
+        return fpdc_fridericia_ms
+    if correction == 'bazett':
+        return fpdc_bazett_ms
+    if correction == 'none':
+        return fpd_ms
+    logger.warning(
+        "Unknown correction %r (expected one of %s) — falling back to "
+        "Fridericia.", correction, ', '.join(VALID_CORRECTIONS),
+    )
+    return fpdc_fridericia_ms
+
+
 # ─── FPD reliability gate (Sprint 3 #1, Fix C) ───
 
 def apply_fpd_reliability_gate(summary, all_params, cfg):
@@ -236,13 +283,35 @@ def extract_beat_parameters(beat_data, beat_time, fs, rr_interval=None,
     params['repol_peak_idx_in_beat'] = repol_peak_i
     params['fpd_endpoint_idx_in_beat'] = fpd_end_i
 
-    # FPDc Fridericia & Bazett (always compute both; config selects which to report)
+    # ── Rate correction ────────────────────────────────────────────────
+    # Both named formulas are ALWAYS computed and stored under their own
+    # explicit keys (``fpdc_fridericia_ms`` / ``fpdc_bazett_ms``) so that a
+    # consumer that needs a specific formula never has to guess which one
+    # ``fpdc_ms`` currently holds.
+    #
+    # ``fpdc_ms`` is the *configured* correction — this is what ``rc.correction``
+    # selects, and ``summary['correction']`` records which formula it is.
+    #
+    # History: before this fix ``fpdc_ms`` was hard-coded to Fridericia while
+    # ``rc.correction`` was only stamped into the summary as a label, so
+    # ``--correction bazett`` produced Fridericia values labelled "bazett".
+    # The default is still 'fridericia', so default-config results are
+    # bit-identical to the previous behaviour.
     if fpd is not None and rr_interval is not None and rr_interval > 0:
-        params['fpdc_ms'] = (fpd / (rr_interval ** (1/3))) * 1000
-        params['fpdc_bazett_ms'] = (fpd / np.sqrt(rr_interval)) * 1000
+        fpdc_fridericia = (fpd / (rr_interval ** (1 / 3))) * 1000
+        fpdc_bazett = (fpd / np.sqrt(rr_interval)) * 1000
+        params['fpdc_fridericia_ms'] = fpdc_fridericia
+        params['fpdc_bazett_ms'] = fpdc_bazett
+        params['fpdc_ms'] = _select_corrected_fpd(
+            fpd_ms=fpd * 1000,
+            fpdc_fridericia_ms=fpdc_fridericia,
+            fpdc_bazett_ms=fpdc_bazett,
+            correction=rc.correction,
+        )
     else:
-        params['fpdc_ms'] = np.nan
+        params['fpdc_fridericia_ms'] = np.nan
         params['fpdc_bazett_ms'] = np.nan
+        params['fpdc_ms'] = np.nan
 
     # Max dV/dt
     deriv = np.gradient(data, 1.0 / fs)
@@ -332,6 +401,11 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
     # ─── Per-beat extraction ───
     all_params = []
     fpd_vals, fpdc_vals, fpdc_bazett_vals, amp_vals = [], [], [], []
+    # Explicit per-formula accumulator, kept alongside ``fpdc_vals`` (which
+    # holds whichever formula ``rc.correction`` selected) so that consumers
+    # needing a named formula — e.g. the CDISC ``FPDCF`` test code — can read
+    # it without inspecting the config.
+    fpdc_fridericia_vals = []
     rise_time_vals, rr_interval_vals = [], []
     pre_samples = int(rc.segment_pre_ms / 1000 * fs)
 
@@ -408,6 +482,8 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
             fpdc_vals.append(params['fpdc_ms'])
         if not np.isnan(params.get('fpdc_bazett_ms', np.nan)):
             fpdc_bazett_vals.append(params['fpdc_bazett_ms'])
+        if not np.isnan(params.get('fpdc_fridericia_ms', np.nan)):
+            fpdc_fridericia_vals.append(params['fpdc_fridericia_ms'])
         amp_vals.append(params['spike_amplitude_mV'])
         if not np.isnan(params.get('rise_time_ms', np.nan)):
             rise_time_vals.append(params['rise_time_ms'])
@@ -434,6 +510,7 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None):
     for name, vals in [('beat_period_ms', bp_ms), ('spike_amplitude_mV', amp_vals),
                        ('fpd_ms', fpd_vals), ('fpdc_ms', fpdc_vals),
                        ('fpdc_bazett_ms', fpdc_bazett_vals),
+                       ('fpdc_fridericia_ms', fpdc_fridericia_vals),
                        ('rise_time_ms', rise_time_vals),
                        ('rr_interval_ms', rr_interval_vals)]:
         v = np.array(vals)
