@@ -222,12 +222,14 @@ _DOMAIN_VAR_LABELS = {
 _TEST_CODES = {
     'FPD':      ('EGTEST', 'FPD',                                'ms',    False),
     'FPDCF':    ('EGTEST', 'FPDcF',                              'ms',    False),
+    'FPDCB':    ('EGTEST', 'FPDcB',                              'ms',    False),
     'BP':       ('EGTEST', 'RR Interval, Single Measurement',      'ms',    False),
     'SPIKEAM':  ('EGTEST', 'Spike Amplitude',                    'uV',    False),
     'RISETM':   ('EGTEST', 'Rise Time',                          'ms',    False),
     'MAXDVDT':  ('EGTEST', 'Maximum dV/dt',                      'mV/ms', False),
     'INTVL':    ('EGTEST', 'ECG Mean Heart Rate',                 'beats/min', False),
     'FPDCFPC':  ('EGTEST', 'FPDcF Pct Change',                  '%',     False),
+    'FPDREL':   ('EGTEST', 'FPD Reliability Flag',              None,    True),
     'BPPCT':    ('EGTEST', 'Beat Period Pct Change',             '%',     False),
     'AMPPCT':   ('EGTEST', 'Amplitude Pct Change',              '%',     False),
     'TDPSCR':   ('EGTEST', 'TdP Risk Score',                    '',      True),
@@ -246,6 +248,7 @@ _TEST_CODES = {
 # that are not primary electrophysiology measurements.
 _SUPPEG_CODES = {
     'FPDCFPC', 'BPPCT', 'AMPPCT',      # percent-change endpoints
+    'FPDREL',                           # FPD reliability qualifier
     'TDPSCR', 'RSKSCR', 'FPDCONF',      # risk scores
     'MORPHIN', 'SPECCHG', 'PROAIDX',    # instability/quality indices
     'EADPCT',                             # incidence percentage
@@ -674,7 +677,24 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
 
         # ── Core electrophysiology parameters ──
         _add_row('FPD',      s.get('fpd_ms_mean'))
-        _add_row('FPDCF',    s.get('fpdc_ms_mean'))
+        # Rate-corrected FPD: emit under the test code that names the formula
+        # actually used, never under a generic one.  ``fpdc_ms_mean`` holds
+        # whichever correction ``RepolarizationConfig.correction`` selected, so
+        # reading it blindly into ``FPDCF`` would label Bazett values as
+        # Fridericia in a regulatory dataset.  The explicit per-formula summary
+        # keys are preferred; the fall back to ``fpdc_ms_mean`` keeps results
+        # produced by older versions (which lacked those keys) exportable.
+        _correction = str(s.get('correction', 'fridericia')).lower()
+        if _correction == 'bazett':
+            _add_row('FPDCB', s.get('fpdc_bazett_ms_mean',
+                                    s.get('fpdc_ms_mean')))
+        elif _correction == 'none':
+            # No corrected value exists; 'FPD' above already carries the raw
+            # measurement, so emitting a corrected row would be misleading.
+            pass
+        else:
+            _add_row('FPDCF', s.get('fpdc_fridericia_ms_mean',
+                                    s.get('fpdc_ms_mean')))
         _add_row('BP',       s.get('beat_period_ms_mean'))
         _add_row('SPIKEAM',  s.get('spike_amplitude_mV_mean'))
         _add_row('RISETM',   s.get('rise_time_ms_mean'))
@@ -692,6 +712,13 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
 
         # ── Normalized parameters (drug recordings only) ──
         if norm.get('has_baseline'):
+            # Reliability qualifier for the percent-change endpoints below.
+            # A reviewer must be able to see that a %ΔFPDcF was derived from
+            # a recording where repolarization was measurable on too few
+            # beats, independently of whether the analysis chose to exclude
+            # such recordings (norm_require_fpd_reliable).
+            _add_row('FPDREL',
+                     'Y' if norm.get('fpd_reliable', True) else 'N')
             _add_row('FPDCFPC', norm.get('pct_fpdc_change'))
             _add_row('BPPCT',   norm.get('pct_bp_change'))
             _add_row('AMPPCT',  norm.get('pct_amp_change'))
