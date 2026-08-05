@@ -24,9 +24,19 @@ from cardiac_fp_analyzer.config import InclusionConfig
 from cardiac_fp_analyzer.inclusion import apply_inclusion_criteria
 
 
-def _result(filename, *, drug, cv=5.0, conf=0.90, fpdc=500.0,
+class _QC:
+    def __init__(self, grade):
+        self.grade = grade
+
+
+def _result(filename, *, drug, cv=5.0, conf=0.90, fpdc=500.0, qc='A',
+            fpd_ms=400.0, bp_ms=1000.0,
             chip='chipD', chamber='ch1', experiment='EXP8'):
-    """Minimal result dict shaped like analyze_single_file output."""
+    """Minimal result dict shaped like analyze_single_file output.
+
+    Carries a QC grade and the FPD/beat-period pair because the default
+    inclusion chain reads both (combined QC+CV rule, FPD/RR ratio).
+    """
     return {
         'metadata': {'filename': filename},
         'file_info': {
@@ -41,8 +51,14 @@ def _result(filename, *, drug, cv=5.0, conf=0.90, fpdc=500.0,
             'beat_period_ms_cv': cv,
             'fpd_confidence': conf,
             'fpdc_ms_mean': fpdc,
-            'beat_period_ms_mean': 1000.0,
+            'beat_period_ms_mean': bp_ms,
+            'beat_period_ms_median': bp_ms,
+            'fpd_ms_mean': fpd_ms,
+            'fpd_ms_median': fpd_ms,
+            'bpm_mean': 60000.0 / bp_ms if bp_ms else np.nan,
+            'pct_beats_no_repol': 0.0,
         },
+        'qc_report': _QC(qc),
         'beat_periods': np.array([1.0, 1.0, 1.0]),
     }
 

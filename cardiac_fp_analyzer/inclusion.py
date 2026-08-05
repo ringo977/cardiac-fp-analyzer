@@ -170,6 +170,28 @@ def apply_inclusion_criteria(results, verbose=True, cfg=None, report_out=None):
                 fail_criterion = 'fpdc_physiol'
                 n_bl_physiol_fail += 1
 
+        # Criterion 4b: FPD / RR ratio (physiological, rate-independent).
+        # Repolarization cannot occupy the whole cycle. A ratio at or near
+        # 100% means the detected "T wave" is an afterpotential or the next
+        # depolarization, not a measurement — and unlike the absolute FPDc
+        # window this holds at any beat rate.
+        if fail_reason is None and getattr(cfg, 'enabled_fpd_rr_ratio', False):
+            fpd_ms = summary.get('fpd_ms_median',
+                                 summary.get('fpd_ms_mean', np.nan))
+            bp_ms = summary.get('beat_period_ms_median',
+                                summary.get('beat_period_ms_mean', np.nan))
+            max_ratio = getattr(cfg, 'max_fpd_rr_ratio', 0.80)
+            if (not np.isnan(fpd_ms) and not np.isnan(bp_ms) and bp_ms > 0):
+                ratio = fpd_ms / bp_ms
+                if ratio > max_ratio:
+                    fail_reason = (
+                        f'Baseline FPD/RR={ratio * 100:.0f}% > '
+                        f'{max_ratio * 100:.0f}% (FPD={fpd_ms:.0f}ms vs '
+                        f'RR={bp_ms:.0f}ms) — repolarization cannot fill '
+                        f'the cycle'
+                    )
+                    fail_criterion = 'fpd_rr_ratio'
+
         # Criterion 5: population outlier (data-adaptive, opt-in)
         if fail_reason is None and getattr(cfg, 'enabled_fpdc_outlier', False) and not np.isnan(fpdc):
             if exp in bl_fpdc_by_exp:
@@ -219,6 +241,8 @@ def apply_inclusion_criteria(results, verbose=True, cfg=None, report_out=None):
             parts.append(f"conf >= {cfg.min_fpd_confidence}")
         if getattr(cfg, 'enabled_fpdc_physiol', False):
             parts.append(f"FPDcF ∈ [{cfg.fpdc_physiol_min:.0f}-{cfg.fpdc_physiol_max:.0f}]ms")
+        if getattr(cfg, 'enabled_fpd_rr_ratio', False):
+            parts.append(f"FPD/RR <= {getattr(cfg, 'max_fpd_rr_ratio', 0.80) * 100:.0f}%")
         if getattr(cfg, 'enabled_fpdc_outlier', False):
             parts.append(f"outlier < {cfg.fpdc_outlier_n_sigma}σ")
         detail_parts = []

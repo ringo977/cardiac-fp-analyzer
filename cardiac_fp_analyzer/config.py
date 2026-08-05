@@ -504,7 +504,41 @@ class InclusionConfig:
     # to a specific dataset.
     fpdc_physiol_min: float = 350.0     # ms — lower bound
     fpdc_physiol_max: float = 800.0     # ms — upper bound
-    enabled_fpdc_physiol: bool = True    # ON by default (literature-based)
+    # OFF since 2026-08-05: superseded by the FPD/RR ratio below.
+    #
+    # These bounds are sound literature values, but an *absolute* window on
+    # FPDc misfires at the extremes of beat rate, because Fridericia does
+    # not fully remove the rate dependence. Measured on the 36 calibration
+    # baselines with corrected RR, this filter rejected:
+    #   * chipD_ch3_baseline — 27 bpm, FPDc 871 ms, but FPD/RR only 51%:
+    #     a bradycardic preparation with a long yet proportionate FPD;
+    #   * chipD_ch1_baseline — 70 bpm, FPDc 277 ms, FPD/RR 31%: fast, with
+    #     a correspondingly short FPD.
+    # Both are QC-grade-B recordings rejected for being at the edges of the
+    # rate range rather than for anything wrong with them, and rejecting a
+    # baseline removes its whole dose-response group.
+    enabled_fpdc_physiol: bool = False
+
+    # ── FPD / RR ratio (physiological, rate-independent) ──
+    # Repolarization cannot occupy the whole cardiac cycle: an FPD equal to
+    # or longer than the beat interval would mean repolarization ending
+    # after the next depolarization has already started. Values at or above
+    # 100% are therefore not measurements but detection failures — typically
+    # an afterpotential, or the following depolarization, mistaken for the
+    # T wave.
+    #
+    # Distribution over the 36 calibration baselines (corrected RR):
+    #   p25 = 32%, median = 41%, p75 = 55%, p90 = 83%, max = 109%.
+    # Only 4 of 36 exceed 80%, and all four are implausible:
+    #   chipE_ch2_baseline          109%   (FPD longer than RR)
+    #   chip1_ch3_baseline_nosignal 105%   (operator marked it "no signal")
+    #   chipA_ch1_basline            98%
+    #   chipA_ch2_baseline           94%
+    #
+    # Being a ratio this is dimensionless and valid at any beat rate, which
+    # is exactly what the absolute FPDc window could not manage.
+    max_fpd_rr_ratio: float = 0.80
+    enabled_fpd_rr_ratio: bool = True
 
     # ── Population-based outlier exclusion for baselines ──
     # Within a batch, exclude baselines whose FPDcF is > N standard
@@ -550,7 +584,27 @@ class InclusionConfig:
     # recordings enter the analysis, which must be an explicit decision.
     combined_min_qc_grade: str = 'C'        # worst acceptable QC grade
     combined_max_cv_bp: float = 60.0        # % — wide bound, catches only the extremes
-    enabled_combined_rule: bool = False      # OFF by default (opt-in)
+    # Still OFF by default, deliberately.
+    #
+    # With corrected RR the CV-only gate turns out not to discriminate at
+    # all — median CV per QC grade is A 7.4%, B 24.9%, C 22.7%, D 27.9%,
+    # F 26.1%: only grade A separates. The A→F gradient measured before the
+    # RR fix was the artefact itself (worse QC → more rejected beats → more
+    # inflated CV). So reading quality from the QC grade directly is the
+    # right instinct.
+    #
+    # But the cutoff is not calibrated. At 'C' this rule re-excludes the
+    # dofetilide baseline (QC=D, 49% of beats rejected) and loses the whole
+    # dose-response again — 15/24 files included instead of 23/24. At 'D'
+    # it keeps everything (24/24). The grade is driven largely by rejection
+    # rate, which is itself sensitive to the adaptive morphology threshold,
+    # and the FPD-measurement concern it stands for is already covered more
+    # directly by ``min_valid_fpd_ratio`` / ``fpd_reliable``.
+    #
+    # Removing a baseline removes its entire dose-response group, so this
+    # gate is expensive to get wrong. It stays opt-in until the cutoff is
+    # calibrated against corrected data the way max_cv_bp was.
+    enabled_combined_rule: bool = False
 
 
 # ═════════════════════════════════════════════════════════════════════════
