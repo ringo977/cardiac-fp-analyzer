@@ -518,6 +518,40 @@ class InclusionConfig:
     fpdc_outlier_min_baselines: int = 3        # need at least 3 baselines to compute stats
     enabled_fpdc_outlier: bool = False          # off by default (opt-in)
 
+    # ── Plausibility guardrails (independent of CV) ──
+    # A low CV is evidence of *regularity*, not of quality — periodic noise
+    # scores a better CV than a real preparation. Measured on the 36
+    # calibration baselines: chip1_ch3_baseline_nosignal.csv (named
+    # "nosignal" by the operator, BPM=106, 33% of beats with no detectable
+    # repolarization, confidence 0.59) PASSES the CV<25% gate, while
+    # QC-grade-B baselines with confidence 0.86-0.88 are excluded by it.
+    #
+    # These bounds catch what CV structurally cannot: a spontaneous hiPSC-CM
+    # preparation beating at >120 bpm or <10 bpm is not a usable baseline
+    # whatever its rhythm regularity, and neither is one where most beats
+    # have no measurable repolarization.
+    bpm_plausible_min: float = 10.0
+    bpm_plausible_max: float = 120.0
+    max_pct_beats_no_repol: float = 50.0   # %
+    enabled_plausibility: bool = False       # OFF by default (opt-in)
+
+    # ── Combined quality rule (alternative to CV-only) ──
+    # Replaces the single CV gate with QC grade AND a much wider CV bound
+    # AND the confidence threshold. On the calibration set this keeps the
+    # same number of baselines (15/36) but swaps five of them: it admits
+    # the QC-B/C baselines that only failed on rhythm irregularity — normal
+    # in spontaneously beating hiPSC-CM — and rejects the "nosignal" file
+    # plus four grade-D/F ones.
+    #
+    # See SPRINT1_soglia_CV_baseline.md for the full distribution.
+    #
+    # When enabled, this SUPERSEDES criterion 1 (max_cv_bp); the other
+    # criteria still apply. OFF by default: turning it on changes which
+    # recordings enter the analysis, which must be an explicit decision.
+    combined_min_qc_grade: str = 'C'        # worst acceptable QC grade
+    combined_max_cv_bp: float = 60.0        # % — wide bound, catches only the extremes
+    enabled_combined_rule: bool = False      # OFF by default (opt-in)
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #   NORMALIZATION & TdP SCORING
