@@ -53,7 +53,6 @@ from pyside_app.study_panel import (
     _result_fingerprint,
 )
 
-from cardiac_fp_analyzer.config import AnalysisConfig
 from cardiac_fp_analyzer.study import (
     FileEntry,
     Group,
