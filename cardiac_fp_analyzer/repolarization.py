@@ -507,6 +507,20 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
 
     best_idx = None
     best_score = 0
+    # Polarity of the peak that won the search below.  This MUST be carried
+    # into apply_fpd_method: the tangent / 50% / baseline-return maths is
+    # polarity-dependent, so running it with the template's sign on a beat
+    # whose repolarization is inverted produces a meaningless endpoint that
+    # is then reported as a normal FPD.
+    #
+    # Defaults to the template sign so that the argmax fallback path below
+    # (which does not run find_peaks and so has no winning polarity) keeps
+    # its previous behaviour.
+    #
+    # The template path already does this correctly — see ``best_sign`` in
+    # find_repolarization_on_template — and the asymmetry between the two
+    # was the bug.
+    best_sign = template_repol_sign
     peak_dist = int(rc.per_beat_peak_distance_ms / 1000 * fs)
     dist_penalty_scale = rc.per_beat_distance_penalty_ms / 1000 * fs
 
@@ -556,6 +570,7 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
             if score > best_score:
                 best_score = score
                 best_idx = best_pk
+                best_sign = sign
 
     if best_idx is None:
         # Fallback: argmax but respect min FPD.
@@ -576,6 +591,15 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
         else:
             # Degenerate: empty segment — no repolarization to find.
             return None, np.nan, None, None
+
+        # This branch selected the peak by ``argmax(|seg_det|)``, i.e. the
+        # largest excursion of *either* polarity, so the template sign is
+        # not necessarily the sign of what was picked.  Read the polarity
+        # off the selected sample.  ``np.sign`` returns 0.0 for an exactly
+        # zero sample, which would make apply_fpd_method degenerate, so
+        # fall back to the template sign in that case.
+        fallback_sign = float(np.sign(seg_det[best_idx]))
+        best_sign = fallback_sign if fallback_sign != 0 else template_repol_sign
 
     # Defensive sanity: any path that produced best_idx out-of-bounds
     # means the repolarization search is not reliable for this beat.
@@ -613,7 +637,11 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
                 return None, np.nan, None, None
 
     # ─── Step 2: Apply configured FPD method ───
-    fpd_idx = apply_fpd_method(seg_det, best_idx, template_repol_sign, fs,
+    # ``best_sign`` — not ``template_repol_sign`` — is the polarity of the
+    # peak actually selected above.  They differ on beats whose T-wave is
+    # inverted relative to the template, which is a real regime here:
+    # parameters.py deliberately flips the sign for inverted beats.
+    fpd_idx = apply_fpd_method(seg_det, best_idx, best_sign, fs,
                                peak_search_start, spike_idx, cfg=cfg)
     # Convert from "samples from spike" to absolute index (within beat segment ``data``)
     repol_peak_idx = int(peak_search_start + best_idx)
