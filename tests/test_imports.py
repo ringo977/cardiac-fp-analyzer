@@ -135,7 +135,7 @@ class TestVersion:
 
     def test_version_string(self):
         import cardiac_fp_analyzer
-        assert cardiac_fp_analyzer.__version__ == '3.4.1'
+        assert cardiac_fp_analyzer.__version__ == '3.5.0'
 
     def test_version_format(self):
         import cardiac_fp_analyzer

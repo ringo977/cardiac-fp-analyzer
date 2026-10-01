@@ -132,6 +132,8 @@ def analyze_electrode(csv: Path, el: str, cfg: AnalysisConfig):
         'fpdcf_mean_ms': _f(s.get('fpdc_fridericia_ms_mean', s.get('fpdc_ms_mean')), 0),
         'fpdcb_mean_ms': _f(s.get('fpdc_bazett_ms_mean'), 0),
         'spike_amplitude_uV': _f((s.get('spike_amplitude_mV_mean') or np.nan) * 1000, 0),
+        'not_analysable': bool(s.get('not_analysable', False)),
+        'not_analysable_reason': s.get('not_analysable_reason', ''),
         'qc_grade': getattr(qc, 'grade', None),
         'qc_global_snr': _f(getattr(qc, 'global_snr', None), 1),
         'detector_polarity': det.get('polarity'),
@@ -219,6 +221,10 @@ Columns
   fpd_confidence          template-level repolarisation confidence (0–1)
   fpdcf_*                 Fridericia-corrected FPD (FPD / RR^(1/3)); fpdcb = Bazett
   spike_amplitude_uV      mean depolarisation spike amplitude (gain 1e4 applied)
+  not_analysable          True = the pipeline declares it cannot analyse this electrode
+                          (no depolarisation pattern above noise, or too sparse and
+                          irregular); FPD/FPDc are withheld, grade is F. Beat counts kept.
+  not_analysable_reason   why
   qc_grade                A (excellent) … F (not analysable)
   detector_polarity       positive / negative / mixed
   rhythm_type             rhythm topology classifier output

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.4.1
+**Versione**: 3.5.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
@@ -142,6 +142,8 @@ results = batch_analyze('/path/to/data/', config=config)
 
 ## Stato della validazione
 
+**Ottobre 2026 — gold standard manuale cieco (GG, 313 elettrodi).** Vedi tabella nel changelog v3.5.0. In sintesi: dove il segnale è buono (grado A) il software è affidabile (BP entro ±10 % nel 91 %, FPD nel 69 % sul test cieco); dove non lo è, ora **lo dichiara** invece di produrre numeri. Resta aperto: la misura dell'FPD sui segnali di grado B/C (entro ±10 % nel 41 %/20 %) e la copertura (77 %).
+
 Il confronto con i valori pubblicati (Visone et al. 2023) è documentato in
 `VALIDAZIONE_vs_paper_Visone2023.md` e nei file `ASSESSMENT_*.md`. In sintesi, ad ottobre 2026:
 
@@ -167,6 +169,27 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.5.0 (Ottobre 2026) — prima validazione cieca su gold standard manuale
+Dataset interno GG: 179 CSV, 313 elettrodi con misura manuale (BP, FPD, tempi dei singoli battiti, note "non analizzabile"). Sviluppo su Exp 5/8/10 (217 elettrodi), **test cieco su Exp 6/7/9 (96 elettrodi), eseguito una sola volta**.
+
+| | DEV v3.4.1 → v3.5.0 | **TEST v3.4.1 → v3.5.0** |
+|---|---|---|
+| "Non analizzabile" riconosciuti | 0/28 → 26/28 | **0/13 → 12/13** |
+| Battiti mancanti / spurii (vs analista) | 45 % / 85 % → 10 % / 20 % | **14 % / 55 % → 14 % / 29 %** |
+| Copertura (elettrodi analizzabili su cui il software risponde) | 98 % → 77 % | **95 % → 77 %** |
+| BP entro ±10 % (tra i riportati) | 41 % → 58 % | **43 % → 69 %** |
+| FPD entro ±10 % (tra i riportati) | 27 % → 43 % | **39 % → 48 %** |
+| Errore mediano BP / FPD | −8 % / −12 % → ≈ 0 | **−5 % / −6 % → ≈ 0** |
+| Grado A: BP / FPD entro ±10 % | 77 % / 58 % | **91 % / 69 %** |
+
+Il verdetto "non analizzabile" marca anche elettrodi che l'analista ha misurato (23 % in entrambi gli split): su quelli il software v3.4.1 sbagliava in 54/55 (DEV) e 18/19 (TEST). Non è un falso allarme: è smettere di stampare numeri senza segnale dietro.
+
+- **Verdetto di analizzabilità** (`QualityConfig.enable_analysability_verdict`): SNR mediana dei battiti sul noise floor < 1.6, oppure < 16 battiti con CV RR > 40 % → grado F, FPD/FPDc non emessi, escluso dalla normalizzazione (anche come baseline)
+- **Matched filter accettato anche quando trova fino a 3× meno battiti** della derivata (`mf_count_ratio` 0.3–2.0): nei disaccordi aveva ragione lui in 61 casi su 97
+- **Popolazione minore di ampiezza** (`enable_minor_population_reject`): deflessioni 2.5× più piccole degli spike, fuori ritmo, non in alternans → scartate (rumore d'incubatore, sorgente asincrona)
+- **Strumenti**: `tools/blind_report.py` (report per elettrodo su una cartella), `tools/compare_gold.py` (confronto con gold standard, split dev/test, scorecard)
+- Noise gate rimisurato su questi dati e lasciato invariato (senza: spurii 104 %)
 
 ### v3.4.1 (Ottobre 2026)
 - **Matched filter per segnali a bassa SNR** (`enable_matched_filter_refine`): quando gli spike sono appena sopra il rumore (SNR mediana < 3) i battiti vengono ri-rilevati per correlazione con il template dei battiti più ripidi. Sulla baseline di laboratorio `chipA_ch1` (el1, spike ~15 µV): da 205 battiti con 73 mancanti e 58 spurii a 219 con 3 mancanti e 2 spurii rispetto all'elettrodo pulito; QC da 167 a 218 accettati, RR 810 vs 811 ms. Mai attivo su segnali ad alta SNR (dove raccoglierebbe onde T)

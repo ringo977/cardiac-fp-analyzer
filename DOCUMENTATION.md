@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.4.1
+**Versione**: 3.5.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1121,6 +1121,18 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.5.0 (Ottobre 2026) — validazione cieca su gold standard manuale
+
+Primo confronto con una misura manuale indipendente su un dataset interno (GG: 179 CSV da 60 s, 313 elettrodi con BP, FPD, tempi dei singoli battiti e note dell'analista). Metodo: sviluppo su Exp 5/8/10, **test cieco su Exp 6/7/9 eseguito una sola volta**; split bilanciato per qualità (13–14 % non analizzabili, 52–59 % grado C/D/F per metà). Risultati nel README (changelog v3.5.0). Tre modifiche, tutte decise sul solo set di sviluppo:
+
+- **Verdetto di analizzabilità** (`quality_control.assess_analysability`, `QualityConfig.enable_analysability_verdict`): (a) SNR mediana dei battiti rilevati rispetto al noise floor della registrazione < 1.6; (b) meno di 16 battiti con CV RR > 40 %. In entrambi i casi: grado F, `summary['not_analysable']=True` con motivo, FPD/FPDc → NaN, `fpd_reliable=False`, classificazione aritmica "Not analysable", esclusione dalla normalizzazione come farmaco e come baseline. Il conteggio dei battiti resta per audit. Sul test cieco: 12/13 non analizzabili riconosciuti; 19 elettrodi misurati dall'analista marcati, sui quali la v3.4.1 sbagliava in 18.
+- **Accettazione del matched filter** (`mf_count_ratio` (0.7,1.5) → (0.3,2.0)): sulle registrazioni rumorose il detector a derivata sovra-rileva 2–3×; nei 97 disaccordi del set di sviluppo il matched filter era più vicino all'analista in 61.
+- **Popolazione minore di ampiezza** (`beat_detection._reject_minor_amplitude_population`): split di Otsu sul log-ampiezza; il cluster piccolo è scartato solo se mediane ≥ 2.5× distanti, il cluster grande da solo ha CV RR ≤ 0.8× dell'insieme, e i piccoli non sono in fase fissa 1:1 (alternans → tenuti).
+
+**Accuratezza per fascia di SNR** (set di sviluppo, v3.4.1, elettrodi analizzabili): SNR < 1.6 → BP ±10 % 9 %, FPD 2 %; 1.6–2.5 → 35 % / 10 %; 2.5–4 → 41 % / 31 %; 4–8 → 54 % / 44 %; > 8 → 81 % / 62 %. Non c'è un gradino: la qualità del risultato segue la qualità del segnale, e il grado QC lo riflette.
+
+**Aperto**: FPD entro ±10 % solo nel 62–69 % anche a SNR alta / grado A — problema di *misura* della ripolarizzazione (definizione del punto di fine rispetto all'analista), non di detection; copertura al 77 %; ampiezza software ≈ 60 % di quella dell'analista (definizione diversa della finestra).
 
 ### v3.4.1 (Ottobre 2026)
 
