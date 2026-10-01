@@ -131,7 +131,14 @@ def pair_with_baselines(results_list):
         base_groups[bkey].append(r)
 
     def _pick_best_baseline(baselines):
-        """Select the best baseline from a list, preferring better QC grade."""
+        """Select the best baseline from a list, preferring better QC grade.
+
+        Baselines the analysability verdict rejected are never used: a
+        %Δ against a signal that is noise has no meaning.
+        """
+        usable = [b for b in baselines
+                  if not (b.get('summary') or {}).get('not_analysable', False)]
+        baselines = usable if usable else []
         if not baselines:
             return None
         if len(baselines) == 1:
@@ -387,11 +394,18 @@ def classify_drug(results_list, cfg=None):
     drug_data = defaultdict(list)
     n_qc_excluded = 0
     n_fpd_excluded = 0
+    n_na_excluded = 0
     for r in results_list:
         if _is_baseline(r) or _is_control(r):
             continue
         norm = r.get('normalization', {})
         if not norm.get('has_baseline'):
+            continue
+        # Analysability verdict is a hard exclusion (not a quality preference):
+        # the recording has no depolarisation pattern distinguishable from
+        # noise, so it cannot contribute a %ΔFPDcF.
+        if (r.get('summary') or {}).get('not_analysable', False):
+            n_na_excluded += 1
             continue
         inc = r.get('inclusion', {})
         if not inc.get('passed', True):
@@ -441,11 +455,12 @@ def classify_drug(results_list, cfg=None):
     # Surface how many recordings the opt-in filters removed. Without this
     # an enabled filter silently shrinks the classification denominator,
     # which is exactly the kind of change that must be visible in a log.
-    if n_qc_excluded or n_fpd_excluded:
+    if n_qc_excluded or n_fpd_excluded or n_na_excluded:
         logger.info(
             "Classification filters excluded %d recording(s): "
-            "%d by QC/CV, %d by FPD reliability.",
-            n_qc_excluded + n_fpd_excluded, n_qc_excluded, n_fpd_excluded,
+            "%d by QC/CV, %d by FPD reliability, %d not analysable.",
+            n_qc_excluded + n_fpd_excluded + n_na_excluded,
+            n_qc_excluded, n_fpd_excluded, n_na_excluded,
         )
 
     # Collect cessation data per drug (from ALL drug recordings, not just those

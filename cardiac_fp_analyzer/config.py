@@ -524,6 +524,28 @@ class QualityConfig:
     morphology_marginal: float = 0.20     # below this → forced rejection
     use_morphology: bool = True
 
+    # ── Analysability verdict (Oct 2026, calibrated on GG DEV set) ──
+    # A recording whose detected "beats" are not clearly above its own noise
+    # floor cannot be analysed by this software, whatever numbers the
+    # pipeline would otherwise print. Metric: median over detected beats of
+    # (peak-to-peak in ±20 ms) / (median 40 ms-window ptp of the signal) —
+    # the same quantity the beat detector uses for its noise gate.
+    # On the development split (Exp5/8/10, 217 electrodes with a manual
+    # reference) a threshold of 1.6 flags 25 of the 28 recordings the analyst
+    # declared not analysable ("STOP BEATING", "impossible to analyse", n.a.)
+    # and 55 more that the analyst did measure — but on 54 of those 55 the
+    # pipeline's own output was wrong (BP within ±10 % in 9 %, FPD in 2 %,
+    # 82 % of beats missed). So "not analysable" here means "not by this
+    # software", and it is honest in 79/80 cases. The 3 analyst-NA cases it
+    # misses are high-SNR rhythms judged "too irregular" — a rhythm verdict,
+    # not a noise verdict. Held-out check on Exp6/7/9 in the changelog.
+    # When it fires: QC grade F, FPD/FPDc set to NaN, fpd_reliable False,
+    # arrhythmia class "Not analysable", excluded from normalisation both
+    # as drug recording and as baseline. Beat counts are kept for audit.
+    enable_analysability_verdict: bool = True
+    not_analysable_snr: float = 1.6
+    not_analysable_min_beats: int = 3     # fewer detections → verdict by count, not SNR
+
     # Rejection rate thresholds for grade downgrade
     max_rejection_rate: float = 0.40      # above → Grade D
     rejection_high_note: float = 0.50     # above → add warning note

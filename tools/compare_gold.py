@@ -223,9 +223,67 @@ def match_beats(mine_s, gold_s, tol_s=0.05):
 #   Main
 # ──────────────────────────────────────────────────────────────────────────
 
+DEV_EXPS = ('Exp5', 'Exp8', 'Exp10')
+TEST_EXPS = ('Exp6', 'Exp7', 'Exp9')
+
+
+def scorecard(df):
+    """Compact summary used to compare pipeline versions on a split."""
+    m = df[df.matched_gold == True].copy()  # noqa: E712
+    na = m[m.gold_not_analysable == True]  # noqa: E712
+    ok = m[m.gold_not_analysable == False].copy()  # noqa: E712
+    ok['bp_err'] = (ok.sw_bp_median_ms - ok.gold_bp_ms).abs() / ok.gold_bp_ms * 100
+    ok['fpd_err'] = (ok.sw_fpd_median_ms - ok.gold_fpd_ms).abs() / ok.gold_fpd_ms * 100
+    b = ok[ok.gold_n_beats_raw.fillna(0) > 0]
+    miss = b.beats_missed / b.gold_n_beats_raw * 100
+    spur = b.beats_spurious / b.gold_n_beats_raw * 100
+    sw_na = m.get('sw_not_analysable', pd.Series(False, index=m.index)).fillna(False).astype(bool)
+    lines = [
+        f"electrodes matched: {len(m)}  (gold not-analysable: {len(na)}, analysable: {len(ok)})",
+        f"NOT-ANALYSABLE verdict: caught {int((sw_na & m.gold_not_analysable).sum())}/{len(na)}, "
+        f"false alarms {int((sw_na & ~m.gold_not_analysable.astype(bool)).sum())}/{len(ok)} "
+        f"(of which grade A: {int((sw_na & ~m.gold_not_analysable.astype(bool) & (m.sw_grade == 'A')).sum())})",
+        f"BEATS (n={len(b)}): missed total {b.beats_missed.sum() / b.gold_n_beats_raw.sum() * 100:.1f} %, "
+        f"spurious total {b.beats_spurious.sum() / b.gold_n_beats_raw.sum() * 100:.1f} %; "
+        f"per-electrode median missed {miss.median():.0f} % / spurious {spur.median():.0f} %; "
+        f"both ≤5 %: {int(((miss <= 5) & (spur <= 5)).sum())}/{len(b)}",
+    ]
+    rep = ok[~sw_na.reindex(ok.index).fillna(False).astype(bool)]   # electrodes the software reports on
+    bp_r = rep[rep.sw_bp_median_ms.notna() & rep.gold_bp_ms.notna()]
+    fpd_r = rep[rep.sw_fpd_median_ms.notna() & rep.gold_fpd_ms.notna()]
+    lines += [
+        f"COVERAGE: software reports on {len(rep)}/{len(ok)} analysable electrodes "
+        f"({len(rep) / max(len(ok), 1) * 100:.0f} %); FPD given on {len(fpd_r)}",
+        f"BP   (among reported, n={len(bp_r)}) within ±5 %: {(bp_r.bp_err <= 5).mean() * 100:.0f} %, "
+        f"±10 %: {(bp_r.bp_err <= 10).mean() * 100:.0f} %  "
+        f"(median signed err {((bp_r.sw_bp_median_ms - bp_r.gold_bp_ms) / bp_r.gold_bp_ms * 100).median():+.1f} %)",
+        f"FPD  (among reported, n={len(fpd_r)}) within ±10 %: {(fpd_r.fpd_err <= 10).mean() * 100:.0f} %, "
+        f"±20 %: {(fpd_r.fpd_err <= 20).mean() * 100:.0f} %  "
+        f"(median signed err {((fpd_r.sw_fpd_median_ms - fpd_r.gold_fpd_ms) / fpd_r.gold_fpd_ms * 100).median():+.1f} %)",
+        f"ALL analysable (unreported counted as wrong): BP±10 %: {(ok.bp_err <= 10).mean() * 100:.0f} %, "
+        f"FPD±10 %: {(ok.fpd_err <= 10).mean() * 100:.0f} %",
+    ]
+    for grade in ('A', 'B', 'C', 'D', 'F'):
+        g = ok[ok.sw_grade == grade]
+        if len(g):
+            lines.append(f"   grade {grade}: n={len(g):3d}  BP±10 %: {(g.bp_err <= 10).mean() * 100:3.0f} %  "
+                         f"FPD±10 %: {(g.fpd_err <= 10).mean() * 100:3.0f} %  "
+                         f"gold-NA with this grade: {int((na.sw_grade == grade).sum())}")
+    return '\n'.join(lines)
+
+
 def main():
-    gold_dir = Path(sys.argv[1]).resolve()
-    rec_dir = Path(sys.argv[2]).resolve()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('gold_dir')
+    ap.add_argument('rec_dir')
+    ap.add_argument('--split', choices=['dev', 'test', 'all'], default='dev',
+                    help='dev = Exp5/8/10 (development), test = Exp6/7/9 (held out, run once at the end)')
+    ap.add_argument('--tag', default='', help='label for the output files (e.g. pipeline version)')
+    args = ap.parse_args()
+    gold_dir = Path(args.gold_dir).resolve()
+    rec_dir = Path(args.rec_dir).resolve()
+    exps = {'dev': DEV_EXPS, 'test': TEST_EXPS, 'all': DEV_EXPS + TEST_EXPS}[args.split]
     gold, raw = load_gold(gold_dir)
     gold_by_key = {(r.exp, r.chip, r.ch, r.dose_idx): r for r in gold.itertuples(index=False)}
     print(f"gold: {len(gold)} (chip, channel, dose) entries, {len(raw)} raw beat blocks")
@@ -236,6 +294,8 @@ def main():
     n_unmatched = 0
     for csv in csvs:
         for el, key in recording_keys(csv, rec_dir):
+            if key[0] not in exps:
+                continue
             g = gold_by_key.get(key)
             if g is None:
                 n_unmatched += 1
@@ -276,6 +336,8 @@ def main():
                 'sw_polarity': det.get('polarity'),
                 'sw_matched_filter': mf.get('matched_filter'), 'sw_mf_candidates': mf.get('n_candidates'),
                 'sw_class': getattr(r.get('arrhythmia_report'), 'classification', None),
+                'sw_not_analysable': bool(s.get('not_analysable', getattr(qc, 'grade', None) == 'F')),
+                'sw_na_reason': s.get('not_analysable_reason', ''),
             }
             rb = raw.get(key)
             if rb is not None and len(rb['dep_times']):
@@ -292,13 +354,18 @@ def main():
     df = pd.DataFrame(rows)
     out = gold_dir / 'comparison'
     out.mkdir(exist_ok=True)
-    df.to_csv(out / 'comparison.csv', index=False)
-    with pd.ExcelWriter(out / 'comparison.xlsx', engine='xlsxwriter') as xw:
+    tag = f"_{args.tag}" if args.tag else ''
+    stem = f"comparison_{args.split}{tag}"
+    df.to_csv(out / f'{stem}.csv', index=False)
+    with pd.ExcelWriter(out / f'{stem}.xlsx', engine='xlsxwriter') as xw:
         df.to_excel(xw, sheet_name='per_electrode', index=False)
         gold.to_excel(xw, sheet_name='gold_parsed', index=False)
         xw.sheets['per_electrode'].freeze_panes(1, 1)
-    print(f"matched electrodes: {int(df.matched_gold.sum())}, unmatched: {n_unmatched}  → {out}")
-    print(f"pipeline v{__version__}")
+    card = scorecard(df)
+    (out / f'{stem}_scorecard.txt').write_text(
+        f"pipeline v{__version__} — split={args.split} ({', '.join(exps)}) — {out / stem}\n{card}\n")
+    print(f"\n== SCORECARD  split={args.split} ({', '.join(exps)})  pipeline v{__version__}  unmatched={n_unmatched}")
+    print(card)
 
 
 if __name__ == '__main__':

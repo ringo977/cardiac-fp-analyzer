@@ -47,6 +47,8 @@ class QualityReport:
 
     def __init__(self):
         self.grade = 'A'
+        self.not_analysable = False
+        self.not_analysable_reason = ''
         self.global_snr = np.nan
         self.mean_local_snr = np.nan
         self.mean_morphology_corr = np.nan
@@ -261,6 +263,45 @@ def morphology_correlation(beat_data, template, max_samples=0, jitter_max=0):
             best_corr = corr
 
     return best_corr if best_corr > -1.0 else 0.0
+
+
+def assess_analysability(filtered, fs, beat_indices, cfg=None):
+    """Decide whether this recording can be analysed by the pipeline at all.
+
+    See ``QualityConfig.enable_analysability_verdict`` for the rationale
+    and calibration. Returns a dict:
+        not_analysable : bool
+        beat_snr_median : float — median beat ptp / noise floor
+        n_beats : int
+        reason : str ('' when analysable)
+    """
+    from .beat_detection import estimate_noise_floor
+
+    c = _get_qc_cfg(cfg)
+    bi = np.asarray(beat_indices, dtype=int)
+    out = {'not_analysable': False, 'beat_snr_median': np.nan, 'n_beats': int(len(bi)), 'reason': ''}
+    if not getattr(c, 'enable_analysability_verdict', True):
+        out['reason'] = 'verdict disabled'
+        return out
+    min_beats = int(getattr(c, 'not_analysable_min_beats', 3))
+    if len(bi) < min_beats:
+        out.update(not_analysable=True,
+                   reason=f'only {len(bi)} depolarisation(s) detected (< {min_beats})')
+        return out
+    nf = estimate_noise_floor(filtered, fs)
+    if nf <= 1e-15:
+        return out
+    half = max(1, int(0.020 * fs))
+    n = len(filtered)
+    ptp = np.array([np.ptp(filtered[max(0, i - half):min(n, i + half)]) for i in bi])
+    snr_med = float(np.median(ptp) / nf)
+    out['beat_snr_median'] = round(snr_med, 3)
+    thr = float(getattr(c, 'not_analysable_snr', 1.6))
+    if snr_med < thr:
+        out.update(not_analysable=True,
+                   reason=f'median beat amplitude {snr_med:.2f}× the noise floor (< {thr}): '
+                          f'no depolarisation pattern distinguishable from noise')
+    return out
 
 
 def validate_beats(data, beat_indices, beats_data, beats_time, fs,

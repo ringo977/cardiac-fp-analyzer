@@ -23,7 +23,7 @@ from cardiac_fp_analyzer.inclusion import apply_inclusion_criteria
 from cardiac_fp_analyzer.loader import load_csv, parse_filename
 from cardiac_fp_analyzer.overrides import apply_overrides, load_overrides
 from cardiac_fp_analyzer.parameters import extract_all_parameters
-from cardiac_fp_analyzer.quality_control import validate_beats
+from cardiac_fp_analyzer.quality_control import assess_analysability, validate_beats
 from cardiac_fp_analyzer.report import generate_excel_report, generate_pdf_report
 from cardiac_fp_analyzer.rhythm_integration import (
     apply_rhythm_filter,
@@ -273,6 +273,19 @@ def _analyze_from_beats(
               f"{_qc_downgrade_info['grade_after']} "
               f"(noise_ratio={_qc_downgrade_info['noise_ratio']:.2f})")
 
+    # ─── Analysability verdict (Oct 2026) ───
+    # Decided on the full detected train against the recording's own noise
+    # floor; see QualityConfig.enable_analysability_verdict. Applied to the
+    # outputs after parameter extraction (below) so beat counts stay
+    # available for audit while FPD/FPDc are withheld.
+    _verdict = assess_analysability(filtered, fs, bi, cfg=config.quality)
+    if _verdict['not_analysable']:
+        qc_report.grade = 'F'
+        qc_report.not_analysable = True
+        qc_report.not_analysable_reason = _verdict['reason']
+        if verbose:
+            print(f"  NOT ANALYSABLE: {_verdict['reason']}")
+
     # ─── RR-outlier filter (Sprint 3 #1) ───
     # Drop beats whose preceding RR is pathologically long (likely
     # dropout-plus-reactivation artefact). Genuinely bradycardic
@@ -356,6 +369,20 @@ def _analyze_from_beats(
     # Merge rhythm-classification-derived fields into summary (additive).
     summary.update(build_rhythm_summary_fields(rc, rhythm_filter_info))
     summary['rr_outlier_filter'] = rr_filter_info
+    summary['beat_snr_median'] = _verdict['beat_snr_median']
+    summary['not_analysable'] = bool(_verdict['not_analysable'])
+    summary['not_analysable_reason'] = _verdict['reason'] if _verdict['not_analysable'] else ''
+    if _verdict['not_analysable']:
+        # Withhold repolarisation outputs: they would be numbers without a
+        # signal behind them. Beat-period fields are kept (audit) but the
+        # reliability flags make the state explicit to every consumer.
+        for _k in list(summary.keys()):
+            if _k.startswith(('fpd_ms', 'fpdc_', 'fpd_confidence', 'template_fpd')) \
+                    and isinstance(summary[_k], (int, float, np.floating)):
+                summary[_k] = np.nan
+        summary['fpd_reliable'] = False
+        summary['fpd_valid_ratio'] = 0.0
+        summary['fpd_note'] = 'not analysable: ' + _verdict['reason']
 
     # Beat period from ALL detected beats (timing is reliable even for
     # morphologically marginal beats) — avoids artificial gaps from QC rejection.
@@ -366,6 +393,10 @@ def _analyze_from_beats(
 
     ar = analyze_arrhythmia(bi, bp, all_p, summary, fs,
                            cfg=config.arrhythmia, beats_data=bd_clean)
+    if summary.get('not_analysable'):
+        ar.classification = 'Not analysable'
+        ar.risk_score = 0
+        ar.add_flag('not_analysable', 'critical', _verdict['reason'])
     if verbose:
         print(f"  {ar.classification} (Risk: {ar.risk_score}/100)")
 
