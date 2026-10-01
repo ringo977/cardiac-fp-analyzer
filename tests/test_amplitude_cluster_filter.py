@@ -123,6 +123,7 @@ class TestFilterOnBimodalSignal:
 
     def test_exp6_like_signal_filtered_to_big_cluster(self):
         from cardiac_fp_analyzer.beat_detection import detect_beats
+        from cardiac_fp_analyzer.config import BeatDetectionConfig
 
         fs = 2000.0
         sig, expected_big = make_bimodal_signal(
@@ -131,7 +132,19 @@ class TestFilterOnBimodalSignal:
             small_per_rr=2, small_amp=0.15,
         )
 
-        idxs, times, info = detect_beats(sig, fs, method='auto')
+        # Isolate the cluster filter: the noise-floor gate (added Oct 2026)
+        # runs first and would already remove the 0.15 V bumpettini, which
+        # sit at the synthetic noise floor. The cluster filter must still
+        # work on its own as an independent defence.
+        cfg = BeatDetectionConfig()
+        cfg.enable_noise_floor_gate = False
+        idxs, times, info = detect_beats(sig, fs, cfg=cfg)
+
+        # With the gate enabled the end result must be the same big cluster.
+        idxs_gated, _, info_gated = detect_beats(sig, fs, method='auto')
+        assert abs(len(idxs_gated) - len(expected_big)) <= 2, (
+            f"gate+filter: expected ≈{len(expected_big)}; got {len(idxs_gated)} "
+            f"({info_gated.get('noise_floor_gate')})")
 
         # Must report the cluster filter in diagnostics
         assert 'amplitude_cluster' in info
@@ -323,6 +336,7 @@ class TestConfigToggle:
 
         cfg = BeatDetectionConfig()
         cfg.enable_amplitude_cluster_filter = False
+        cfg.enable_noise_floor_gate = False  # isolate: gate would remove bumpettini too
         idxs, _times, info = detect_beats(sig, fs, cfg=cfg)
 
         cinfo = info['amplitude_cluster']
@@ -342,6 +356,7 @@ class TestConfigToggle:
                                      big_amp=1.4, small_amp=0.15)
         cfg = BeatDetectionConfig()
         cfg.cluster_gap_ratio = 50.0  # much higher than the ~3.6× gap
+        cfg.enable_noise_floor_gate = False  # isolate the cluster filter
         idxs, _times, info = detect_beats(sig, fs, cfg=cfg)
         cinfo = info['amplitude_cluster']
         assert cinfo['cluster_filter'] == 'unimodal'
@@ -359,7 +374,10 @@ class TestDiagnostics:
 
         fs = 2000.0
         sig, _ = make_bimodal_signal(fs=fs, duration_s=60.0)
-        _idxs, _times, info = detect_beats(sig, fs, method='auto')
+        from cardiac_fp_analyzer.config import BeatDetectionConfig
+        cfg = BeatDetectionConfig()
+        cfg.enable_noise_floor_gate = False  # isolate the cluster filter
+        _idxs, _times, info = detect_beats(sig, fs, cfg=cfg)
         c = info['amplitude_cluster']
         assert c['cluster_filter'] == 'applied'
         for k in ('n_input', 'n_kept', 'n_rejected', 'max_gap_ratio',

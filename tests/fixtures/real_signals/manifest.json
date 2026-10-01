@@ -1,0 +1,122 @@
+[
+  {
+    "label": "exp8_d6_chipD_ch1",
+    "file": "exp8_d6_chipD_ch1.npz",
+    "source": "Exp8/Day6/chipD_ch1_baseline.csv",
+    "channel": "el1",
+    "fs": 2000.0,
+    "t0_s": 0.0,
+    "duration_s": 180.0,
+    "reference": {
+      "rr_ms": 2115.6,
+      "fpd_ms": 609.1,
+      "source": "Visone et al. 2023 Excel (data_reference/ground_truth.json)"
+    },
+    "notes": "Motivating case for the noise-floor gate: 156 detections vs ~75 true beats before the fix (one noise-level insertion per RR interval). Dofetilide baseline. Full 180 s stored: CV(RR) ~32 %, shorter windows do not reproduce the published RR."
+  },
+  {
+    "label": "exp8_d7_chipA_ch1",
+    "file": "exp8_d7_chipA_ch1.npz",
+    "source": "Exp8/Day7/chipA_ch1_baseline.csv",
+    "channel": "el1",
+    "fs": 2000.0,
+    "t0_s": 30.0,
+    "duration_s": 90.0,
+    "reference": {
+      "rr_ms": 2513.0,
+      "fpd_ms": 835.0,
+      "source": "Visone et al. 2023 Excel (data_reference/ground_truth.json)"
+    },
+    "notes": "Slow regular rhythm, positive polarity."
+  },
+  {
+    "label": "exp8_d7_chipE_ch2",
+    "file": "exp8_d7_chipE_ch2.npz",
+    "source": "Exp8/Day7/chipE_ch2_baseline.csv",
+    "channel": "el1",
+    "fs": 2000.0,
+    "t0_s": 30.0,
+    "duration_s": 90.0,
+    "reference": {
+      "rr_ms": 1813.0,
+      "fpd_ms": 686.0,
+      "source": "Visone et al. 2023 Excel (data_reference/ground_truth.json)"
+    },
+    "notes": "Very clean negative-polarity signal, CV ~5 %."
+  },
+  {
+    "label": "exp7_chipE_ch3",
+    "file": "exp7_chipE_ch3.npz",
+    "source": "Exp7/ChipE/chipE_ch3_baseline.csv",
+    "channel": "el2",
+    "fs": 2000.0,
+    "t0_s": 30.0,
+    "duration_s": 90.0,
+    "reference": {
+      "rr_ms": 1805.0,
+      "fpd_ms": 606.0,
+      "source": "Visone et al. 2023 Excel (data_reference/ground_truth.json)"
+    },
+    "notes": "Low noise floor; ~10 % of raw detections were noise before the gate."
+  },
+  {
+    "label": "exp7_chipC_ch1",
+    "file": "exp7_chipC_ch1.npz",
+    "source": "Exp7/ChipC_D/chipC_ch1_baseline.csv",
+    "channel": "el2",
+    "fs": 2000.0,
+    "t0_s": 30.0,
+    "duration_s": 90.0,
+    "reference": {
+      "rr_ms": 1393.0,
+      "fpd_ms": 437.0,
+      "source": "Visone et al. 2023 Excel (data_reference/ground_truth.json)"
+    },
+    "notes": "Perfectly regular, every beat detected on both electrodes at RR ~1550 ms. The published 1393 ms is ~12 % lower: reference-window discrepancy, not a detection error. Wider RR tolerance."
+  },
+  {
+    "label": "exp5_chipA_ch1",
+    "file": "exp5_chipA_ch1.npz",
+    "source": "Exp5/Day7/chipA/chipA_ch1_baseline.csv",
+    "channel": "el2",
+    "fs": 2000.0,
+    "t0_s": 30.0,
+    "duration_s": 90.0,
+    "reference": {
+      "rr_ms": 799.0,
+      "fpd_ms": 413.0,
+      "source": "Visone et al. 2023 Excel (data_reference/ground_truth.json)"
+    },
+    "notes": "Fast rhythm (~75 BPM), negative polarity, 220 beats in 180 s."
+  },
+  {
+    "label": "exp5_chipB_ch3",
+    "file": "exp5_chipB_ch3.npz",
+    "source": "Exp5/Day7/ChipB/chipB_ch3_baseline.csv",
+    "channel": "el2",
+    "fs": 2000.0,
+    "t0_s": 30.0,
+    "duration_s": 90.0,
+    "reference": {
+      "rr_ms": 2333.0,
+      "fpd_ms": 711.0,
+      "source": "Visone et al. 2023 Excel (data_reference/ground_truth.json)"
+    },
+    "notes": "Slow regular rhythm."
+  },
+  {
+    "label": "exp6_chipC_ch1",
+    "file": "exp6_chipC_ch1.npz",
+    "source": "Exp6/CHIPC/chipC_ch1_baseline.csv",
+    "channel": "el1",
+    "fs": 2000.0,
+    "t0_s": 30.0,
+    "duration_s": 90.0,
+    "reference": {
+      "rr_ms": 1835.0,
+      "fpd_ms": 555.0,
+      "source": "Visone et al. 2023 Excel (data_reference/ground_truth.json)"
+    },
+    "notes": "Mixed polarity. On 60-90 s windows the ungated detector doubles the count (RR ~830 ms); the gate restores ~1740 ms."
+  }
+]

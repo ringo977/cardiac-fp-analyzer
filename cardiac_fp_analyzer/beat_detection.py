@@ -75,13 +75,22 @@ def detect_beats(data, fs, method='auto', min_distance_ms=400,
     if method == 'auto':
         return _detect_auto(data, fs, min_dist, threshold_factor, cfg=cfg)
     elif method == 'prominence':
-        return _detect_prominence(data, fs, min_dist, threshold_factor)
+        bi, bt, info = _detect_prominence(data, fs, min_dist, threshold_factor)
     elif method == 'derivative':
-        return _detect_derivative(data, fs, min_dist, threshold_factor, cfg=cfg)
+        bi, bt, info = _detect_derivative(data, fs, min_dist, threshold_factor, cfg=cfg)
     elif method == 'peak':
-        return _detect_peak(data, fs, min_dist, threshold_factor)
+        bi, bt, info = _detect_peak(data, fs, min_dist, threshold_factor)
     else:
         raise ValueError(f"Unknown method: {method}")
+
+    # Single-method paths skip the auto pipeline's validation/recovery, but
+    # the noise-floor gate applies regardless of method (same semantics).
+    bi, gate_info = _reject_below_noise_floor(data, fs, bi, cfg=cfg, stage='post_detection')
+    bt = bi / fs if len(bi) > 0 else np.array([], dtype=float)
+    info['noise_floor_gate'] = {'post_detection': gate_info,
+                                'n_rejected_total': int(gate_info.get('n_rejected', 0))}
+    info['n_beats'] = len(bi)
+    return bi, bt, info
 
 
 def _recover_missed_beats(data, fs, beat_indices, cfg=None):
@@ -424,6 +433,14 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
     # Fix: increase min_distance to midpoint between groups and re-detect.
     bi, bt, info = _fix_bimodal_bp(data, fs, bi, bt, info, threshold_factor, cfg)
 
+    # ── Noise-floor SNR gate, pass 1 ──
+    # Runs BEFORE the cluster filter, rhythm classifier and morphology
+    # validation so that all three see a beat set free of noise-level
+    # detections (otherwise their reference amplitudes/medians are
+    # contaminated and the lenient mixed-polarity gate lets noise through).
+    bi, gate_info_1 = _reject_below_noise_floor(data, fs, bi, cfg=cfg, stage='post_detection')
+    bt = bi / fs if len(bi) > 0 else np.array([], dtype=float)
+
     # ── Amplitude-cluster filter (Sprint 2 #1) ──
     # Some signals show a strongly bimodal amplitude distribution that
     # bimodal_bp cannot fix (not strictly alternating) and morphology
@@ -467,11 +484,20 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
     #      weaker but genuine beats that were just recovered.
     bi, recovery_info = _recover_missed_beats(data, fs, bi, cfg=cfg)
     bt = bi / fs
-    info['n_beats'] = len(bi)
     info['beat_recovery'] = recovery_info
 
-    # (No post-detection amplitude/quality gate — false positive rejection
-    # is handled by morphological validation and bimodal correction.)
+    # ── Noise-floor SNR gate, pass 2 ──
+    # Recovery inserts candidates at rhythmically expected positions and
+    # accepts them against a reference amplitude; a candidate that is just
+    # noise at the expected position must not survive into the raw beat
+    # train (which downstream RR/CV deliberately use pre-QC).
+    bi, gate_info_2 = _reject_below_noise_floor(data, fs, bi, cfg=cfg, stage='post_recovery')
+    bt = bi / fs if len(bi) > 0 else np.array([], dtype=float)
+    info['noise_floor_gate'] = {
+        'post_detection': gate_info_1,
+        'post_recovery': gate_info_2,
+        'n_rejected_total': int(gate_info_1.get('n_rejected', 0) + gate_info_2.get('n_rejected', 0)),
+    }
 
     info['n_beats'] = len(bi)
 
@@ -479,6 +505,111 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
     for k in list(info.keys()):
         if k.startswith('_'): del info[k]
     return bi, bt, info
+
+
+def estimate_noise_floor(data, fs, window_ms=40.0):
+    """Robust noise floor: median peak-to-peak over non-overlapping windows.
+
+    Beats occupy a small fraction of ``window_ms`` windows at any plausible
+    beat rate, so the median window ptp is dominated by noise. Returns 0.0
+    when the signal is too short for at least 10 windows.
+    """
+    w = max(2, int(window_ms / 1000.0 * fs))
+    n = len(data) // w
+    if n < 10:
+        return 0.0
+    seg = np.asarray(data[:n * w], dtype=float).reshape(n, w)
+    return float(np.median(seg.max(axis=1) - seg.min(axis=1)))
+
+
+def _reject_below_noise_floor(data, fs, bi, cfg=None, stage=''):
+    """Drop detections whose local amplitude is not clearly above noise.
+
+    A beat candidate with peak-to-peak amplitude below
+    ``noise_floor_min_snr`` × the recording's noise floor is
+    indistinguishable from noise regardless of where the rhythm "expects"
+    a beat. See ``BeatDetectionConfig.enable_noise_floor_gate`` for the
+    motivation (Exp8 2× over-detection) and the calibration.
+
+    Deliberately has no "do not remove more than X %" safeguard: on the
+    motivating file the right answer is to remove ~half the detections.
+    Skips only when the noise floor is zero, the signal is too short, or
+    the gate would remove every beat.
+
+    Returns
+    -------
+    bi_filtered : 1-D int array (time-ordered)
+    info : dict with diagnostics
+    """
+    c = _get_bd_cfg(cfg)
+    bi = np.asarray(bi, dtype=int)
+    n_in = len(bi)
+    base = {'noise_gate': 'skipped', 'stage': stage, 'n_input': n_in, 'n_kept': n_in}
+    if not getattr(c, 'enable_noise_floor_gate', True):
+        return bi, {**base, 'noise_gate': 'disabled'}
+    if n_in == 0:
+        return bi, {**base, 'noise_gate': 'no_beats'}
+
+    nf = estimate_noise_floor(data, fs, getattr(c, 'noise_floor_window_ms', 40.0))
+    if nf <= 1e-12:
+        return bi, {**base, 'noise_gate': 'zero_noise_floor'}
+
+    half = max(1, int(getattr(c, 'noise_floor_beat_half_window_ms', 20.0) / 1000.0 * fs))
+    n = len(data)
+    amps = np.empty(n_in, dtype=float)
+    for k, idx in enumerate(bi):
+        lo = max(0, int(idx) - half)
+        hi = min(n, int(idx) + half)
+        amps[k] = float(np.ptp(data[lo:hi])) if hi > lo else 0.0
+    snr = amps / nf
+
+    # Rule (1): hard floor.
+    min_snr = float(getattr(c, 'noise_floor_min_snr', 1.5))
+    threshold = min_snr
+    rule = 'hard_floor'
+
+    # Rule (2): noise-compatible lower cluster separated by a clear gap.
+    max_med = float(getattr(c, 'noise_cluster_max_median_snr', 2.0))
+    max_snr = float(getattr(c, 'noise_cluster_max_snr', 3.5))
+    min_gap = float(getattr(c, 'noise_cluster_min_gap', 1.5))
+    min_sep = float(getattr(c, 'noise_cluster_min_separation', 3.0))
+    s = np.sort(snr)
+    best_gap, best_k = 0.0, -1
+    # Split after index k: lower = s[:k+1], upper = s[k+1:]. Sorted, so the
+    # lower cluster's median/max grow monotonically — stop at first violation.
+    for k in range(0, n_in - 3):
+        if s[k] > max_snr or np.median(s[:k + 1]) > max_med:
+            break
+        if s[k] <= 0:
+            continue
+        gap = s[k + 1] / s[k]
+        if gap >= min_gap and gap > best_gap:
+            if np.median(s[k + 1:]) / np.median(s[:k + 1]) >= min_sep:
+                best_gap, best_k = gap, k
+    if best_k >= 0:
+        cluster_thr = float(np.sqrt(s[best_k] * s[best_k + 1]))
+        if cluster_thr > threshold:
+            threshold = cluster_thr
+            rule = 'noise_cluster'
+
+    keep = snr >= threshold
+
+    diag = {
+        'stage': stage, 'n_input': n_in, 'noise_floor': round(nf, 5),
+        'rule': rule, 'threshold_snr': round(threshold, 3),
+        'cluster_gap': round(best_gap, 2) if best_k >= 0 else None,
+        'snr_min_kept': round(float(snr[keep].min()), 2) if keep.any() else None,
+        'snr_max_rejected': round(float(snr[~keep].max()), 2) if (~keep).any() else None,
+    }
+    if not keep.any():
+        # Would wipe the recording — leave it to QC grading instead.
+        return bi, {**diag, 'noise_gate': 'aborted_all_below', 'n_kept': n_in}
+    n_rej = int((~keep).sum())
+    if n_rej:
+        logger.info("Noise-floor gate [%s/%s]: rejected %d/%d detections with "
+                    "SNR < %.2f (noise floor %.4g)", stage, rule, n_rej, n_in, threshold, nf)
+    return bi[keep], {**diag, 'noise_gate': 'applied' if n_rej else 'none_rejected',
+                      'n_kept': int(keep.sum()), 'n_rejected': n_rej}
 
 
 def _reject_amplitude_cluster(data, fs, bi, cfg=None):

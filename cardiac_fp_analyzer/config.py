@@ -179,6 +179,55 @@ class BeatDetectionConfig:
     cluster_alternans_ratio_low: float = 0.85   # lower edge of alt band
     cluster_alternans_ratio_high: float = 1.15  # upper edge of alt band
 
+    # ── Noise-floor SNR gate (Oct 2026, Exp8 2× over-detection) ──
+    # A detected "beat" whose local peak-to-peak amplitude is not clearly
+    # above the recording's own noise floor is noise, whatever the rhythm
+    # says. The gap-filling passes and the lenient mixed-polarity amplitude
+    # gate (10 % of a median already contaminated by the false positives)
+    # let such detections through on Exp8/Day6/chipD_ch1: 156 beats where
+    # the authors count ~75, one noise-level "beat" at the midpoint of every
+    # true RR interval. The cluster filter above cannot catch it (no single
+    # sorted-gap ≥ 3× on a continuum, and n_low ≈ n_high trips the alternans
+    # safeguard).
+    #
+    # Noise floor = median peak-to-peak over non-overlapping
+    # ``noise_floor_window_ms`` windows across the whole filtered signal
+    # (beats occupy a small fraction of windows at any plausible rate, so
+    # the median is noise-dominated). Beat "SNR" = peak-to-peak in
+    # ±``noise_floor_beat_half_window_ms`` divided by the noise floor.
+    #
+    # Two rules, both anchored to the noise floor:
+    #   (1) hard floor — SNR < ``noise_floor_min_snr`` is always rejected;
+    #   (2) noise-cluster — in the sorted SNRs, find the largest geometric
+    #       gap such that everything below it is noise-compatible
+    #       (median ≤ ``noise_cluster_max_median_snr``, max ≤
+    #       ``noise_cluster_max_snr``), the gap is ≥ ``noise_cluster_min_gap``
+    #       and the upper cluster's median is ≥ ``noise_cluster_min_separation``
+    #       × the lower's. If such a split exists, reject the lower cluster.
+    # Rule (2) exists because noise detections do not stop at a fixed
+    # multiple of the floor: the detector keeps local *maxima*, i.e. the
+    # extreme-value tail of the noise, which on 60 s windows reaches 2–3×
+    # the median window ptp. A fixed threshold at 2.0 cut through that tail.
+    # The noise-compatibility caps keep the rule from ever touching small
+    # but real beats (alternans) or T-waves: those are the job of the
+    # cluster filter and the bimodal-BP fix, not of this gate.
+    #
+    # Calibration on 8 ground-truth baselines (Exp5/6/7/8), full files and
+    # 60 s windows: true beats sit at SNR ≥ 3.2 everywhere; noise forms a
+    # continuum 0.9–2.1 with rare excursions to ~3.4.
+    # Unlike the cluster filter there is deliberately NO "don't halve the
+    # count" safeguard: on Exp8 the correct answer IS half the count.
+    # The gate only skips when it would remove every beat (degenerate
+    # signal — left to QC grading) or the noise floor is zero.
+    enable_noise_floor_gate: bool = True
+    noise_floor_min_snr: float = 1.5
+    noise_floor_window_ms: float = 40.0
+    noise_floor_beat_half_window_ms: float = 20.0
+    noise_cluster_max_median_snr: float = 2.0
+    noise_cluster_max_snr: float = 3.5
+    noise_cluster_min_gap: float = 1.5
+    noise_cluster_min_separation: float = 3.0
+
     # ── Rhythm topology classifier (Sprint 2 #3) ──
     # Characterises the detected beats into one of:
     #   'regular'                 — one amplitude cluster, CV(RR) low
