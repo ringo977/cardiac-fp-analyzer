@@ -60,6 +60,15 @@ CORPUS = [
      'Fast rhythm (~75 BPM), negative polarity, 220 beats in 180 s.'),
     ('Exp5/Day7/ChipB/chipB_ch3_baseline.csv', 'el2', 2333.0, 711.0, 'exp5_chipB_ch3',
      'Slow regular rhythm.'),
+    # Low-SNR biphasic case (lab recording, Apr 2026, not from the paper).
+    # el1 spikes ~15 µV on ~10 µV noise: every real beat sits at SNR 1.1–2.3.
+    # Reference is the same recording's el2 (clean, 220 beats, RR 811 ms,
+    # CV 6 %), measured by this pipeline — a cross-electrode reference, not
+    # a published one. FPD reference = el2's 492 ms is NOT used (different
+    # electrode, different T-wave); FPD tolerance is skipped for this file.
+    ('__LOCAL__studio_MR/Baseline/chipA_ch1_baseline.csv', 'el1', 811.0, None, 'lab_lowsnr_chipA_ch1',
+     'Low-SNR biphasic el1; reference RR from el2 of the same recording. '
+     'The first noise-floor gate (fixed floor 1.5) removed 44/208 real beats here.'),
     ('Exp6/CHIPC/chipC_ch1_baseline.csv', 'el1', 1835.0, 555.0, 'exp6_chipC_ch1',
      'Mixed polarity. On 60-90 s windows the ungated detector doubles the '
      'count (RR ~830 ms); the gate restores ~1740 ms.'),
@@ -70,7 +79,7 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     manifest = []
     for rel, ch, rr, fpd, label, notes in CORPUS:
-        src = DATASET / rel
+        src = (ROOT / rel[len('__LOCAL__'):]) if rel.startswith('__LOCAL__') else DATASET / rel
         if not src.exists():
             print(f"  !! missing {src}", file=sys.stderr)
             continue
@@ -80,12 +89,20 @@ def main():
         i0 = int(t0 * fs)
         i1 = min(len(df), i0 + int(dur * fs))
         sig = df[ch].values[i0:i1].astype(np.float32)
-        np.savez_compressed(OUT / f'{label}.npz', signal=sig, fs=fs)
+        arrays = {'signal': sig, 'fs': fs}
+        if rel.startswith('__LOCAL__'):
+            # Lab recordings: also store the other electrode so tests can
+            # compare beat POSITIONS (missed / spurious), not just RR.
+            other = 'el2' if ch == 'el1' else 'el1'
+            arrays['reference_signal'] = df[other].values[i0:i1].astype(np.float32)
+        np.savez_compressed(OUT / f'{label}.npz', **arrays)
         entry = {
-            'label': label, 'file': f'{label}.npz', 'source': rel,
+            'label': label, 'file': f'{label}.npz', 'source': rel.replace('__LOCAL__', ''),
             'channel': ch, 'fs': fs, 't0_s': t0, 'duration_s': len(sig) / fs,
             'reference': {'rr_ms': rr, 'fpd_ms': fpd,
-                          'source': 'Visone et al. 2023 Excel (data_reference/ground_truth.json)'},
+                          'source': ('same recording, electrode el2 (pipeline measurement)'
+                                     if rel.startswith('__LOCAL__') else
+                                     'Visone et al. 2023 Excel (data_reference/ground_truth.json)')},
             'notes': notes,
         }
         manifest.append(entry)

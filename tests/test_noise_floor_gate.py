@@ -62,6 +62,17 @@ class TestGateRules:
         assert info['noise_gate'] == 'applied'
         assert set(kept.tolist()) == set(real.tolist()), info
 
+    def test_uniform_low_snr_rhythm_is_preserved(self):
+        """All beats weak (SNR ~1.8) and no stronger cluster: that is a
+        low-SNR recording, not noise — nothing may be removed (lab case)."""
+        x, _ = _signal(noise_std=0.03)
+        beats = np.arange(int(1.0 * FS), len(x) - int(1.0 * FS), int(0.8 * FS))
+        for b in beats:
+            _add_spike(x, b, 0.22)
+        kept, info = _reject_below_noise_floor(x, FS, beats, cfg=BeatDetectionConfig())
+        assert len(kept) >= 0.97 * len(beats), info
+        assert info['rule'] == 'hard_floor', info
+
     def test_amplitude_alternans_is_preserved(self):
         """Big/small/big/small real beats: the small ones are a distinct
         lower cluster but far above noise — the gate must keep them."""
@@ -85,11 +96,25 @@ class TestGateRules:
         assert len(kept) == len(bi), info
 
     def test_never_wipes_recording(self):
+        """If every detection is below the floor, the gate stands down and
+        leaves the recording to QC grading instead of returning zero beats."""
         x, _ = _signal()
-        bi = np.arange(int(1.0 * FS), len(x) - int(1.0 * FS), int(2.0 * FS))  # all noise
+        bi = np.arange(int(1.0 * FS), len(x) - int(1.0 * FS), int(2.0 * FS))
+        half = int(0.02 * FS)
+        for b in bi:                      # make every "beat" window quieter than noise
+            x[b - half:b + half] *= 0.01
         kept, info = _reject_below_noise_floor(x, FS, bi, cfg=BeatDetectionConfig())
         assert info['noise_gate'] == 'aborted_all_below'
         assert len(kept) == len(bi)
+
+    def test_random_noise_positions_are_mostly_rejected_or_kept_not_wiped(self):
+        """Detections on plain noise straddle SNR 1.0: some go, some stay,
+        but the recording is never emptied."""
+        x, _ = _signal()
+        bi = np.arange(int(1.0 * FS), len(x) - int(1.0 * FS), int(2.0 * FS))
+        kept, info = _reject_below_noise_floor(x, FS, bi, cfg=BeatDetectionConfig())
+        assert len(kept) >= 1
+        assert info['noise_gate'] in ('applied', 'none_rejected', 'aborted_all_below')
 
     def test_disabled_is_identity(self):
         x, _ = _signal()

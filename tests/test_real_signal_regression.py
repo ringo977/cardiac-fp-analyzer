@@ -94,6 +94,8 @@ class TestReferenceAgreement:
 
     def test_fpd_matches_reference(self, label, tmp_path):
         e = BY_LABEL[label]
+        if e['reference'].get('fpd_ms') is None:
+            pytest.skip(f"{label}: no FPD reference (cross-electrode RR reference only)")
         r = _run(e, tmp_path)
         s = r['summary']
         fpd = s.get('fpd_ms_median', s.get('fpd_ms_mean'))
@@ -150,7 +152,7 @@ class TestNoiseFloorGateMechanism:
         assert info['rule'] == 'noise_cluster'
         assert info['snr_max_rejected'] <= 3.5     # noise_cluster_max_snr
         assert info['snr_min_kept'] >= 3.0
-        assert info['cluster_gap'] >= 1.5
+        assert info['cluster_gap'] >= 1.3          # noise_cluster_min_gap
 
     def test_fpd_unaffected_by_gate(self, tmp_path):
         """QC already discarded the noise beats before FPD; the gate must not
@@ -172,6 +174,70 @@ class TestNoiseFloorGateMechanism:
         rr_without, rr_with = _rr_median_ms(without), _rr_median_ms(with_gate)
         assert rr_without < 0.6 * ref, f"expected ungated doubling, RR={rr_without:.0f}"
         assert abs(rr_with - ref) / ref <= RR_TOL_DEFAULT, f"gated RR {rr_with:.0f} vs {ref:.0f}"
+
+
+class TestLowSnrRealBeatsSurviveTheGate:
+    """lab_lowsnr_chipA_ch1: every real beat is at SNR 1.1–2.3, the same range
+    as Exp8's noise insertions. The gate must tell them apart by the ensemble
+    (unimodal, median ~1.8, no higher cluster) and keep them. The first
+    version of the gate (fixed floor 1.5) removed 44 of 208 here."""
+
+    LABEL = 'lab_lowsnr_chipA_ch1'
+
+    def test_gate_removes_almost_nothing(self, tmp_path):
+        e = BY_LABEL[self.LABEL]
+        with_gate = _run(e, tmp_path)
+        without = _run(e, tmp_path, **{'beat_detection.enable_noise_floor_gate': False})
+        n_with, n_without = len(with_gate['beat_indices_raw']), len(without['beat_indices_raw'])
+        assert n_without - n_with <= 0.05 * n_without, (
+            f"gate removed {n_without - n_with} of {n_without} low-SNR real beats")
+        gate = with_gate['detection_info']['noise_floor_gate']['post_detection']
+        assert gate['rule'] == 'hard_floor', gate   # cluster rule must NOT fire on a unimodal set
+
+    def test_rr_matches_other_electrode(self, tmp_path):
+        e = BY_LABEL[self.LABEL]
+        rr = _rr_median_ms(_run(e, tmp_path))
+        assert abs(rr - e['reference']['rr_ms']) / e['reference']['rr_ms'] <= 0.10
+
+    def test_matched_filter_recovers_beat_positions(self, tmp_path):
+        """Beat-by-beat against the clean electrode of the same recording:
+        the matched-filter refinement must engage (low-SNR regime) and leave
+        few missed / spurious beats. Derivative detector alone: 73 missed,
+        58 spurious out of ~220."""
+        from cardiac_fp_analyzer.beat_detection import detect_beats
+        from cardiac_fp_analyzer.filtering import full_filter_pipeline
+        e = BY_LABEL[self.LABEL]
+        d = np.load(FIXTURES / e['file'])
+        fs = float(d['fs'])
+        cfg = AnalysisConfig()
+        x1 = full_filter_pipeline(d['signal'].astype(float), fs, cfg=cfg.filtering)
+        x2 = full_filter_pipeline(d['reference_signal'].astype(float), fs, cfg=cfg.filtering)
+        b1, _, i1 = detect_beats(x1, fs, cfg=cfg.beat_detection)
+        b2, _, i2 = detect_beats(x2, fs, cfg=cfg.beat_detection)
+        assert i1['matched_filter']['matched_filter'] == 'applied', i1['matched_filter']
+        assert i2['matched_filter']['matched_filter'] == 'high_snr_regime', i2['matched_filter']
+        tol = 0.04 * fs
+        missed = sum(1 for b in b2 if np.min(np.abs(b1 - b)) > tol)
+        spurious = sum(1 for p in b1 if np.min(np.abs(b2 - p)) > tol)
+        assert missed <= 0.05 * len(b2), f"{missed} of {len(b2)} reference beats missed"
+        assert spurious <= 0.03 * len(b2), f"{spurious} spurious detections"
+
+    def test_without_matched_filter_the_derivative_detector_fails(self, tmp_path):
+        """Documents the failure the refinement exists for."""
+        from cardiac_fp_analyzer.beat_detection import detect_beats
+        from cardiac_fp_analyzer.filtering import full_filter_pipeline
+        e = BY_LABEL[self.LABEL]
+        d = np.load(FIXTURES / e['file'])
+        fs = float(d['fs'])
+        cfg = AnalysisConfig()
+        cfg.beat_detection.enable_matched_filter_refine = False
+        x1 = full_filter_pipeline(d['signal'].astype(float), fs, cfg=cfg.filtering)
+        x2 = full_filter_pipeline(d['reference_signal'].astype(float), fs, cfg=cfg.filtering)
+        b1, _, _ = detect_beats(x1, fs, cfg=cfg.beat_detection)
+        b2, _, _ = detect_beats(x2, fs, cfg=cfg.beat_detection)
+        tol = 0.04 * fs
+        missed = sum(1 for b in b2 if np.min(np.abs(b1 - b)) > tol)
+        assert missed >= 0.15 * len(b2), "derivative detector unexpectedly good — revisit this test"
 
 
 class TestGateIsConservativeOnCleanSignals:

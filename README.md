@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.4.0
+**Versione**: 3.4.1
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
@@ -147,6 +147,8 @@ Il confronto con i valori pubblicati (Visone et al. 2023) è documentato in
 
 - Su 8 baseline con elettrodo degli autori forzato, **RR e FPD entro ±12 %** del pubblicato
   (6 su 8 entro ±5 %); è il corpus di `tests/test_real_signal_regression.py`, eseguito ad ogni run.
+  Una nona fixture (baseline di laboratorio a bassa SNR) è confrontata battito per battito con
+  l'altro elettrodo della stessa registrazione.
 - Il raddoppio dei battiti su Exp8 (156 rilevati contro ~75) è stato risolto con un gate ancorato
   al rumore della registrazione (`noise_floor_gate`, vedi `config.py`). Le soglie di inclusione
   calibrate negli `SPRINT*.md` erano costruite su misure affette da quel difetto e **vanno ritarate**.
@@ -165,6 +167,11 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.4.1 (Ottobre 2026)
+- **Matched filter per segnali a bassa SNR** (`enable_matched_filter_refine`): quando gli spike sono appena sopra il rumore (SNR mediana < 3) i battiti vengono ri-rilevati per correlazione con il template dei battiti più ripidi. Sulla baseline di laboratorio `chipA_ch1` (el1, spike ~15 µV): da 205 battiti con 73 mancanti e 58 spurii a 219 con 3 mancanti e 2 spurii rispetto all'elettrodo pulito; QC da 167 a 218 accettati, RR 810 vs 811 ms. Mai attivo su segnali ad alta SNR (dove raccoglierebbe onde T)
+- **Gate noise-floor ricalibrato**: floor 1.5 → 1.0; un cluster è "rumore" solo se la sua mediana è ≤ 1.35× il floor e c'è un cluster ≥ 3× sopra. La prima versione scartava 44 battiti veri su 208 nel file a bassa SNR; i risultati su Exp8/Exp6 e sui sei file puliti sono invariati
+- **Corpus**: aggiunta la baseline di laboratorio a bassa SNR con l'altro elettrodo come riferimento posizionale; 9 fixture, 47 test di regressione su segnali reali
 
 ### v3.4.0 (Ottobre 2026)
 - **Beat detection**: gate SNR ancorato al noise floor (`enable_noise_floor_gate`) — chiude il raddoppio dei battiti su Exp8 (156→81, RR −46 % → +10 % vs pubblicato, FPD invariato); zero battiti rimossi sui file puliti

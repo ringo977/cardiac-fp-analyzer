@@ -197,36 +197,78 @@ class BeatDetectionConfig:
     # ±``noise_floor_beat_half_window_ms`` divided by the noise floor.
     #
     # Two rules, both anchored to the noise floor:
-    #   (1) hard floor — SNR < ``noise_floor_min_snr`` is always rejected;
+    #   (1) hard floor — SNR < ``noise_floor_min_snr`` is always rejected.
+    #       1.0 means "quieter than a typical noise window": no real event
+    #       can be below it. It is NOT a detection threshold.
     #   (2) noise-cluster — in the sorted SNRs, find the largest geometric
     #       gap such that everything below it is noise-compatible
     #       (median ≤ ``noise_cluster_max_median_snr``, max ≤
     #       ``noise_cluster_max_snr``), the gap is ≥ ``noise_cluster_min_gap``
     #       and the upper cluster's median is ≥ ``noise_cluster_min_separation``
     #       × the lower's. If such a split exists, reject the lower cluster.
-    # Rule (2) exists because noise detections do not stop at a fixed
-    # multiple of the floor: the detector keeps local *maxima*, i.e. the
-    # extreme-value tail of the noise, which on 60 s windows reaches 2–3×
-    # the median window ptp. A fixed threshold at 2.0 cut through that tail.
-    # The noise-compatibility caps keep the rule from ever touching small
-    # but real beats (alternans) or T-waves: those are the job of the
-    # cluster filter and the bimodal-BP fix, not of this gate.
     #
-    # Calibration on 8 ground-truth baselines (Exp5/6/7/8), full files and
-    # 60 s windows: true beats sit at SNR ≥ 3.2 everywhere; noise forms a
-    # continuum 0.9–2.1 with rare excursions to ~3.4.
+    # Why a cluster rule and not a threshold: a single detection cannot be
+    # told apart from noise by its own amplitude OR its own dV/dt. On
+    # studio_MR/Baseline/chipA_ch1 (el1, ~15 µV spikes) every real beat sits
+    # at SNR 1.1–2.3 — the same range as the Exp8 noise insertions — and the
+    # other electrode confirms them (220 beats, CV 6 %). What separates the
+    # two cases is the ensemble: Exp8's fakes have median SNR 1.12, i.e.
+    # indistinguishable from random noise windows, next to a cluster 4×
+    # higher; the low-SNR real beats have median 1.8 and no higher cluster.
+    # A fixed floor at 1.5 (first version of this gate) removed 44 of 208
+    # real beats on that file. Hence: floor at 1.0, "noise" only when the
+    # cluster median is ≤ 1.35 and a ≥3× cluster exists above it.
+    #
+    # Calibrated on 8 published baselines (Exp5/6/7/8) plus the low-SNR
+    # studio file, full recordings and 60/90 s windows: Exp8 156→81 beats
+    # (RR +10 % vs published), Exp6 windows 76→35, six clean files
+    # untouched, low-SNR file 208→205.
     # Unlike the cluster filter there is deliberately NO "don't halve the
     # count" safeguard: on Exp8 the correct answer IS half the count.
     # The gate only skips when it would remove every beat (degenerate
     # signal — left to QC grading) or the noise floor is zero.
     enable_noise_floor_gate: bool = True
-    noise_floor_min_snr: float = 1.5
+    noise_floor_min_snr: float = 1.0
     noise_floor_window_ms: float = 40.0
     noise_floor_beat_half_window_ms: float = 20.0
-    noise_cluster_max_median_snr: float = 2.0
+    noise_cluster_max_median_snr: float = 1.35
     noise_cluster_max_snr: float = 3.5
-    noise_cluster_min_gap: float = 1.5
+    noise_cluster_min_gap: float = 1.3
     noise_cluster_min_separation: float = 3.0
+
+    # ── Matched-filter refinement for low-SNR recordings (Oct 2026) ──
+    # When spikes are barely above the noise (studio_MR chipA_ch1 el1:
+    # ~15 µV spikes on ~10 µV noise, every beat at amplitude-SNR 1.1–2.3),
+    # the derivative detector misses ~1/3 of the real spikes and the
+    # gap-filling passes insert guesses at "expected" positions: against
+    # the clean other electrode, 73 beats missed and 58 detections on
+    # nothing. Neither amplitude nor dV/dt of a single detection helps
+    # (both are noise-level), but the spike SHAPE is constant, which is
+    # exactly what a matched filter exploits: correlating the signal with
+    # a unit-norm template gives noise a std of σ and a spike its full
+    # energy — a gain of ~√(spike samples). Un-normalised on purpose: NCC
+    # divides by the local window energy, which at this SNR is all noise.
+    #
+    # Procedure: template = median of the top ``mf_seed_top_frac`` detected
+    # beats by max|dV/dt|, ±``mf_half_ms``; y = x ⋆ template; peaks of y
+    # above median + ``mf_threshold_k`` × MAD, refractory max(250 ms,
+    # 0.5 × median RR). Result replaces the detections only if the count is
+    # within ``mf_count_ratio`` of the original.
+    #
+    # Only in the low-SNR regime (median amplitude-SNR of detected beats
+    # < ``mf_low_snr_regime``): on high-SNR recordings the same filter
+    # picks up T-waves and after-potentials (Exp7 chipE: 201 vs 109 true
+    # beats). Clean corpus files sit at SNR ≥ 4.4, the lab file at 1.8.
+    # Calibration on the lab file vs its clean electrode: 220 beats,
+    # 3 missed, 3 spurious, CV 13.5 % (derivative detector: 205 beats,
+    # 73 missed, 58 spurious, CV 23 %). k=4.0 → 8 missed; k=4.5 → 31.
+    enable_matched_filter_refine: bool = True
+    mf_low_snr_regime: float = 3.0
+    mf_half_ms: float = 25.0
+    mf_threshold_k: float = 3.5
+    mf_seed_top_frac: float = 0.5
+    mf_min_seeds: int = 10
+    mf_count_ratio: tuple = (0.7, 1.5)
 
     # ── Rhythm topology classifier (Sprint 2 #3) ──
     # Characterises the detected beats into one of:

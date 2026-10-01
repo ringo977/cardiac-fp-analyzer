@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.4.0
+**Versione**: 3.4.1
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1121,6 +1121,12 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.4.1 (Ottobre 2026)
+
+- **Matched filter per il regime a bassa SNR** (`BeatDetectionConfig.enable_matched_filter_refine`, `mf_*`): quando la SNR mediana dei battiti rilevati è < 3, il detector a derivata manca ~1/3 degli spike reali e il gap-filling inserisce ipotesi a posizioni "attese" (sulla baseline di laboratorio `chipA_ch1` el1: 73 mancanti e 58 spurii su ~220, verificati sull'altro elettrodo). Né l'ampiezza né la dV/dt del singolo battito li distinguono dal rumore; la *forma* sì. Template = mediana dei battiti più ripidi (±25 ms), correlazione **non normalizzata** (la NCC divide per l'energia locale, che a questa SNR è tutta rumore), picchi sopra mediana + 3.5·MAD con refrattario 0.5·RR. Risultato: 219 battiti, 3 mancanti, 2 spurii, RR 810 vs 811 ms, QC 218/218. Disattivo nel regime ad alta SNR, dove lo stesso filtro raccoglie onde T e after-potential (Exp7 chipE: 201 contro 109 battiti veri); i file puliti del corpus stanno tutti a SNR ≥ 4.4.
+- **Gate noise-floor ricalibrato**: la prima versione (floor fisso 1.5) scartava 44 battiti veri su 208 nel file a bassa SNR, dove ogni battito reale sta a SNR 1.1–2.3 — lo stesso intervallo dei falsi dell'Exp8. Ciò che li distingue è l'insieme: i falsi hanno mediana 1.12 (indistinguibile da finestre di rumore) accanto a un cluster 4× più alto; i veri a bassa SNR hanno mediana 1.8 e nessun cluster superiore. Quindi floor 1.0 (solo "più silenzioso di una finestra di rumore"), cluster "rumore" solo con mediana ≤ 1.35 e separazione ≥ 3×. Exp8 156→81, Exp6 76→35 e i sei file puliti invariati; file a bassa SNR 208→205.
+- **Corpus**: nona fixture `lab_lowsnr_chipA_ch1` con `reference_signal` = el2, test battito-per-battito (mancanti ≤ 5 %, spurii ≤ 3 %) e test che documenta il fallimento del solo detector a derivata.
 
 ### v3.4.0 (Ottobre 2026)
 

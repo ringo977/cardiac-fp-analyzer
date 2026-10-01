@@ -499,6 +499,15 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
         'n_rejected_total': int(gate_info_1.get('n_rejected', 0) + gate_info_2.get('n_rejected', 0)),
     }
 
+    # ── Matched-filter refinement (low-SNR regime only) ──
+    # Uses the beats found so far as seeds for a template, then re-detects
+    # by correlation. On low-SNR recordings this replaces a set in which
+    # ~1/3 of detections are guesses with one of verified shape matches.
+    # On high-SNR recordings it is a no-op (regime check).
+    bi, mf_info = _matched_filter_refine(data, fs, bi, cfg=cfg)
+    bt = bi / fs if len(bi) > 0 else np.array([], dtype=float)
+    info['matched_filter'] = mf_info
+
     info['n_beats'] = len(bi)
 
     info['method'] = f"auto({info.get('_method_name', '?')})"
@@ -564,14 +573,14 @@ def _reject_below_noise_floor(data, fs, bi, cfg=None, stage=''):
     snr = amps / nf
 
     # Rule (1): hard floor.
-    min_snr = float(getattr(c, 'noise_floor_min_snr', 1.5))
+    min_snr = float(getattr(c, 'noise_floor_min_snr', 1.0))
     threshold = min_snr
     rule = 'hard_floor'
 
     # Rule (2): noise-compatible lower cluster separated by a clear gap.
-    max_med = float(getattr(c, 'noise_cluster_max_median_snr', 2.0))
+    max_med = float(getattr(c, 'noise_cluster_max_median_snr', 1.35))
     max_snr = float(getattr(c, 'noise_cluster_max_snr', 3.5))
-    min_gap = float(getattr(c, 'noise_cluster_min_gap', 1.5))
+    min_gap = float(getattr(c, 'noise_cluster_min_gap', 1.3))
     min_sep = float(getattr(c, 'noise_cluster_min_separation', 3.0))
     s = np.sort(snr)
     best_gap, best_k = 0.0, -1
@@ -610,6 +619,73 @@ def _reject_below_noise_floor(data, fs, bi, cfg=None, stage=''):
                     "SNR < %.2f (noise floor %.4g)", stage, rule, n_rej, n_in, threshold, nf)
     return bi[keep], {**diag, 'noise_gate': 'applied' if n_rej else 'none_rejected',
                       'n_kept': int(keep.sum()), 'n_rejected': n_rej}
+
+
+def _matched_filter_refine(data, fs, bi, cfg=None):
+    """Re-detect beats with a matched filter when the recording is low-SNR.
+
+    See ``BeatDetectionConfig.enable_matched_filter_refine`` for the
+    motivation and calibration. Returns ``(bi_new, info)``; ``bi`` is
+    returned unchanged (with a reason in ``info``) whenever the regime or
+    the sanity checks say the derivative detector should be trusted.
+    """
+    c = _get_bd_cfg(cfg)
+    bi = np.asarray(bi, dtype=int)
+    base = {'matched_filter': 'skipped', 'n_input': len(bi), 'n_output': len(bi)}
+    if not getattr(c, 'enable_matched_filter_refine', True):
+        return bi, {**base, 'matched_filter': 'disabled'}
+    min_seeds = int(getattr(c, 'mf_min_seeds', 10))
+    if len(bi) < min_seeds:
+        return bi, {**base, 'matched_filter': 'too_few_seeds'}
+
+    # ── Regime: median amplitude-SNR of the detected beats vs noise floor ──
+    nf = estimate_noise_floor(data, fs, getattr(c, 'noise_floor_window_ms', 40.0))
+    if nf <= 1e-12:
+        return bi, {**base, 'matched_filter': 'zero_noise_floor'}
+    half_a = max(1, int(getattr(c, 'noise_floor_beat_half_window_ms', 20.0) / 1000.0 * fs))
+    n = len(data)
+    snr = np.array([np.ptp(data[max(0, i - half_a):min(n, i + half_a)]) for i in bi]) / nf
+    med_snr = float(np.median(snr))
+    regime = float(getattr(c, 'mf_low_snr_regime', 3.0))
+    if med_snr >= regime:
+        return bi, {**base, 'matched_filter': 'high_snr_regime', 'median_snr': round(med_snr, 2)}
+
+    # ── Template from the sharpest seeds ──
+    half = max(2, int(getattr(c, 'mf_half_ms', 25.0) / 1000.0 * fs))
+    segs = np.array([data[i - half:i + half] for i in bi if i - half >= 0 and i + half <= n])
+    if len(segs) < min_seeds:
+        return bi, {**base, 'matched_filter': 'too_few_seeds', 'median_snr': round(med_snr, 2)}
+    dv = np.abs(np.diff(segs, axis=1)).max(axis=1)
+    top = float(getattr(c, 'mf_seed_top_frac', 0.5))
+    keep = dv >= np.quantile(dv, 1.0 - top)
+    tmpl = np.median(segs[keep], axis=0)
+    tmpl = tmpl - tmpl.mean()
+    norm = float(np.linalg.norm(tmpl))
+    if norm <= 1e-15:
+        return bi, {**base, 'matched_filter': 'flat_template', 'median_snr': round(med_snr, 2)}
+    tmpl /= norm
+
+    # ── Matched-filter output and robust threshold ──
+    y = sig.fftconvolve(data, tmpl[::-1], mode='same')
+    med = float(np.median(y))
+    mad = float(np.median(np.abs(y - med)) * 1.4826)
+    if mad <= 1e-15:
+        return bi, {**base, 'matched_filter': 'degenerate_output', 'median_snr': round(med_snr, 2)}
+    k = float(getattr(c, 'mf_threshold_k', 3.5))
+    thr = med + k * mad
+    rr_med_s = float(np.median(np.diff(bi)) / fs) if len(bi) > 1 else 1.0
+    refractory = int(max(0.25, 0.5 * rr_med_s) * fs)
+    pk, _ = sig.find_peaks(y, height=thr, distance=max(1, refractory))
+
+    lo, hi = getattr(c, 'mf_count_ratio', (0.7, 1.5))
+    ratio = len(pk) / len(bi)
+    diag = {'n_input': len(bi), 'median_snr': round(med_snr, 2), 'template_seeds': int(keep.sum()),
+            'threshold_k': k, 'n_candidates': int(len(pk)), 'count_ratio': round(ratio, 3)}
+    if len(pk) < min_seeds or not (lo <= ratio <= hi):
+        return bi, {**base, **diag, 'matched_filter': 'rejected_count_ratio'}
+
+    logger.info("Matched-filter refinement (median SNR %.2f): %d → %d beats", med_snr, len(bi), len(pk))
+    return pk.astype(int), {**diag, 'matched_filter': 'applied', 'n_output': int(len(pk))}
 
 
 def _reject_amplitude_cluster(data, fs, bi, cfg=None):
