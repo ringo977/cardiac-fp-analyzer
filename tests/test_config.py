@@ -9,8 +9,11 @@ class TestAnalysisConfigDefaults:
     """Verify default configuration values are sensible."""
 
     def test_default_amplifier_gain(self):
+        # µECG-Pharma Digilent hardware gain: CSV volts are amplified ×1e4.
+        # Both UIs forced this value; the library default now agrees so
+        # CLI/batch/Study runs report physical amplitudes too.
         cfg = AnalysisConfig()
-        assert cfg.amplifier_gain == 1.0
+        assert cfg.amplifier_gain == 1e4
 
     def test_default_beat_detection_method(self):
         cfg = AnalysisConfig()

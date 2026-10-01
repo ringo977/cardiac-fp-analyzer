@@ -902,9 +902,16 @@ class AnalysisConfig:
 
     # ── Signal scaling ──
     # Amplifier gain correction: raw_signal / amplifier_gain = real voltage.
-    # For µECG-Pharma Digilent system the amplifier gain is 10⁴ (×10 000).
-    # Set to 1.0 to skip correction (raw units preserved).
-    amplifier_gain: float = 1.0
+    # For the µECG-Pharma Digilent system the amplifier gain is 10⁴, so the
+    # CSV columns are in *amplified* volts and tissue voltage = raw / 1e4.
+    # Default 1e4 (Oct 2026; was 1.0): both UIs already forced 1e4, but the
+    # library default governed CLI, batch and Study runs, where every
+    # ``spike_amplitude_mV`` came out 10 000× too large and the absolute
+    # ``min_signal_amplitude_uV`` gate could never fire. Set to 1.0 only for
+    # data already in physical volts (e.g. synthetic tests).
+    # Applied once, in analyze_single_file, before filtering; channel
+    # selection runs on raw units (its amplitude reference is in raw mV).
+    amplifier_gain: float = 1e4
 
     # Advanced analysis modules (enabled by default)
     enable_cessation: bool = True

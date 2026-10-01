@@ -696,7 +696,10 @@ def _build_eg(results: list, study_id: str) -> pd.DataFrame:
             _add_row('FPDCF', s.get('fpdc_fridericia_ms_mean',
                                     s.get('fpdc_ms_mean')))
         _add_row('BP',       s.get('beat_period_ms_mean'))
-        _add_row('SPIKEAM',  s.get('spike_amplitude_mV_mean'))
+        # SPIKEAM is declared in uV (see _TEST_CODES); the summary holds mV.
+        _spk_mV = s.get('spike_amplitude_mV_mean')
+        _add_row('SPIKEAM',  None if _spk_mV is None or (isinstance(_spk_mV, float) and np.isnan(_spk_mV))
+                 else float(_spk_mV) * 1000.0)
         _add_row('RISETM',   s.get('rise_time_ms_mean'))
         _add_row('MAXDVDT',  s.get('max_dvdt_mean'))
         _add_row('FPDCONF',  s.get('fpd_confidence'))

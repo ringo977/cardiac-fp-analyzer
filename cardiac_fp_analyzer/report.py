@@ -13,6 +13,16 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
+_FPDC_LABELS = {'fridericia': 'FPDcF', 'bazett': 'FPDcB', 'none': 'FPD (uncorrected)'}
+
+
+def _fpdc_label(summary):
+    """Column label for ``fpdc_ms`` according to the configured correction.
+
+    Before Oct 2026 the sheet said "FPDcF" regardless of
+    ``summary['correction']``, so a Bazett run was labelled Fridericia.
+    """
+    return _FPDC_LABELS.get(str(summary.get('correction', 'fridericia')).lower(), 'FPDc')
 
 def generate_excel_report(results_list, output_path):
     output_path = Path(output_path)
@@ -54,8 +64,12 @@ def generate_excel_report(results_list, output_path):
                 'CV BP (%)': s.get('beat_period_ms_cv',np.nan),
                 'BPM': s.get('bpm_mean',np.nan), 'Mean Amp (mV)': s.get('spike_amplitude_mV_mean',np.nan),
                 'Mean FPD (ms)': s.get('fpd_ms_mean',np.nan), 'Std FPD (ms)': s.get('fpd_ms_std',np.nan),
-                'Mean FPDcF (ms)': s.get('fpdc_ms_mean',np.nan), 'Std FPDcF (ms)': s.get('fpdc_ms_std',np.nan),
-                'Mean FPDcB (ms)': s.get('fpdc_bazett_ms_mean',np.nan),
+                # Configured correction (fpdc_ms follows summary['correction']),
+                # plus both named formulas so the sheet is unambiguous.
+                f'Mean {_fpdc_label(s)} (ms)': s.get('fpdc_ms_mean',np.nan),
+                f'Std {_fpdc_label(s)} (ms)': s.get('fpdc_ms_std',np.nan),
+                'Mean FPDcF (Fridericia) (ms)': s.get('fpdc_fridericia_ms_mean', s.get('fpdc_ms_mean',np.nan)),
+                'Mean FPDcB (Bazett) (ms)': s.get('fpdc_bazett_ms_mean',np.nan),
                 'STV (ms)': s.get('stv_ms',np.nan),
                 'Classification': ar.classification if ar else '', 'Risk Score': ar.risk_score if ar else 0,
                 # ─── Normalization columns ───
@@ -63,7 +77,7 @@ def generate_excel_report(results_list, output_path):
                 'BL BP (ms)': nrm.get('baseline_bp_ms', np.nan),
                 'BL FPDcF (ms)': nrm.get('baseline_fpdc_ms', np.nan),
                 '%BP Change': nrm.get('pct_bp_change', np.nan),
-                '%FPDcF Change': nrm.get('pct_fpdc_change', np.nan),
+                f'%{_fpdc_label(s)} Change': nrm.get('pct_fpdc_change', np.nan),
                 '%AMP Change': nrm.get('pct_amp_change', np.nan),
                 '>LOW (10%)': 'YES' if nrm.get('exceeds_LOW') else '',
                 '>MID (15%)': 'YES' if nrm.get('exceeds_MID') else '',
@@ -118,11 +132,14 @@ def generate_excel_report(results_list, output_path):
                 fmt = bool_yes if val == 'YES' else bool_no
                 ws.write(i+1, col_idx, val, fmt)
 
-        # Conditional formatting for %FPDcF Change
-        if '%FPDcF Change' in df_s.columns:
-            fpdc_chg_col = list(df_s.columns).index('%FPDcF Change')
+        # Conditional formatting for the %FPDc change column (label follows
+        # the configured correction: FPDcF / FPDcB / uncorrected).
+        _chg_cols = [c for c in df_s.columns if c.startswith('%') and c.endswith(' Change') and 'FPD' in c]
+        if _chg_cols:
+            _chg = _chg_cols[0]
+            fpdc_chg_col = list(df_s.columns).index(_chg)
             for i in range(len(df_s)):
-                val = df_s.iloc[i]['%FPDcF Change']
+                val = df_s.iloc[i][_chg]
                 if isinstance(val, (int, float)) and not np.isnan(val):
                     if val >= 20:
                         fmt = tdp_crit
@@ -154,9 +171,9 @@ def generate_excel_report(results_list, output_path):
                 'BL BP (ms)': nrm.get('baseline_bp_ms', np.nan),
                 'Drug BP (ms)': s.get('beat_period_ms_mean', np.nan),
                 '%BP Change': nrm.get('pct_bp_change', np.nan),
-                'BL FPDcF (ms)': nrm.get('baseline_fpdc_ms', np.nan),
-                'Drug FPDcF (ms)': s.get('fpdc_ms_mean', np.nan),
-                '%FPDcF Change': nrm.get('pct_fpdc_change', np.nan),
+                f'BL {_fpdc_label(s)} (ms)': nrm.get('baseline_fpdc_ms', np.nan),
+                f'Drug {_fpdc_label(s)} (ms)': s.get('fpdc_ms_mean', np.nan),
+                f'%{_fpdc_label(s)} Change': nrm.get('pct_fpdc_change', np.nan),
                 'BL AMP (mV)': nrm.get('baseline_amp_mV', np.nan),
                 'Drug AMP (mV)': s.get('spike_amplitude_mV_mean', np.nan),
                 '%AMP Change': nrm.get('pct_amp_change', np.nan),

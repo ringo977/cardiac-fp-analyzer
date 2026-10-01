@@ -385,11 +385,15 @@ def apply_inclusion_criteria(results, verbose=True, cfg=None, report_out=None):
                 continue
             conf = r.get('summary', {}).get('fpd_confidence', np.nan)
             inc = r.setdefault('inclusion', {'passed': True, 'reason': ''})
+            # Named ``fpd_confidence_ok`` (not ``fpd_reliable``): this is the
+            # template-confidence criterion. ``summary['fpd_reliable']`` is a
+            # different quantity (per-beat valid-FPD ratio, parameters.py) and
+            # the two used to share a name across dicts.
             if not np.isnan(conf) and conf < cfg.min_fpd_confidence:
-                inc['fpd_reliable'] = False
+                inc['fpd_confidence_ok'] = False
                 n_drug_conf += 1
             else:
-                inc['fpd_reliable'] = True
+                inc['fpd_confidence_ok'] = True
 
     if verbose and n_drug_conf > 0:
         print(f"  FPD reliability: {n_drug_conf} drug recordings with confidence < {cfg.min_fpd_confidence}")

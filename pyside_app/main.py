@@ -1756,12 +1756,11 @@ class MainWindow(QMainWindow):
         # (or the immediate re-analysis fired by ``applied``).
         # Ricalcola also re-uses the same instance, so per-file edits
         # made in the Battiti tab survive a settings change until the
-        # user reloads.  Default ``amplifier_gain = 1e4`` matches the
-        # µECG-Pharma Digilent hardware — the field is editable in the
+        # user reloads.  ``amplifier_gain`` defaults to 1e4 in the library
+        # (µECG-Pharma Digilent hardware) — the field is editable in the
         # Impostazioni dialog.
         from cardiac_fp_analyzer.config import AnalysisConfig
         self._config: AnalysisConfig = AnalysisConfig()
-        self._config.amplifier_gain = 1e4
         # ``_current_config`` historically tracked "config used for the
         # last analysis"; now it points to the same ``_config`` object
         # after every ``_run_analysis``.  Ricalcola reads it.
