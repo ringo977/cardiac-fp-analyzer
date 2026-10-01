@@ -1,6 +1,7 @@
 # ADR-0001: Abandon Streamlit, migrate UI to PySide6 + PyQtGraph
 
-- **Status:** Proposed (awaiting proof-of-concept validation)
+- **Status:** Accepted (2026-10-01). The proof of concept became the product: `pyside_app/` (~7.9k LOC, Apr–Aug 2026) carries all active UI development — tabs, beat editor, Study/Group model, batch, dose–response, CDISC export. `ui/` (Streamlit) is kept in maintenance only.
+- **Originally:** Proposed, 2026-04-19
 - **Date:** 2026-04-19
 - **Deciders:** Marco Rasponi
 - **Supersedes:** —

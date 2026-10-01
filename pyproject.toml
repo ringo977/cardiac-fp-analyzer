@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cardiac-fp-analyzer"
-version = "3.3.0"
+version = "3.4.0"
 description = "Field Potential analysis pipeline for hiPSC-CM micro-ECG recordings"
 readme = "README.md"
 license = "MIT"
@@ -36,8 +36,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# GUI (Streamlit app)
+# Desktop GUI (PySide6 + PyQtGraph) — the primary UI since ADR-0001.
 gui = [
+    "PySide6>=6.5,<7.0",
+    "pyqtgraph>=0.13,<0.14",
+]
+# Legacy web GUI (Streamlit app.py) — maintenance only, no new features.
+streamlit = [
     "streamlit>=1.24,<2.0",
     "plotly>=5.0,<6.0",
 ]
@@ -51,7 +56,7 @@ cdisc = [
 ]
 # Everything
 all = [
-    "cardiac-fp-analyzer[gui,reports,cdisc]",
+    "cardiac-fp-analyzer[gui,streamlit,reports,cdisc]",
 ]
 # Development / testing
 dev = [
@@ -66,9 +71,10 @@ Repository = "https://github.com/ringo977/cardiac-fp-analyzer"
 
 [project.scripts]
 cardiac-fp = "cardiac_fp_analyzer.analyze:main"
+cardiac-fp-gui = "pyside_app.main:main"
 
 [tool.setuptools.packages.find]
-include = ["cardiac_fp_analyzer*", "ui*"]
+include = ["cardiac_fp_analyzer*", "pyside_app*", "ui*"]
 
 # ── Ruff (linting + formatting) ──
 [tool.ruff]

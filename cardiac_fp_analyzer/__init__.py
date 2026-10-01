@@ -9,6 +9,7 @@ Modules:
   beat_detection  — Depolarization spike detection and segmentation
   parameters      — Electrophysiology parameter extraction (BP, FPD, FPDc, etc.)
   quality_control — Signal quality grading and beat validation
+  rhythm_integration — Rhythm topology / RR-outlier integration
   arrhythmia      — Arrhythmia detection and classification
   residual_analysis — Residual-based arrhythmia analysis (template, EAD, STV)
   normalization   — Baseline normalization and TdP risk scoring
@@ -16,9 +17,11 @@ Modules:
   spectral        — Frequency domain analysis (PSD, entropy, harmonics)
   report          — Excel and PDF report generation
   analyze         — Main pipeline orchestrator (single file + batch)
+  study           — Study/Group/FileEntry data model (versioned schema)
+  overrides       — Sidecar .overrides.json for manual beat corrections
 """
 
-__version__ = '3.3.0'
+__version__ = '3.4.0'
 
 # ── Package-level logger ──
 # Usage in submodules:  import logging; logger = logging.getLogger(__name__)

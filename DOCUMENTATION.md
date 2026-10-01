@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.3.0
+**Versione**: 3.4.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -29,7 +29,7 @@
 5. [Configurazione](#5-configurazione)
 6. [Razionale scientifico](#6-razionale-scientifico)
 7. [Validazione](#7-validazione)
-8. [Interfaccia grafica (Streamlit)](#8-interfaccia-grafica-streamlit)
+8. [Interfaccia grafica](#8-interfaccia-grafica)
 9. [Export CDISC SEND](#9-export-cdisc-send)
 10. [Logging e diagnostica](#10-logging-e-diagnostica)
 11. [Changelog](#11-changelog)
@@ -53,7 +53,8 @@ Il software analizza ogni registrazione attraverso una pipeline a 12 stadi, ragg
 ```bash
 # Con pyproject.toml (raccomandato)
 pip install .                        # Solo core (numpy, pandas, scipy, matplotlib)
-pip install ".[gui]"                 # Core + Streamlit + Plotly
+pip install ".[gui]"                 # Core + GUI desktop (PySide6 + PyQtGraph)
+pip install ".[streamlit]"           # Core + GUI web legacy (Streamlit + Plotly)
 pip install ".[reports]"             # Core + xlsxwriter
 pip install ".[cdisc]"              # Core + pyreadstat
 pip install ".[all]"                 # Tutto
@@ -848,6 +849,8 @@ Il sistema µECG-Pharma Digilent registra con un guadagno di 10⁴. Per ottenere
 segnale_reale = segnale_ADC / 10⁴
 ```
 
+Dalla v3.4.0 il default della libreria è `1e4` (prima era `1.0`: le due GUI lo forzavano a 10⁴, ma CLI, batch e Studi riportavano ampiezze 10⁴ volte troppo grandi e il gate assoluto `min_signal_amplitude_uV` non poteva mai scattare). Impostare `1.0` solo per dati già in Volt fisici.
+
 Con `amplifier_gain = 1e4`, le ampiezze baseline risultano ~253 ± 92 µV, coerenti con il paper (251 ± 320 µV). Questo parametro influenza solo i valori assoluti di ampiezza, non le metriche temporali (FPD, BP) né le metriche relative (ΔFPDcF%).
 
 ---
@@ -922,37 +925,58 @@ Mexiletine è l'unico farmaco misclassificato. Questo è coerente con il framewo
 
 ---
 
-## 8. Interfaccia grafica (Streamlit)
+## 8. Interfaccia grafica
 
-Il software include un'interfaccia web costruita con Streamlit, che espone tutte le funzionalità della pipeline senza richiedere interazione da riga di comando.
+Dalla primavera 2026 l'interfaccia primaria è un'applicazione **desktop PySide6 + PyQtGraph** (`pyside_app/`), decisa con l'ADR-0001 (`docs/decisions/0001-abandon-streamlit-for-pyside6.md`, *Accepted*). La GUI web Streamlit (`app.py`, `ui/`) resta disponibile in manutenzione, senza nuove funzionalità.
 
-### Architettura UI (v3.2)
-
-A partire dalla v3.2, l'interfaccia è organizzata in un pacchetto `ui/` con moduli dedicati. Il file `app.py` (~90 righe) funge da entry point e router, delegando la logica ai moduli:
-
-```
-app.py                      # Setup logging/warnings, st.set_page_config, router
-ui/
-├── __init__.py             # Package marker
-├── i18n.py                 # Dizionario TRANSLATIONS (IT/EN, >150 chiavi) + T()
-├── helpers.py              # reanalyze_with_modified_beats(), amplitude_scale()
-├── config_sidebar.py       # build_config_from_sidebar() → AnalysisConfig
-├── single_file.py          # Pagina analisi singolo file + editor battiti + export
-├── batch.py                # Pagina batch + risk map + summary + dettagli
-├── drug_comparison.py      # Dashboard dose-response, metriche, waveform overlay
-└── reports.py              # Widget download Excel/PDF/Config JSON/CDISC SEND
-```
-
-Le funzioni helper del core precedentemente importate come private (`_compute_template`, `_is_baseline`, `_get_group_key`) sono ora esposte come API pubblica (`compute_template`, `is_baseline`, `get_group_key`), con alias di retrocompatibilità mantenuti.
-
-### Avvio
+### 8.1 GUI desktop (PySide6) — primaria
 
 ```bash
-pip install ".[gui]"    # installa streamlit + plotly
-streamlit run app.py
+pip install ".[gui,reports]"
+cardiac-fp-gui                 # oppure: python -m pyside_app.main
 ```
 
-L'applicazione si apre nel browser alla porta 8501.
+```
+pyside_app/
+├── main.py                   # MainWindow: tab Segnale / Battiti, Ricalcola, menu, stato config
+├── signal_viewer.py          # Viewer PyQtGraph: overlay grezzo/filtrato, marker battiti, hover, zoom
+├── study_panel.py            # Pannello Studi: albero Studio→Gruppo→File, batch in QThreadPool,
+│                             #   metriche per gruppo (FPDc/BPM/STV), dose-risposta, CDISC per studio
+├── settings_dialog.py        # Dialog AnalysisConfig (sottoinsieme dei campi)
+├── settings_dialog_helpers.py
+└── theme.py                  # Tema Scuro/Chiaro persistito in QSettings
+```
+
+Funzioni principali:
+
+- **Segnale**: segnale grezzo e filtrato sovrapposti, marker dei battiti post-QC, selettore canale (el1/el2/auto) con riflesso del canale effettivamente analizzato.
+- **Battiti**: template medio con banner quando il template non è rappresentativo (ritmo a rischio o CV FPD alto), editor per aggiungere/rimuovere battiti; **Ricalcola** riesegue la pipeline a valle della detection e salva le correzioni in un sidecar `<file>.overrides.json` (`cardiac_fp_analyzer/overrides.py`), riapplicato automaticamente alle analisi successive.
+- **Studi**: modello `Study → Group → FileEntry` (`cardiac_fp_analyzer/study.py`, schema versionato, percorsi relativi POSIX, `dose_uM` esplicitamente `None` per dose ignota); "Aggiungi cartella al gruppo" ricorsiva; analisi batch in background con cache invalidata da fingerprint della configurazione; metriche aggregate per gruppo; curve dose-risposta (asse log, barre d'errore); export CDISC SEND per studio.
+- **Impostazioni**: dialog sui campi principali di `AnalysisConfig` (il JSON completo resta la via per i restanti).
+
+I test della GUI desktop (`tests/test_study_panel_*.py`, `tests/test_pyside_theme.py`, ~200 test) girano headless con `QT_QPA_PLATFORM=offscreen`; la CI li esegue e fallisce se vengono saltati.
+
+### 8.2 GUI web Streamlit — legacy
+
+Architettura (v3.2): `app.py` (~90 righe) come entry point e router, moduli in `ui/`:
+
+```
+ui/
+├── i18n.py                 # Dizionario TRANSLATIONS (IT/EN) + T()
+├── helpers.py              # reanalyze_with_modified_beats(), amplitude_scale()
+├── config_sidebar.py       # build_config_from_sidebar() → AnalysisConfig
+├── single_file.py          # Analisi singolo file + editor battiti + export
+├── batch.py                # Batch + risk map + summary
+├── drug_comparison.py      # Dashboard dose-response
+└── reports.py              # Download Excel/PDF/Config JSON/CDISC SEND
+```
+
+```bash
+pip install ".[streamlit]"
+streamlit run app.py        # browser, porta 8501
+```
+
+Nota: il "Ricalcola" Streamlit (`ui/helpers.py`) usa ancora il percorso legacy dell'RR post-QC per la correzione di frequenza; la GUI desktop usa l'RR locale sul treno pre-QC (v3.4).
 
 ### Pagine
 
@@ -1012,9 +1036,8 @@ Il vettore temporale viene normalizzato per partire sempre da 0 secondi. L'hardw
 ### Requisiti aggiuntivi
 
 ```bash
-pip install ".[gui,reports]"
-# oppure manualmente:
-#   streamlit>=1.24  plotly>=5.0  xlsxwriter>=3.0
+pip install ".[gui,reports]"          # desktop
+pip install ".[streamlit,reports]"    # web legacy
 ```
 
 ---
@@ -1098,6 +1121,15 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.4.0 (Ottobre 2026)
+
+- **Beat detection — gate SNR sul noise floor** (`BeatDetectionConfig.enable_noise_floor_gate`): una detection la cui ampiezza locale non supera chiaramente il rumore della registrazione è rumore, qualunque cosa dica il ritmo. Regola a due livelli ancorata al floor (hard floor 1.5×; cluster inferiore scartato solo se interamente compatibile col rumore e separato da un salto ≥1.5× da un cluster ≥3× più alto). Chiude il raddoppio su Exp8/Day6/chipD_ch1 (156→81 battiti, RR −46 % → +10 % vs pubblicato, FPD invariato) e lo stesso difetto su finestre di Exp6; zero battiti rimossi su sei file puliti. Nessuna salvaguardia "non dimezzare il conteggio": su Exp8 la metà *è* la risposta.
+- **Corpus di regressione su segnali reali**: `tests/fixtures/real_signals/` (8 baseline Visone 2023, elettrodo degli autori, RR/FPD pubblicati) + `tests/test_real_signal_regression.py` (RR, FPD, assenza di sovra-rilevazione, meccanismo del gate). Primo test della suite in cui un FPD misurato è confrontato con un riferimento indipendente su segnale reale.
+- **Ripolarizzazione**: rimosso il fallback `argmax(|seg|)` (template e per-battito); T-wave non misurabile → `None`. Effetto misurato piccolo: il divario con il ~41 % di punti non misurati dagli autori **non** dipendeva da qui e resta aperto.
+- **Unità**: `amplifier_gain` default 1e4; CDISC `SPIKEAM` in µV (era scritto in mV); etichette Excel FPDcF/FPDcB coerenti con `correction`; `inclusion['fpd_reliable']` → `fpd_confidence_ok`.
+- **Packaging/CI/doc**: extra `gui` = PySide6 + pyqtgraph, `pyside_app` nei package, entry point `cardiac-fp-gui`; CI su `feat/**`/`fix/**` con PySide6 headless e budget di skip; ADR-0001 *Accepted*; documentazione allineata alla UI reale.
+- **Consolidamento aprile–agosto 2026** (mai rilasciato prima): GUI PySide6; modello Studio/Gruppo/File; sidecar override; `rhythm_integration`; RR locale pre-QC per FPDc (`compute_local_rr`); segno ripolarizzazione tracciato per battito; flag `correction` effettivo; `fpd_reliable` propagato a normalizzazione e CDISC (`FPDREL`); criteri di inclusione FPD/RR e precisione baseline (opt-in); `tools/reanalyze.py` con manifest di provenienza.
 
 ### v3.3.0 (Marzo 2026)
 

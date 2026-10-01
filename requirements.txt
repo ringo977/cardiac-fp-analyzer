@@ -1,7 +1,7 @@
 # Runtime dependencies for cardiac-fp-analyzer.
 #
 # This file is the "convenience bundle" — installing it gives you core +
-# GUI + Excel reports. It does NOT pull the regulatory CDISC SEND .xpt
+# desktop GUI + Excel reports. It does NOT pull the regulatory CDISC SEND .xpt
 # backend, which is a separate opt-in (see the commented block below).
 #
 # For a fully granular install driven by pyproject.toml extras, use
@@ -14,9 +14,12 @@ pandas>=1.4,<3.0
 scipy>=1.8,<2.0
 matplotlib>=3.5,<4.0
 
-# ── GUI (streamlit app.py) ──
-streamlit>=1.24,<2.0
-plotly>=5.0,<6.0
+# ── Desktop GUI (python -m pyside_app.main / cardiac-fp-gui) ──
+PySide6>=6.5,<7.0
+pyqtgraph>=0.13,<0.14
+
+# ── Legacy web GUI (streamlit run app.py) — maintenance only ──
+# pip install -e ".[streamlit]"   to enable
 
 # ── Excel/PDF reports ──
 xlsxwriter>=3.0,<4.0
