@@ -63,3 +63,5 @@ send_export/
 pytest-cache-files-*/
 # Executed one-off commit scripts
 SPRINT*_COMMIT_BLOCK.sh
+# Local experiment folders (recordings, manual references): never in the repo.
+Experiments-*/
