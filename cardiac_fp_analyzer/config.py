@@ -456,12 +456,20 @@ class RepolarizationConfig:
     # within a biologically sensible range regardless of how slow the
     # rhythm is.  The fixed ``min_fpd_ms`` floor (120 ms, covers the
     # afterpotential zone) is NOT affected by this cap.
-    # 350 ms was chosen so the floor on a 3-second bradycardia (Exp6
-    # baseline) stays below the typical 300–500 ms T-wave window while
-    # still protecting against short afterdepolarisations up to
-    # ~350 ms, the upper edge of the hiPSC-CM afterpotential tail.
+    # 350 ms (Apr 2026) was chosen so the floor on a 3-second bradycardia
+    # stays below a hypothetical 300–500 ms T-wave. Raised to 600 ms in
+    # Oct 2026 on the manual gold standard GG: on slow,
+    # noisy rhythms (RR 2–4 s) the template picked a sharp after-potential
+    # at ~500 ms instead of the broad T-wave at ~0.5×RR in 12.5 % of
+    # beats; with the cap at 600 ms this drops to 9.1 % and per-beat FPD
+    # within ±20 % goes 76 → 80 %. Both real references available —
+    # Visone 2023 (paper) and this analyst (199 blocks) — show FPD/RR
+    # ≥ 0.3 almost always (2 blocks < 0.3, none < 0.13), so a floor of
+    # min(0.2×RR, 600 ms) excludes no observed physiology. A T-wave at
+    # 400 ms on a 3 s rhythm (ratio 0.13) would now be missed; no such
+    # case exists in either reference.
     # Set to 0.0 to disable the cap (pre-v3.3.1 behaviour).
-    max_adaptive_min_fpd_ms: float = 350.0
+    max_adaptive_min_fpd_ms: float = 600.0
 
     # --- FPD reliability gate (Sprint 3 #1, Fix C) ---
     # Fraction of beats that must produce a valid (non-NaN) FPD for the

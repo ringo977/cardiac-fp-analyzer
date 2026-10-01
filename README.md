@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.5.0
+**Versione**: 3.5.1
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
@@ -169,6 +169,11 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.5.1 (Ottobre 2026)
+- **Minimo FPD adattivo**: tetto `max_adaptive_min_fpd_ms` 350 → 600 ms. Su ritmi lenti il template sceglieva un after-potential a ~500 ms al posto della T a ~0.5×RR; anticipi per battito 12.5 → 9.1 %, entro ±20 % 76 → 80 % (DEV), neutro su TEST a livello di elettrodo
+- **Caratterizzazione dell'errore FPD** contro il gold standard, battito per battito: nessun bias di convenzione (tangente e picco coincidono con l'analista in mediana); il residuo sono *candidati diversi* (32 anticipi, 14 ritardi su 74 elettrodi di grado A) — `docs/FPD_vs_gold_standard_2026-10.md`
+- Segnalati 5 blocchi del gold standard con FPD > RR (sfasamento di riga probabile)
 
 ### v3.5.0 (Ottobre 2026) — prima validazione cieca su gold standard manuale
 Dataset interno GG: 179 CSV, 313 elettrodi con misura manuale (BP, FPD, tempi dei singoli battiti, note "non analizzabile"). Sviluppo su Exp 5/8/10 (217 elettrodi), **test cieco su Exp 6/7/9 (96 elettrodi), eseguito una sola volta**.

@@ -97,33 +97,34 @@ class TestAdaptiveFloorCap:
     floor from overshooting the real T-wave on bradycardic signals."""
 
     def test_config_field_has_sensible_default(self):
+        # 600 ms since Oct 2026 (manual gold standard); see config.py.
         cfg = RepolarizationConfig()
-        assert cfg.max_adaptive_min_fpd_ms == 350.0
+        assert cfg.max_adaptive_min_fpd_ms == 600.0
 
     def test_template_bradycardia_recovers_t_wave(self):
-        """RR = 3 s + T-wave at 400 ms. Without the cap the floor is
-        0.20 × 3000 = 600 ms → T-wave at 400 ms is excluded. With the
-        cap (350 ms) the T-wave becomes reachable again."""
+        """RR = 4 s + T-wave at 700 ms. Without the cap the floor is
+        0.20 × 4000 = 800 ms → T-wave at 700 ms is excluded. With the
+        cap (600 ms) the T-wave becomes reachable again."""
         fs = 2000.0
         tpl, pre, t_idx = _build_bradycardic_template(
-            fs=fs, duration_s=0.9, pre_ms=50, t_wave_latency_ms=400,
+            fs=fs, duration_s=1.2, pre_ms=50, t_wave_latency_ms=700,
         )
         cfg = RepolarizationConfig()
         cfg.min_fpd_ms = 120.0
         cfg.min_fpd_pct_rr = 0.20
-        cfg.max_adaptive_min_fpd_ms = 350.0  # default
-        cfg.search_end_ms = 700.0
+        cfg.max_adaptive_min_fpd_ms = 600.0  # default
+        cfg.search_end_ms = 1000.0
         cfg.enable_repol_gate = False  # test the bound, not the SNR gate
 
         fpd_samples, *_rest = find_repolarization_on_template(
-            tpl, fs, pre_ms=50, cfg=cfg, median_bp_s=3.0,  # bradycardia
+            tpl, fs, pre_ms=50, cfg=cfg, median_bp_s=4.0,  # bradycardia
         )
         assert fpd_samples is not None
         fpd_ms = fpd_samples / fs * 1000
-        # T-wave latency = 400 ms; tangent method adds some overhead.
-        # With cap active the floor is 350 ms and the T-wave is
-        # reachable → FPD must land near the T-wave (350–550 ms band).
-        assert 350 <= fpd_ms <= 550, f"FPD={fpd_ms:.0f} ms (expected 350–550)"
+        # T-wave latency = 700 ms; tangent method adds some overhead.
+        # With cap active the floor is 600 ms and the T-wave is
+        # reachable → FPD must land near the T-wave (650–850 ms band).
+        assert 650 <= fpd_ms <= 850, f"FPD={fpd_ms:.0f} ms (expected 650–850)"
 
     def test_template_without_cap_misses_t_wave(self):
         """Baseline: with the cap disabled (pre-fix behaviour) the same
@@ -131,24 +132,24 @@ class TestAdaptiveFloorCap:
         result is outside the physiological band (or None)."""
         fs = 2000.0
         tpl, pre, t_idx = _build_bradycardic_template(
-            fs=fs, duration_s=0.9, pre_ms=50, t_wave_latency_ms=400,
+            fs=fs, duration_s=1.2, pre_ms=50, t_wave_latency_ms=700,
         )
         cfg = RepolarizationConfig()
         cfg.min_fpd_ms = 120.0
         cfg.min_fpd_pct_rr = 0.20
         cfg.max_adaptive_min_fpd_ms = 0.0  # disable cap → pre-fix
-        cfg.search_end_ms = 700.0
+        cfg.search_end_ms = 1000.0
         cfg.enable_repol_gate = False
 
         fpd_samples, *_rest = find_repolarization_on_template(
-            tpl, fs, pre_ms=50, cfg=cfg, median_bp_s=3.0,
+            tpl, fs, pre_ms=50, cfg=cfg, median_bp_s=4.0,
         )
         # Either detection fails outright, or it lands past the real
-        # T-wave peak (> 500 ms). Either way, the T-wave is NOT
-        # correctly reported around 400 ms.
+        # T-wave peak (> 850 ms). Either way, the T-wave is NOT
+        # correctly reported around 700 ms.
         if fpd_samples is not None:
             fpd_ms = fpd_samples / fs * 1000
-            assert fpd_ms >= 500, (
+            assert fpd_ms >= 850, (
                 f"Pre-fix behaviour should overshoot or fail; got {fpd_ms:.0f} ms"
             )
 

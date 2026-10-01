@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.5.0
+**Versione**: 3.5.1
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1122,9 +1122,13 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 
 ## 11. Changelog
 
+### v3.5.1 (Ottobre 2026)
+
+- `RepolarizationConfig.max_adaptive_min_fpd_ms` 350 → 600 ms (razionale nel config). Caratterizzazione completa dell'errore FPD contro il gold standard manuale in `docs/FPD_vs_gold_standard_2026-10.md`: la definizione del punto di fine non è il problema; lo è la selezione del candidato sui ritmi lenti e rumorosi. Punteggio prominenza×larghezza provato e scartato (peggiora).
+
 ### v3.5.0 (Ottobre 2026) — validazione cieca su gold standard manuale
 
-Primo confronto con una misura manuale indipendente su un dataset interno (GG: 179 CSV da 60 s, 313 elettrodi con BP, FPD, tempi dei singoli battiti e note dell'analista). Metodo: sviluppo su Exp 5/8/10, **test cieco su Exp 6/7/9 eseguito una sola volta**; split bilanciato per qualità (13–14 % non analizzabili, 52–59 % grado C/D/F per metà). Risultati nel README (changelog v3.5.0). Tre modifiche, tutte decise sul solo set di sviluppo:
+Primo confronto con una misura manuale indipendente su un dataset interno (GG: 179 CSV da 60 s, 313 elettrodi con BP, FPD, tempi dei singoli battiti e note dell'analista). Metodo: sviluppo su Exp 5/8/10, **test cieco su Exp 6/7/9 eseguito una sola volta**; split bilanciato per qualità (13–14 % non analizzabili, 52–59 % grado C/D/F per metà). Risultati nel README (changelog v3.5.1). Tre modifiche, tutte decise sul solo set di sviluppo:
 
 - **Verdetto di analizzabilità** (`quality_control.assess_analysability`, `QualityConfig.enable_analysability_verdict`): (a) SNR mediana dei battiti rilevati rispetto al noise floor della registrazione < 1.6; (b) meno di 16 battiti con CV RR > 40 %. In entrambi i casi: grado F, `summary['not_analysable']=True` con motivo, FPD/FPDc → NaN, `fpd_reliable=False`, classificazione aritmica "Not analysable", esclusione dalla normalizzazione come farmaco e come baseline. Il conteggio dei battiti resta per audit. Sul test cieco: 12/13 non analizzabili riconosciuti; 19 elettrodi misurati dall'analista marcati, sui quali la v3.4.1 sbagliava in 18.
 - **Accettazione del matched filter** (`mf_count_ratio` (0.7,1.5) → (0.3,2.0)): sulle registrazioni rumorose il detector a derivata sovra-rileva 2–3×; nei 97 disaccordi del set di sviluppo il matched filter era più vicino all'analista in 61.
