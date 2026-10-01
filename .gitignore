@@ -44,3 +44,22 @@ cdisc_send_output/
 
 # Git bundles (transfer artifacts)
 *.bundle
+
+# ── Added Oct 2026 (repo hygiene) ──
+# Stale copy of .git made to work around a lock on the mounted filesystem.
+.git-tmp-copy/
+# Local study folders and raw datasets (22 GB) — never in the repo.
+studio_MR/
+Experiments-Toxicol.Science/
+# Scratch diagnostics (PNG plots, forks of core modules used for one-off
+# investigations). Anything worth keeping goes under docs/ or tests/.
+diagnostics/
+send_export/
+# Loose data/plots at repo root
+/*.csv
+/*.png
+# pytest
+.pytest_cache/
+pytest-cache-files-*/
+# Executed one-off commit scripts
+SPRINT*_COMMIT_BLOCK.sh

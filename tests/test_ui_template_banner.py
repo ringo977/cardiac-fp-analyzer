@@ -169,3 +169,28 @@ class TestBannerConstants:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+class TestCorePolicyIsSingleSource:
+    """Both UIs must read the representativity policy from the core module."""
+
+    def test_constants_are_the_core_objects(self):
+        from ui import display as display_mod
+
+        from cardiac_fp_analyzer import template_quality as tq
+        assert display_mod._TEMPLATE_RISKY_RHYTHM_TYPES is tq.TEMPLATE_RISKY_RHYTHM_TYPES
+        assert display_mod._FPD_CV_TEMPLATE_WARN == tq.FPD_CV_TEMPLATE_WARN
+
+    def test_predicate_triggers(self):
+        from cardiac_fp_analyzer.template_quality import template_representativity
+        ok = {'detection_info': {'rhythm_classification': {'rhythm_type': 'regular'}},
+              'summary': {'fpd_ms_mean': 500.0, 'fpd_ms_std': 20.0}}
+        assert template_representativity(ok)['representative']
+        risky = {'detection_info': {'rhythm_classification': {'rhythm_type': 'alternans_2_to_1'}},
+                 'summary': {'fpd_ms_mean': 500.0, 'fpd_ms_std': 20.0}}
+        r = template_representativity(risky)
+        assert not r['representative'] and r['risky_rhythm'] and not r['dispersive_fpd']
+        disp = {'detection_info': {}, 'summary': {'fpd_ms_mean': 500.0, 'fpd_ms_std': 150.0}}
+        d = template_representativity(disp)
+        assert not d['representative'] and d['dispersive_fpd']
+        assert template_representativity(None)['representative']

@@ -12,6 +12,11 @@ import streamlit as st
 
 from cardiac_fp_analyzer.arrhythmia import compute_template
 from cardiac_fp_analyzer.config import AnalysisConfig
+from cardiac_fp_analyzer.template_quality import (
+    FPD_CV_TEMPLATE_WARN,
+    TEMPLATE_RISKY_RHYTHM_TYPES,
+    template_representativity,
+)
 from ui.helpers import amplitude_scale, reanalyze_with_modified_beats
 from ui.i18n import T
 
@@ -270,23 +275,10 @@ def plot_signal(result, key_suffix=""):
                 st.rerun()
 
 
-# Rhythm types that make a single averaged template a poor summary of the
-# underlying beats.  ``chaotic`` / ``ambiguous`` already carry that meaning;
-# ``alternans_2_to_1`` and ``trimodal`` have multiple morphological families
-# that should not be collapsed into one template.
-_TEMPLATE_RISKY_RHYTHM_TYPES = frozenset({
-    'chaotic',
-    'ambiguous',
-    'alternans_2_to_1',
-    'trimodal',
-})
-
-# FPD-dispersion threshold above which the T-wave of individual beats falls
-# at wildly different offsets relative to the depolarisation spike, so
-# point-wise aggregation (mean *or* median) cancels them.  20 % is a
-# conservative cut: below this, visual T-wave alignment in the overlay is
-# preserved on the real-signal fixtures we've tested.
-_FPD_CV_TEMPLATE_WARN = 0.20
+# Template-representativity policy lives in the core so both UIs agree.
+# Module-level aliases kept for tests/back-compat.
+_TEMPLATE_RISKY_RHYTHM_TYPES = TEMPLATE_RISKY_RHYTHM_TYPES
+_FPD_CV_TEMPLATE_WARN = FPD_CV_TEMPLATE_WARN
 
 
 def _render_template_representativity_banner(result):
@@ -303,16 +295,10 @@ def _render_template_representativity_banner(result):
     Silent (no banner) when the rhythm is regular and FPD dispersion is
     low, which is the common case.
     """
-    rc = (result.get('detection_info') or {}).get('rhythm_classification') or {}
-    rhythm_type = str(rc.get('rhythm_type') or '')
-    summary = result.get('summary') or {}
-    fpd_mean = float(summary.get('fpd_ms_mean', 0) or 0.0)
-    fpd_std = float(summary.get('fpd_ms_std', 0) or 0.0)
-    fpd_cv = (fpd_std / fpd_mean) if fpd_mean > 0 else 0.0
-
-    risky_rhythm = rhythm_type in _TEMPLATE_RISKY_RHYTHM_TYPES
-    dispersive_fpd = fpd_cv > _FPD_CV_TEMPLATE_WARN
-    if not (risky_rhythm or dispersive_fpd):
+    tq = template_representativity(result)
+    rhythm_type, fpd_cv = tq['rhythm_type'], tq['fpd_cv']
+    risky_rhythm, dispersive_fpd = tq['risky_rhythm'], tq['dispersive_fpd']
+    if tq['representative']:
         return
 
     reasons: list[str] = []

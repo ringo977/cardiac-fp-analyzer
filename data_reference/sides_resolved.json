@@ -1,0 +1,350 @@
+{
+ "_note": "Lato/elettrodo usato dagli autori (sx=el1, dx=el2), dedotto dalla densita numerica dei blocchi RR-array grezzi sx/dx negli Excel di riferimento. Regola: dominante se un blocco ha densita >=1.5x; both se quasi pari (<1.5x, solo i 2 DMSO); none se entrambi vuoti. CORREGGE il bug default-sx di ground_truth.json.",
+ "_validazione": "Test diretto su 2 conflitti (gt=sx vs resolver=dx): Exp7 ChipE (el2 FPD576 vs autori684, no_repol 4% vs 9%) e Exp5 ChipA ch3 ranolazine (el2 RR1501/FPD615 vs autori RR1462/QT609, no_repol 0%). Entrambi confermano dx = resolver, non sx = ground_truth.",
+ "_tally": {
+  "both": 2,
+  "none": 5,
+  "dx": 37,
+  "sx": 23
+ },
+ "_total": 67,
+ "_cross_check_gt": "8 conflitti con le etichette certe di ground_truth, TUTTI gt=sx->resolver=dx (mai il contrario) = firma del bug default-sx. Agree 15/23.",
+ "_da_rifinire": "nessuna urgenza: soglia both<1.5x da validare oltre i DMSO se emergono altri casi quasi-pari. Verificare eventuale script originale di Marco.",
+ "microtissues": {
+  "Total Results Drugs Exp3_Accelera_day7_iPSC.xlsx::DMSO": {
+   "side": "both",
+   "sx_cells": 504,
+   "dx_cells": 504
+  },
+  "Total Results Drugs Exp3_Accelera_day7_iPSC.xlsx::Aspirin": {
+   "side": "none",
+   "sx_cells": 0,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp3_Accelera_day7_iPSC.xlsx::Sotalol": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 118
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC.xlsx::Exp_3_DMSO_day6_chip1": {
+   "side": "dx",
+   "sx_cells": 10,
+   "dx_cells": 269
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC.xlsx::Exp_3_DMSO_day7_chip1stInj": {
+   "side": "dx",
+   "sx_cells": 10,
+   "dx_cells": 269
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC.xlsx::Exp3_Sotalol_day7_chip1": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 102
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC.xlsx::Exp3_Sotalol_day7_chip2": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 102
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC.xlsx::Exp3_TERFE_day6_chip1": {
+   "side": "dx",
+   "sx_cells": 10,
+   "dx_cells": 269
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC.xlsx::Exp3_TERFE_day7_chip2": {
+   "side": "dx",
+   "sx_cells": 10,
+   "dx_cells": 269
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC.xlsx::Exp3_VERAPAMIL_day7_chip1inj": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 98
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC.xlsx::Exp3_VERAPAMIL_day7_chip2": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 98
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC.xlsx::Exp3_Sotalol_day8_chipB": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 172
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC.xlsx::Exp3_VERAPAMIL_day8_A": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 172
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC.xlsx::Exp3_VERAPAMIL_day8_B": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 98
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC.xlsx::Exp3_day6_chiap2_Aspirine": {
+   "side": "none",
+   "sx_cells": 0,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC.xlsx::Exp3_day8_chiapA_Aspirine": {
+   "side": "sx",
+   "sx_cells": 254,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC_TERMIS.xlsx::Exp_3_DMSO_day7_chip1stInj": {
+   "side": "dx",
+   "sx_cells": 10,
+   "dx_cells": 269
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC_TERMIS.xlsx::Exp3_TERFE_day7_chip2": {
+   "side": "dx",
+   "sx_cells": 10,
+   "dx_cells": 269
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC_TERMIS.xlsx::Exp3_Sotalol_day8_chipB": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 172
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC_TERMIS.xlsx::Exp3_VERAPAMIL_day8_B": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 98
+  },
+  "Total Results Drugs Exp3_Accelera_iPSC_TERMIS.xlsx::Exp3_chiapA_Aspirine": {
+   "side": "none",
+   "sx_cells": 0,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp5_Accelera_iPSC.xlsx::Exp5_ChipB_ch1_RANOLAZINE": {
+   "side": "dx",
+   "sx_cells": 134,
+   "dx_cells": 356
+  },
+  "Total Results Drugs Exp5_Accelera_iPSC.xlsx::Exp5_ChipB_ch2_TERFE": {
+   "side": "sx",
+   "sx_cells": 755,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp5_Accelera_iPSC.xlsx::Exp5_ChipB_ch3_QUINIDINE": {
+   "side": "dx",
+   "sx_cells": 2,
+   "dx_cells": 693
+  },
+  "Total Results Drugs Exp5_Accelera_iPSC.xlsx::Exp5_ChipA_ch1_TERFE": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 742
+  },
+  "Total Results Drugs Exp5_Accelera_iPSC.xlsx::Exp5_ChipA_ch2_QUINIDINE": {
+   "side": "dx",
+   "sx_cells": 2,
+   "dx_cells": 626
+  },
+  "Total Results Drugs Exp5_Accelera_iPSC.xlsx::Exp5_ChipA_ch3_RANOLAZINE": {
+   "side": "dx",
+   "sx_cells": 139,
+   "dx_cells": 625
+  },
+  "Total Results Drugs Exp5_Accelera_iPSC.xlsx::Exp5_ChipC_ch1_CISA": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 303
+  },
+  "Exp6_results_drug_Accelera.xlsx::Exp6_ChipB_Ch3_A_mean curve": {
+   "side": "dx",
+   "sx_cells": 2,
+   "dx_cells": 250
+  },
+  "Exp6_results_drug_Accelera.xlsx::Exp6_ChipB_Ch3_A_manual": {
+   "side": "none",
+   "sx_cells": 2,
+   "dx_cells": 0
+  },
+  "Exp6_results_drug_Accelera.xlsx::EXP6_ChipB_Ch2": {
+   "side": "sx",
+   "sx_cells": 606,
+   "dx_cells": 0
+  },
+  "Exp6_results_drug_Accelera.xlsx::Exp6_ChipC_Ch1_TERFE": {
+   "side": "sx",
+   "sx_cells": 755,
+   "dx_cells": 0
+  },
+  "Exp6_results_drug_Accelera.xlsx::EXP6_ChipC_Ch2_CIS": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 504
+  },
+  "Exp6_results_drug_Accelera.xlsx::EXP6_ChipD_Ch3_CIS": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 504
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC.xlsx::Exp7_ChipE_ch1_DOFETILIDE ( (3)": {
+   "side": "dx",
+   "sx_cells": 136,
+   "dx_cells": 255
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC.xlsx::Exp7_ChipE_ch1_DOFETILIDE (2)": {
+   "side": "dx",
+   "sx_cells": 117,
+   "dx_cells": 269
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC.xlsx::Exp7_ChipE_ch2_NIFEDIPINE": {
+   "side": "dx",
+   "sx_cells": 126,
+   "dx_cells": 243
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC.xlsx::Exp7_ChipE_ch2_NIFEDIPINE_new": {
+   "side": "dx",
+   "sx_cells": 197,
+   "dx_cells": 411
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC.xlsx::Exp7_ChipB_ch3_NIFEDIPINE": {
+   "side": "dx",
+   "sx_cells": 126,
+   "dx_cells": 460
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC.xlsx::Exp7_ChipB_ch1_MEXILETINE": {
+   "side": "sx",
+   "sx_cells": 153,
+   "dx_cells": 76
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC_NEW.xlsx::Exp7_Day6_ChipE_Ch2_NIFE": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 641
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC_NEW.xlsx::Exp7_Day6_ChipE_Ch3_MEXI": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 755
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC_NEW.xlsx::Exp7_Day7_ChipA_Ch1_NIFE": {
+   "side": "sx",
+   "sx_cells": 443,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC_NEW.xlsx::Exp7_Day7_ChipA_Ch2_MEXI": {
+   "side": "sx",
+   "sx_cells": 696,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC_NEW.xlsx::Exp7_Day7_ChipB_Ch1_Mexiletine": {
+   "side": "sx",
+   "sx_cells": 153,
+   "dx_cells": 76
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC_NEW.xlsx::Exp7_day7_ChipB_Ch3_Nifedipine": {
+   "side": "dx",
+   "sx_cells": 126,
+   "dx_cells": 539
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC_NEW.xlsx::Exp7_Day8_ChipC_Ch1_ALFUSOZINE": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 582
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC_NEW.xlsx::Exp7_Day8_ChipC_Ch3_MEXI": {
+   "side": "sx",
+   "sx_cells": 393,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp7_Accelera_iPSC_NEW.xlsx::Exp7_Day8_ChipD_Ch2_ALFUSOZ (2)": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 748
+  },
+  "Total Results Drugs Exp8_Accelera_iPSC.xlsx::Exp8_ChipD_ch1_DOFETILIDE_old": {
+   "side": "sx",
+   "sx_cells": 140,
+   "dx_cells": 10
+  },
+  "Total Results Drugs Exp8_Accelera_iPSC.xlsx::Exp8_day6_chipD_Ch1_DOFETILIDE": {
+   "side": "sx",
+   "sx_cells": 658,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp8_Accelera_iPSC.xlsx::Exp8_day6_chipD_Ch2_ALFUSOZINE": {
+   "side": "sx",
+   "sx_cells": 755,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp8_Accelera_iPSC.xlsx::Exp8_day7_ChipA_Ch1_DOFE": {
+   "side": "sx",
+   "sx_cells": 639,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp8_Accelera_iPSC.xlsx::Exp8_day7_chipA_Ch2_MEXI": {
+   "side": "sx",
+   "sx_cells": 745,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp8_Accelera_iPSC.xlsx::Exp8_day7_chipB_Ch3_ALFUSOZ": {
+   "side": "sx",
+   "sx_cells": 539,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp8_Accelera_iPSC.xlsx::Exp8_day7_ChipE_Ch2_DOFETILIDE": {
+   "side": "sx",
+   "sx_cells": 692,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp8_Accelera_iPSC.xlsx::Exp8_day7_chipE_Ch3_NIFE": {
+   "side": "sx",
+   "sx_cells": 694,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp1_Accelera_day6_iPSC.xlsx::DMSO": {
+   "side": "both",
+   "sx_cells": 504,
+   "dx_cells": 504
+  },
+  "Total Results Drugs Exp1_Accelera_day6_iPSC.xlsx::Aspirin": {
+   "side": "none",
+   "sx_cells": 0,
+   "dx_cells": 0
+  },
+  "Total Results Drugs Exp1_Accelera_day6_iPSC.xlsx::Sotalol": {
+   "side": "dx",
+   "sx_cells": 0,
+   "dx_cells": 118
+  },
+  "EXP4_Results_Accelera.xlsx::Exp4_day7_Chip1_ch1_QUINIDINE": {
+   "side": "sx",
+   "sx_cells": 476,
+   "dx_cells": 0
+  },
+  "EXP4_Results_Accelera.xlsx::Exp4_day7_Chip1_ch2_RANOLAZINE": {
+   "side": "sx",
+   "sx_cells": 753,
+   "dx_cells": 0
+  },
+  "EXP4_Results_Accelera.xlsx::Exp4_Chip2_ch1_RANOLAZINE": {
+   "side": "sx",
+   "sx_cells": 140,
+   "dx_cells": 0
+  },
+  "EXP4_Results_Accelera.xlsx::Exp4_Chip2_ch2_TERFE": {
+   "side": "sx",
+   "sx_cells": 740,
+   "dx_cells": 0
+  },
+  "EXP4_Results_Accelera.xlsx::Exp4_day7_Chip3_ch1_terfe": {
+   "side": "sx",
+   "sx_cells": 754,
+   "dx_cells": 0
+  },
+  "EXP4_Results_Accelera.xlsx::Exp4_day7_Chip4_ch3_QUINIDINE": {
+   "side": "dx",
+   "sx_cells": 2,
+   "dx_cells": 279
+  },
+  "Exp4_Accelera_iPSC.xlsx::Chip3_ch2_rano": {
+   "side": "sx",
+   "sx_cells": 753,
+   "dx_cells": 0
+  }
+ }
+}

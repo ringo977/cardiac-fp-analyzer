@@ -50,6 +50,11 @@ from PySide6.QtWidgets import (
 )
 
 from cardiac_fp_analyzer.study import Group, find_group
+from cardiac_fp_analyzer.template_quality import (
+    FPD_CV_TEMPLATE_WARN,
+    TEMPLATE_RISKY_RHYTHM_TYPES,
+    template_representativity,
+)
 from pyside_app import theme
 from pyside_app.signal_viewer import SignalViewer
 from pyside_app.study_panel import StudyPanel
@@ -57,18 +62,10 @@ from pyside_app.study_panel import StudyPanel
 # ═══════════════════════════════════════════════════════════════════════
 #   Template representativity constants
 # ═══════════════════════════════════════════════════════════════════════
-# Mirrored from ui/display.py so the PySide port has the same triggers
-# as the Streamlit UI. Kept at module level (not inside the tab) because
-# they're policy constants and might be reused if we ever split the
-# representativity logic into its own helper.
-_TEMPLATE_RISKY_RHYTHM_TYPES = frozenset({
-    "chaotic",
-    "ambiguous",
-    "alternans_2_to_1",
-    "trimodal",
-})
-_FPD_CV_TEMPLATE_WARN = 0.20   # 20 % — beyond this, T-waves jitter enough
-#                              #        to cancel in the mean template.
+# Policy lives in cardiac_fp_analyzer.template_quality so both UIs agree;
+# module-level aliases kept for readability / back-compat.
+_TEMPLATE_RISKY_RHYTHM_TYPES = TEMPLATE_RISKY_RHYTHM_TYPES
+_FPD_CV_TEMPLATE_WARN = FPD_CV_TEMPLATE_WARN
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -976,22 +973,10 @@ class _BeatsTab(QWidget):
         if result is None:
             self._banner.setVisible(False)
             return
-        rc = (result.get("detection_info") or {}).get(
-            "rhythm_classification"
-        ) or {}
-        rhythm_type = str(rc.get("rhythm_type") or "")
-        summary = result.get("summary") or {}
-        try:
-            fpd_mean = float(summary.get("fpd_ms_mean", 0) or 0.0)
-            fpd_std = float(summary.get("fpd_ms_std", 0) or 0.0)
-        except (TypeError, ValueError):
-            fpd_mean = 0.0
-            fpd_std = 0.0
-        fpd_cv = (fpd_std / fpd_mean) if fpd_mean > 0 else 0.0
-
-        risky_rhythm = rhythm_type in _TEMPLATE_RISKY_RHYTHM_TYPES
-        dispersive_fpd = fpd_cv > _FPD_CV_TEMPLATE_WARN
-        if not (risky_rhythm or dispersive_fpd):
+        tq = template_representativity(result)
+        rhythm_type, fpd_cv = tq["rhythm_type"], tq["fpd_cv"]
+        risky_rhythm, dispersive_fpd = tq["risky_rhythm"], tq["dispersive_fpd"]
+        if tq["representative"]:
             self._banner.setVisible(False)
             return
 
