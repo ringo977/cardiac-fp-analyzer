@@ -441,6 +441,14 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
     bi, gate_info_1 = _reject_below_noise_floor(data, fs, bi, cfg=cfg, stage='post_detection')
     bt = bi / fs if len(bi) > 0 else np.array([], dtype=float)
 
+    # ── Minor-amplitude population (Oct 2026) ──
+    # Small deflections well above noise that are not part of the rhythm
+    # (incubator bursts, weaker asynchronous source). Runs before the
+    # cluster filter / classifier / validation so they see a clean set.
+    bi, minor_info = _reject_minor_amplitude_population(data, fs, bi, cfg=cfg)
+    bt = bi / fs if len(bi) > 0 else np.array([], dtype=float)
+    info['minor_population'] = minor_info
+
     # ── Amplitude-cluster filter (Sprint 2 #1) ──
     # Some signals show a strongly bimodal amplitude distribution that
     # bimodal_bp cannot fix (not strictly alternating) and morphology
@@ -619,6 +627,65 @@ def _reject_below_noise_floor(data, fs, bi, cfg=None, stage=''):
                     "SNR < %.2f (noise floor %.4g)", stage, rule, n_rej, n_in, threshold, nf)
     return bi[keep], {**diag, 'noise_gate': 'applied' if n_rej else 'none_rejected',
                       'n_kept': int(keep.sum()), 'n_rejected': n_rej}
+
+
+def _reject_minor_amplitude_population(data, fs, bi, cfg=None):
+    """Drop a secondary population of small deflections that is not part of
+    the rhythm. See ``BeatDetectionConfig.enable_minor_population_reject``.
+    Returns (bi_kept, info)."""
+    c = _get_bd_cfg(cfg)
+    bi = np.asarray(bi, dtype=int)
+    base = {'minor_pop': 'skipped', 'n_input': len(bi), 'n_kept': len(bi)}
+    if not getattr(c, 'enable_minor_population_reject', True):
+        return bi, {**base, 'minor_pop': 'disabled'}
+    min_big = int(getattr(c, 'minor_pop_min_big', 5))
+    if len(bi) < min_big + 3:
+        return bi, {**base, 'minor_pop': 'too_few'}
+    half = max(1, int(getattr(c, 'noise_floor_beat_half_window_ms', 20.0) / 1000.0 * fs))
+    n = len(data)
+    amp = np.array([np.ptp(data[max(0, i - half):min(n, i + half)]) for i in bi])
+    if np.any(amp <= 0):
+        return bi, {**base, 'minor_pop': 'zero_amp'}
+    # Otsu split on log-amplitude (maximise between-class variance)
+    v = np.sort(np.log(amp))
+    best_w, best_k = -1.0, -1
+    for k in range(2, len(v) - 2):
+        lo, hi = v[:k], v[k:]
+        w = len(lo) * len(hi) * (lo.mean() - hi.mean()) ** 2
+        if w > best_w:
+            best_w, best_k = w, k
+    if best_k < 0:
+        return bi, {**base, 'minor_pop': 'no_split'}
+    thr = float(np.exp(0.5 * (v[best_k - 1] + v[best_k])))
+    big = amp >= thr
+    n_big, n_small = int(big.sum()), int((~big).sum())
+    if n_big < min_big or n_small < 2:
+        return bi, {**base, 'minor_pop': 'no_split'}
+    ratio = float(np.median(amp[big]) / np.median(amp[~big]))
+    diag = {'n_input': len(bi), 'n_big': n_big, 'n_small': n_small, 'amp_ratio': round(ratio, 2)}
+    if ratio < float(getattr(c, 'minor_pop_ratio_min', 2.0)):
+        return bi, {**base, **diag, 'minor_pop': 'ratio_too_small'}
+    rr_all = np.diff(bi) / fs
+    rr_big = np.diff(bi[big]) / fs
+    cv_all = float(rr_all.std() / rr_all.mean()) if rr_all.mean() > 0 else np.inf
+    cv_big = float(rr_big.std() / rr_big.mean()) if len(rr_big) > 1 and rr_big.mean() > 0 else np.inf
+    diag.update(cv_all=round(cv_all, 3), cv_big=round(cv_big, 3))
+    # Alternans guard: small beats phase-locked inside big-big intervals
+    bb = bi[big]
+    ph = []
+    for s_ in bi[~big]:
+        j = int(np.searchsorted(bb, s_))
+        if 0 < j < len(bb):
+            ph.append((s_ - bb[j - 1]) / (bb[j] - bb[j - 1]))
+    ph = np.array(ph)
+    if (len(ph) >= 3 and float(np.std(ph)) < float(getattr(c, 'minor_pop_alternans_phase_std', 0.12))
+            and abs(len(ph) - len(bb)) <= 0.3 * len(bb)):
+        return bi, {**base, **diag, 'minor_pop': 'alternans_like', 'phase_std': round(float(np.std(ph)), 3)}
+    if not (cv_big <= float(getattr(c, 'minor_pop_cv_gain', 0.8)) * cv_all):
+        return bi, {**base, **diag, 'minor_pop': 'rhythm_not_improved'}
+    logger.info("Minor-amplitude population rejected: %d of %d beats (ratio %.1f, CV %.2f→%.2f)",
+                n_small, len(bi), ratio, cv_all, cv_big)
+    return bi[big], {**diag, 'minor_pop': 'applied', 'n_kept': n_big, 'n_rejected': n_small}
 
 
 def _matched_filter_refine(data, fs, bi, cfg=None):

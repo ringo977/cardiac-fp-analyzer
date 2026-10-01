@@ -138,6 +138,7 @@ class TestFilterOnBimodalSignal:
         # work on its own as an independent defence.
         cfg = BeatDetectionConfig()
         cfg.enable_noise_floor_gate = False
+        cfg.enable_minor_population_reject = False  # isolate the cluster filter
         idxs, times, info = detect_beats(sig, fs, cfg=cfg)
 
         # With the gate enabled the end result must be the same big cluster.
@@ -336,7 +337,8 @@ class TestConfigToggle:
 
         cfg = BeatDetectionConfig()
         cfg.enable_amplitude_cluster_filter = False
-        cfg.enable_noise_floor_gate = False  # isolate: gate would remove bumpettini too
+        cfg.enable_noise_floor_gate = False
+        cfg.enable_minor_population_reject = False  # isolate the cluster filter  # isolate: gate would remove bumpettini too
         idxs, _times, info = detect_beats(sig, fs, cfg=cfg)
 
         cinfo = info['amplitude_cluster']
@@ -356,7 +358,8 @@ class TestConfigToggle:
                                      big_amp=1.4, small_amp=0.15)
         cfg = BeatDetectionConfig()
         cfg.cluster_gap_ratio = 50.0  # much higher than the ~3.6× gap
-        cfg.enable_noise_floor_gate = False  # isolate the cluster filter
+        cfg.enable_noise_floor_gate = False
+        cfg.enable_minor_population_reject = False  # isolate the cluster filter  # isolate the cluster filter
         idxs, _times, info = detect_beats(sig, fs, cfg=cfg)
         cinfo = info['amplitude_cluster']
         assert cinfo['cluster_filter'] == 'unimodal'
@@ -376,7 +379,8 @@ class TestDiagnostics:
         sig, _ = make_bimodal_signal(fs=fs, duration_s=60.0)
         from cardiac_fp_analyzer.config import BeatDetectionConfig
         cfg = BeatDetectionConfig()
-        cfg.enable_noise_floor_gate = False  # isolate the cluster filter
+        cfg.enable_noise_floor_gate = False
+        cfg.enable_minor_population_reject = False  # isolate the cluster filter  # isolate the cluster filter
         _idxs, _times, info = detect_beats(sig, fs, cfg=cfg)
         c = info['amplitude_cluster']
         assert c['cluster_filter'] == 'applied'

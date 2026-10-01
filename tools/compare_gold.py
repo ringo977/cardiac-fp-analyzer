@@ -352,6 +352,22 @@ def main():
             rows.append(row)
 
     df = pd.DataFrame(rows)
+    # Several recordings can map to one gold entry (repeat acquisitions:
+    # _v2, _registrazione2, post_rec). The analyst's per-beat times belong
+    # to ONE of them; for the others, position metrics are meaningless.
+    # Keep beat-by-beat metrics only on the best-aligned recording per key
+    # (most matched beats); BP/FPD comparisons stay valid for all.
+    if 'beats_matched' in df.columns:
+        df['position_ref'] = 'single'
+        for key, g in df[df.matched_gold == True].groupby('gold_key'):  # noqa: E712
+            if len(g) > 1:
+                best = g.beats_matched.fillna(-1).idxmax()
+                for i in g.index:
+                    if i != best:
+                        df.loc[i, 'position_ref'] = 'other recording (positions not compared)'
+                        df.loc[i, ['beats_missed', 'beats_spurious', 'beats_matched', 'beat_offset_s']] = np.nan
+                    else:
+                        df.loc[i, 'position_ref'] = 'best of duplicates'
     out = gold_dir / 'comparison'
     out.mkdir(exist_ok=True)
     tag = f"_{args.tag}" if args.tag else ''

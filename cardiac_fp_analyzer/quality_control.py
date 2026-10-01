@@ -301,6 +301,19 @@ def assess_analysability(filtered, fs, beat_indices, cfg=None):
         out.update(not_analysable=True,
                    reason=f'median beat amplitude {snr_med:.2f}× the noise floor (< {thr}): '
                           f'no depolarisation pattern distinguishable from noise')
+        return out
+    # Rhythm criterion: too few and too irregular to characterise.
+    if len(bi) > 2:
+        rr = np.diff(bi) / fs
+        cv = float(np.std(rr) / np.mean(rr) * 100) if np.mean(rr) > 0 else np.nan
+        out['rr_cv_pct'] = round(cv, 1)
+        sparse_n = int(getattr(c, 'not_analysable_sparse_beats', 16))
+        sparse_cv = float(getattr(c, 'not_analysable_sparse_cv_pct', 40.0))
+        if len(bi) < sparse_n and cv > sparse_cv:
+            out.update(not_analysable=True,
+                       reason=f'only {len(bi)} depolarisations with RR CV {cv:.0f} % '
+                              f'(< {sparse_n} beats and > {sparse_cv:.0f} %): too sparse and '
+                              f'irregular to characterise')
     return out
 
 

@@ -268,7 +268,36 @@ class BeatDetectionConfig:
     mf_threshold_k: float = 3.5
     mf_seed_top_frac: float = 0.5
     mf_min_seeds: int = 10
-    mf_count_ratio: tuple = (0.7, 1.5)
+    # Acceptance window for the matched-filter count relative to the
+    # derivative detector's. Was (0.7, 1.5): on the GG gold
+    # standard (DEV split) the filter was rejected 97 times for finding too
+    # FEW beats and was closer to the analyst in 61 of them — on noisy
+    # recordings the derivative detector over-detects 2-3×. Widening the
+    # lower bound to 0.3 cut spurious beats from 58 % to 37 % of the
+    # analyst's count with missed beats unchanged (16.5 %).
+    mf_count_ratio: tuple = (0.3, 2.0)
+
+    # ── Minor-amplitude-population rejection (Oct 2026, GG) ──
+    # Recordings with a dominant population of large spikes and a second
+    # population of 2-5× smaller deflections (incubator noise bursts, a
+    # weaker asynchronous source) that the analyst does not count. Too far
+    # above the noise floor for the noise gate; no single sorted-amplitude
+    # jump for the cluster filter. Split the log-amplitudes in two (Otsu)
+    # and drop the small population only if ALL of:
+    #   median(big)/median(small) ≥ ``minor_pop_ratio_min``;
+    #   the big population alone has CV(RR) ≤ ``minor_pop_cv_gain`` × CV(RR)
+    #     of the union (removing the small ones makes the rhythm MORE
+    #     regular — true extra beats would make it less);
+    #   the small beats are not phase-locked at a fixed fraction of the
+    #     big-big interval with ~1:1 count (that is amplitude alternans,
+    #     real beats, kept).
+    # DEV split, combined with the wider MF acceptance: spurious 58 → 34 %,
+    # perfect electrodes 44 → 49, missed 17.3 → 16.7 %.
+    enable_minor_population_reject: bool = True
+    minor_pop_ratio_min: float = 2.5
+    minor_pop_cv_gain: float = 0.8
+    minor_pop_min_big: int = 5
+    minor_pop_alternans_phase_std: float = 0.12
 
     # ── Rhythm topology classifier (Sprint 2 #3) ──
     # Characterises the detected beats into one of:
@@ -542,9 +571,19 @@ class QualityConfig:
     # When it fires: QC grade F, FPD/FPDc set to NaN, fpd_reliable False,
     # arrhythmia class "Not analysable", excluded from normalisation both
     # as drug recording and as baseline. Beat counts are kept for audit.
+    # Second criterion — rhythm: the analyst also declares recordings "too
+    # irregular to analyse". After the detection fixes of Oct 2026 removed
+    # most noise detections, 8 analyst-NA recordings passed the SNR test;
+    # all had RR CV 45–93 %, most with < 16 beats in 60 s. Rule: fewer than
+    # ``not_analysable_sparse_beats`` detections AND RR CV above
+    # ``not_analysable_sparse_cv_pct`` → not analysable. DEV: catches 6 of
+    # those 8; flags 7 analysed-by-analyst recordings on which the pipeline
+    # was wrong in all 7 (BP ±10 % in 29 %, none with FPD ±20 %).
     enable_analysability_verdict: bool = True
     not_analysable_snr: float = 1.6
     not_analysable_min_beats: int = 3     # fewer detections → verdict by count, not SNR
+    not_analysable_sparse_beats: int = 16
+    not_analysable_sparse_cv_pct: float = 40.0
 
     # Rejection rate thresholds for grade downgrade
     max_rejection_rate: float = 0.40      # above → Grade D
