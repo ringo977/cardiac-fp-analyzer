@@ -19,7 +19,7 @@ Editing model (Phase 0, ADR-0001):
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable
 
 import numpy as np
 import pyqtgraph as pg
@@ -28,7 +28,6 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QMenu
 
 from . import theme
-
 
 # How close (in seconds) a click must be to an existing marker to be
 # treated as "on" that marker (i.e. the menu offers Remove instead of Add).
@@ -54,9 +53,9 @@ class SignalViewer(pg.PlotWidget):
         super().__init__()
         self._mode_getter = mode_getter
 
-        self._signal: Optional[np.ndarray] = None
-        self._raw: Optional[np.ndarray] = None
-        self._time: Optional[np.ndarray] = None
+        self._signal: np.ndarray | None = None
+        self._raw: np.ndarray | None = None
+        self._time: np.ndarray | None = None
         self._fs: float = 1000.0
         # Mutable arrays of sample indices into self._signal.
         self._beats: np.ndarray = np.array([], dtype=int)
@@ -181,7 +180,7 @@ class SignalViewer(pg.PlotWidget):
         """Copy of the current depol-beat sample indices."""
         return self._beats.copy()
 
-    def get_time_vector(self) -> Optional[np.ndarray]:
+    def get_time_vector(self) -> np.ndarray | None:
         """The currently loaded time vector, or ``None``."""
         return self._time
 
@@ -411,7 +410,7 @@ class SignalViewer(pg.PlotWidget):
 
     def _nearest_marker_i(
         self, arr: np.ndarray, x_click_s: float
-    ) -> Optional[int]:
+    ) -> int | None:
         """Index (into arr) of the marker nearest to x_click_s, or None
         if there are no markers or the nearest is outside the snap window.
         """
@@ -470,7 +469,7 @@ class SignalViewer(pg.PlotWidget):
     # ─── Low-level snap/dedupe helpers ────────────────────────────
     def _snap_to_local_extremum(
         self, x_click_s: float, use_abs: bool
-    ) -> Optional[int]:
+    ) -> int | None:
         """Find the sample index of the local extremum within ±window."""
         if self._signal is None or self._time is None:
             return None

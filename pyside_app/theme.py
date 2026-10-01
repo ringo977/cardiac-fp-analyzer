@@ -33,11 +33,11 @@ Design notes
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Callable, Iterable, Literal
+from typing import Callable, Literal
 
 from PySide6.QtCore import QObject, QSettings, Signal
-
 
 ThemeMode = Literal["dark", "light"]
 
