@@ -312,27 +312,20 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None,
                     best_sign = sign
 
     if best_pk is None:
-        # No peak found by find_peaks — try argmax as last resort,
-        # but still respect min FPD constraint.
-        #
-        # Bug guard: when min_pk_idx >= len(seg_det) we cannot add
-        # min_pk_idx to the argmax offset (would give an out-of-bounds
-        # index). See the matching guard in find_repolarization_per_beat.
-        if min_pk_idx < len(seg_det):
-            valid_region = seg_det[min_pk_idx:]
-            local_idx = int(np.argmax(np.abs(valid_region)))
-            best_pk = min_pk_idx + local_idx
-            best_sign = 1 if seg_det[best_pk] > 0 else -1
-            best_prom = np.abs(seg_det[best_pk])
-        elif len(seg_det) > 0:
-            # Min-FPD constraint past segment end: ignore it and argmax
-            # over the full segment.
-            best_pk = int(np.argmax(np.abs(seg_det)))
-            best_sign = 1 if seg_det[best_pk] > 0 else -1
-            best_prom = np.abs(seg_det[best_pk])
-        else:
-            # Degenerate (empty seg_det): nothing to search.
-            return None, 1, 0.0, 0.0, None, None
+        # No qualifying peak found by find_peaks in the search window →
+        # the repolarization (T-wave) is not measurable for this template.
+        # Return None instead of forcing a spurious FPD via argmax(|seg_det|).
+        # The old argmax fallback fabricated an FPD wherever the T-wave was
+        # flat/absent (e.g. slow-RR after-potential signals): it picked the
+        # largest excursion of the segment, which then passed the SNR gate
+        # and was reported as a normal FPD with noRepol≈0%. find_peaks with
+        # its prominence threshold IS the detectability test — if it finds
+        # nothing qualifying, there is nothing to measure.
+        # Reference: EFP Analyzer (Patel et al., Sci Rep 2025) — traces with
+        # non-detectable repolarization are excluded, not force-measured.
+        logger.debug("Template: no qualifying repolarization peak in window "
+                     "→ repolarization not measurable")
+        return None, 1, 0.0, 0.0, None, None
 
     # Defensive sanity: best_pk must be a valid index into seg_det by now.
     if best_pk < 0 or best_pk >= len(seg_det):
@@ -573,33 +566,16 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
                 best_sign = sign
 
     if best_idx is None:
-        # Fallback: argmax but respect min FPD.
-        #
-        # Bug guard: when min_pk_idx >= len(seg_det) (the minimum-FPD floor
-        # is past the end of the search segment — happens on very short
-        # templates or slow rhythms where min_fpd_pct_rr × RR exceeds the
-        # post-ms window), we must NOT add min_pk_idx to argmax() of the
-        # full segment, or best_idx ends up out-of-bounds and crashes the
-        # downstream seg_det[best_idx] access.
-        if min_pk_idx < len(seg_det):
-            valid_region = seg_det[min_pk_idx:]
-            best_idx = min_pk_idx + int(np.argmax(np.abs(valid_region)))
-        elif len(seg_det) > 0:
-            # Min-FPD constraint is beyond segment length: ignore the
-            # constraint and use the full segment argmax.
-            best_idx = int(np.argmax(np.abs(seg_det)))
-        else:
-            # Degenerate: empty segment — no repolarization to find.
-            return None, np.nan, None, None
-
-        # This branch selected the peak by ``argmax(|seg_det|)``, i.e. the
-        # largest excursion of *either* polarity, so the template sign is
-        # not necessarily the sign of what was picked.  Read the polarity
-        # off the selected sample.  ``np.sign`` returns 0.0 for an exactly
-        # zero sample, which would make apply_fpd_method degenerate, so
-        # fall back to the template sign in that case.
-        fallback_sign = float(np.sign(seg_det[best_idx]))
-        best_sign = fallback_sign if fallback_sign != 0 else template_repol_sign
+        # No qualifying repolarization peak found by find_peaks → the T-wave
+        # is not measurable for this beat. Return None instead of forcing a
+        # spurious FPD via argmax(|seg_det|). The old fallback picked the
+        # largest excursion of the segment (either polarity), which then
+        # passed the SNR gate and was reported as a normal per-beat FPD even
+        # on flat/absent T-waves. find_peaks with its prominence threshold is
+        # the detectability test — nothing qualifying means nothing to measure.
+        logger.debug("Per-beat: no qualifying repolarization peak in window "
+                     "→ repolarization not measurable")
+        return None, np.nan, None, None
 
     # Defensive sanity: any path that produced best_idx out-of-bounds
     # means the repolarization search is not reliable for this beat.
