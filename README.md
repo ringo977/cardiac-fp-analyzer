@@ -188,6 +188,8 @@ Dataset interno GG: 179 CSV, 313 elettrodi con misura manuale (BP, FPD, tempi de
 | Errore mediano BP / FPD | −8 % / −12 % → ≈ 0 | **−5 % / −6 % → ≈ 0** |
 | Grado A: BP / FPD entro ±10 % | 77 % / 58 % | **91 % / 69 %** |
 
+Il 2 ottobre l'analista ha corretto 5 blocchi del riferimento che il confronto aveva segnalato come incoerenti (FPD > RR); con il riferimento corretto e lo stesso codice, FPD entro ±20 % sale al 58 % (DEV) e 69 % (TEST), grado A ±10 % al 61 % (DEV). Dettagli in `docs/FPD_vs_gold_standard_2026-10.md`.
+
 Il verdetto "non analizzabile" marca anche elettrodi che l'analista ha misurato (23 % in entrambi gli split): su quelli il software v3.4.1 sbagliava in 54/55 (DEV) e 18/19 (TEST). Non è un falso allarme: è smettere di stampare numeri senza segnale dietro.
 
 - **Verdetto di analizzabilità** (`QualityConfig.enable_analysability_verdict`): SNR mediana dei battiti sul noise floor < 1.6, oppure < 16 battiti con CV RR > 40 % → grado F, FPD/FPDc non emessi, escluso dalla normalizzazione (anche come baseline)

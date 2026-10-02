@@ -27,6 +27,10 @@ Allargare la finestra di ricerca (`search_end_pct_rr` 0.70 → 0.90): nessun eff
 
 In 5 blocchi su 199 (Exp5 ×3, Exp7, Exp9) oltre metà dei battiti ha **FPD > RR**, impossibile per un singolo battito; `FPD − RR` dà valori plausibili (≈ 450–1 700 ms). È la firma di un `Rep. time` accoppiato al `Dep. time` del battito **precedente** (sfasamento di una riga nel foglio). Chiavi: (Exp9,G,2,baseline), (Exp7,E,3,dose 1), (Exp5,E,2,dose 3), (Exp5,D,3,baseline), (Exp5,C,3,dose 3). Su questi il software è probabilmente giusto e il riferimento no; vanno verificati dall'analista.
 
+### Esito (2 ottobre)
+
+L'analista ha ricontrollato: nei primi quattro blocchi mancava una ripolarizzazione (riga saltata → tutte le successive sfasate di un battito), aggiunta; nel quinto (Exp9 G ch2 baseline) ha rifatto la ricerca manuale dei picchi. Nessun altro valore è cambiato (verificato blocco per blocco). Con il riferimento corretto, stesso codice v3.5.1: DEV FPD entro ±10 % 43 → 45 %, entro ±20 % 56 → 58 %, grado A 59 → 61 %; TEST entro ±20 % 67 → 69 %. Sui cinque blocchi il software ora concorda in tre (−1 %, +5 %, +17 %); nei due restanti (grado B e D, detection povera) il torto è del software e resta nel conto.
+
 ## 4. Cosa farebbe la differenza
 
 Un selettore del candidato che usi informazione **tra battiti** e **sul ritmo**: il candidato giusto è quello la cui latenza è stabile da battito a battito e cade in una frazione plausibile dell'RR (0.3–0.7 in entrambi i riferimenti); prominenza e larghezza da sole non bastano. Va costruito e tarato su DEV, verificato su TEST — con il rischio esplicito di cucire un prior sulla fisiologia che il farmaco può spostare (l'FPD prolungato *è* la misura).
