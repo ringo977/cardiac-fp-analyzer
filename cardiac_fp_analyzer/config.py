@@ -952,6 +952,18 @@ class NormalizationConfig:
     # Turning this ON is recommended for anything reported externally.
     norm_require_fpd_reliable: bool = False   # OFF by default (opt-in)
 
+    # ── Near-cessation guard (Oct 2026) ──
+    # Fridericia divides FPD by RR^(1/3): with a beating period of tens of
+    # seconds (tissue almost stopped) the corrected FPD is meaningless — a
+    # cisapride recording at RR = 40 s gave %ΔFPDcF = +580 % on the Visone
+    # 2023 data and decided the drug call on its own. Above this period on
+    # the baseline or the drug recording the %ΔFPDcF is withheld and the
+    # reason recorded in normalization['fpdc_withheld']; BP and amplitude
+    # changes are still reported and the cessation override still sees the
+    # recording. 6000 ms = 10 beats/min, the same bound as
+    # InclusionConfig.bpm_plausible_min.
+    max_beat_period_for_fpdc_ms: float = 6000.0
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #   ARRHYTHMIA DETECTION

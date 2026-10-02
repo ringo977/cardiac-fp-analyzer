@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.6.0
+**Versione**: 3.7.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
@@ -169,6 +169,18 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.7.0 (Ottobre 2026) — abbinamento baseline e raggruppamento dei farmaci nel batch
+Correzioni emerse eseguendo il batch sul dataset Visone 2023. Riguardano `batch_analyze` (CLI, interfaccia Streamlit, report Excel/PDF, export CDISC), non l'interfaccia PySide. **Cambiano i numeri normalizzati** degli studi le cui cartelle non si chiamavano `EXP…`: conviene rianalizzarli.
+- **Tessuto = esperimento + giorno + chip + camera** (`loader.describe_recording`). L'esperimento viene letto dalle cartelle `Exp<N>` con qualunque combinazione di maiuscole e separatori, il giorno da `Day<N>`. Prima valevano solo le cartelle `EXP…` e il giorno veniva ignorato: sul dataset del paper 29 gruppi su 31 mescolavano esperimenti diversi, e le dosi venivano normalizzate sul baseline di un altro esperimento (per esempio −27 % invece di +10 %)
+- **Cartelle Accelera** riconosciute (`Chip 537/Ch2_…`, `Day8/529/Ch1_…`, `Chip 569/Ch2 Bepridil/…`). Prima quei file non si abbinavano a nessun baseline, senza alcun avviso
+- **Un elettrodo per tessuto** in modalità `auto`: prima i baseline, poi le dosi sull'elettrodo scelto per il loro baseline. Prima la serie dose-risposta mescolava el1 ed el2 in 39 registrazioni su 75
+- **Scelta del baseline**: quello nella stessa cartella, poi il miglior grado QC; il motivo resta in `normalization['pairing']`. L'abbinamento è indicizzato per percorso più elettrodo: due file omonimi in cartelle diverse si sovrascrivevano a vicenda
+- **Nomi dei farmaci canonici** in `classify_drug`: prima 8 farmaci diventavano 17, con esiti contraddittori. Washout e veicolo restano esclusi dalla decisione per farmaco
+- **Arresto**: la %ΔFPDcF non viene calcolata se il periodo di battito supera 6 s (`max_beat_period_for_fpdc_ms`). Una cisapride a RR = 40 s dava +580 %
+- **Nomi file**: concentrazione senza punto iniziale (`300 nM`) e numero senza unità separato dal nome del farmaco (`NIFEDIPINE_10`). I file con due tessuti, uno per elettrodo come in GG, restano non abbinati con il motivo esplicito
+- **CI**: action su Node 24 (`checkout@v7`, `setup-python@v7`) e runner fissato a `ubuntu-24.04`
+- **Verifica**: su Exp5 ed Exp8 del paper le variazioni prodotte dal batch coincidono con quelle calcolate abbinando a mano ogni tessuto (54 coppie, stesso elettrodo). Aggiunti 33 test
 
 ### v3.6.0 (Ottobre 2026) — selezione dell'onda di ripolarizzazione
 Calibrata sullo split di sviluppo del gold standard manuale, verificata una volta sul test tenuto da parte (Exp 6/7/9): **FPD entro ±10 % dal 48 % al 69 %** (grado A 69 → 84 %, B 41 → 59 %, C 20 → 50 %), errore mediano −1.3 % → −0.1 %. Corpus del paper invariato (errore medio 3.4 → 3.2 %). Dettagli in `docs/FPD_vs_gold_standard_2026-10.md`.

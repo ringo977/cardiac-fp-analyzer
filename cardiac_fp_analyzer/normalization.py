@@ -2,7 +2,7 @@
 normalization.py — Baseline normalization and TdP risk scoring.
 
 After batch analysis, pairs each drug recording with its baseline
-(same experiment + chip + channel) and computes:
+(same tissue: experiment + day + chip + chamber, same electrode) and computes:
   - %change in BP, FPDcF, AMP relative to baseline
   - TdP risk score based on FPDcF prolongation thresholds (ICH S7B)
 
@@ -20,11 +20,52 @@ TdP risk scoring (from Ando et al. 2017):
 """
 
 import logging
+import re
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# ─── Drug names ───
+# File names abbreviate drugs in many ways ('terfe', 'DOFE', 'Quinid',
+# 'MEXILITINE', 'Alfuso', 'NIFEDIPINE_10'). classify_drug grouped on the raw
+# string, so before Oct 2026 one drug could be called positive under one
+# spelling and negative under another (8 drugs became 17 on the Visone 2023
+# data). Prefixes are matched on the first word, longest first; prefixes that
+# could belong to another compound ('quin' → quinine) are deliberately absent.
+_DRUG_ALIASES = (
+    ('terfe', 'terfenadine'), ('quinid', 'quinidine'), ('dofe', 'dofetilide'),
+    ('alfu', 'alfuzosin'), ('mexi', 'mexiletine'), ('nife', 'nifedipine'),
+    ('rano', 'ranolazine'), ('cisa', 'cisapride'), ('sotal', 'sotalol'),
+    ('verap', 'verapamil'), ('aspir', 'aspirin'), ('bepri', 'bepridil'),
+    ('torem', 'toremifene'), ('chloro', 'chloroquine'), ('cloro', 'chloroquine'),
+    ('dmso', 'dmso'), ('vehicle', 'vehicle'),
+)
+VEHICLE_NAMES = frozenset({'dmso', 'vehicle'})
+
+
+def canonical_drug_name(raw):
+    """Canonical lower-case drug name: 'DOFE' → 'dofetilide',
+    'nifedipine 10' → 'nifedipine'. Unknown names are returned lower-cased
+    without a trailing separated number; codes such as 'Ti07' are kept."""
+    s = str(raw or '').strip().lower()
+    s = re.sub(r'[\s_-]+\d[\d._-]*$', '', s).strip()
+    if not s:
+        return ''
+    word = re.split(r'[\s_]+', s)[0]
+    for prefix, canon in sorted(_DRUG_ALIASES, key=lambda a: -len(a[0])):
+        if word.startswith(prefix):
+            return canon
+    return s
+
+
+def is_washout(result):
+    """Washout / recovery recordings are not a concentration of the drug."""
+    fi = result.get('file_info', {}) or {}
+    text = f"{fi.get('drug', '') or ''} {(result.get('metadata', {}) or {}).get('filename', '')}".lower()
+    return 'wash' in text or 'recovery' in text
 
 # ─── Thresholds (module-level defaults, overridden by NormalizationConfig) ───
 THRESHOLD_LOW = 10.0    # %FPDcF change ≥ 10%
@@ -41,13 +82,17 @@ def _get_norm_thresholds(cfg=None):
 
 def _get_base_key(result):
     """
-    Extract the base grouping key (experiment + chip + chamber) WITHOUT electrode.
-    E.g. chipA_ch1_terfe_300nM → "EXP 5/chipA_ch1"
+    Extract the base grouping key (experiment + day + chip + chamber) WITHOUT electrode.
+    E.g. Exp5/Day7/chipA_ch1_terfe_300nM → "exp5/day7/chipA_ch1"
 
-    Used for fallback pairing when auto-selection picks different electrodes
-    for baseline vs drug recordings on the same chip+chamber.
+    Results produced by analyze_single_file carry ``file_info['tissue']``
+    (loader.describe_recording), which is used as is. Results built by
+    hand or by older versions fall back to experiment + chip + chamber
+    from the file name, as before.
     """
     fi = result.get('file_info', {})
+    if fi.get('tissue'):
+        return fi['tissue']
     exp = fi.get('experiment', '')
     chip = fi.get('chip', '')
     channel_label = fi.get('channel_label', '')
@@ -102,51 +147,62 @@ def _is_control(result):
     return drug.startswith('ctrl') or drug.startswith('ctr')
 
 
-def pair_with_baselines(results_list):
+def recording_key(result):
+    """Unique key of one analysed recording: file path + electrode.
+
+    Pairing used to be keyed by the file *stem*, so two recordings with the
+    same name in different folders ('ChipE/chipE_ch1_baseline' and
+    'ChipE/new baseline/chipE_ch1_baseline'), or the el1 and el2 analyses
+    of one file in 'both' mode, overwrote each other's baseline.
+    """
+    md = result.get('metadata', {}) or {}
+    fi = result.get('file_info', {}) or {}
+    return f"{md.get('filepath') or md.get('filename', '')}#{fi.get('analyzed_channel', '')}"
+
+
+def _folder(result):
+    fp = (result.get('metadata', {}) or {}).get('filepath')
+    return str(Path(fp).parent) if fp else None
+
+
+def pair_with_baselines(results_list, details=None):
     """
     Pair each drug recording with its baseline.
 
-    Groups results by experiment + chip + chamber + electrode, finds the
-    baseline in each group, and pairs drug recordings with it.
+    Groups results by tissue (experiment + day + chip + chamber) and
+    electrode. Among the baselines of the tissue, a recording is paired
+    with the one in its own folder; if there are several, or none in its
+    folder, with the best QC grade (then the file name). Baselines the
+    analysability verdict rejected are never used. If the chosen baseline
+    failed the inclusion criteria the recording is left unpaired.
 
-    **Fallback**: when auto-selection picks a different electrode for the
-    baseline and the drug recording (e.g. baseline on el2, drug on el1
-    because the CSV has identical columns), the electrode-specific group
-    will lack a baseline.  In that case we fall back to the same
-    chip+chamber *without* electrode matching and use the best available
-    baseline from any electrode.
+    **Fallback**: when the electrode-specific group has no baseline (e.g.
+    an explicit el1/el2 run where the baseline was analysed on the other
+    electrode), the same tissue on any electrode is used, and the pairing
+    record says so. In 'auto' batch mode every recording of a tissue is
+    analysed on the same electrode, so this does not arise.
 
-    Returns a dict: filename → baseline_result (or None if no baseline found).
+    Files whose name carries two tissues ('…chipC_ch1_chipA_ch1…') are not
+    paired: each electrode is a different microtissue.
+
+    Returns a dict: recording_key(result) → baseline_result (or None).
+    When ``details`` is a dict it is filled with recording_key →
+    {'baseline_file', 'reason', 'candidates'}.
     """
-    # ── Primary grouping (with electrode) ──
     groups = defaultdict(list)
-    for r in results_list:
-        key = _get_group_key(r)
-        groups[key].append(r)
-
-    # ── Secondary grouping (without electrode) for fallback ──
     base_groups = defaultdict(list)
     for r in results_list:
-        bkey = _get_base_key(r)
-        base_groups[bkey].append(r)
+        groups[_get_group_key(r)].append(r)
+        base_groups[_get_base_key(r)].append(r)
 
-    def _pick_best_baseline(baselines):
-        """Select the best baseline from a list, preferring better QC grade.
+    grade_order = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'F': 4}
 
-        Baselines the analysability verdict rejected are never used: a
-        %Δ against a signal that is noise has no meaning.
-        """
-        usable = [b for b in baselines
-                  if not (b.get('summary') or {}).get('not_analysable', False)]
-        baselines = usable if usable else []
-        if not baselines:
-            return None
-        if len(baselines) == 1:
-            return baselines[0]
-        grade_order = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'F': 4}
-        return min(baselines,
-                   key=lambda r: grade_order.get(
-                       r.get('qc_report', type('', (), {'grade': 'F'})()).grade, 5))
+    def _grade(r):
+        return grade_order.get(getattr(r.get('qc_report'), 'grade', 'F'), 5)
+
+    def _usable(baselines):
+        return [b for b in baselines
+                if not (b.get('summary') or {}).get('not_analysable', False)]
 
     def _find_baseline(group_results):
         """Find baselines in a group, falling back to controls."""
@@ -157,32 +213,51 @@ def pair_with_baselines(results_list):
                 baselines = controls[:1]
         return baselines
 
-    # ── Build baseline map ──
+    def _choose(r, candidates):
+        cands = _usable(candidates)
+        if not cands:
+            return None, ('no baseline for this tissue' if not candidates
+                          else 'baseline not analysable')
+        here = _folder(r)
+        same = [b for b in cands if here is not None and _folder(b) == here]
+        pool = same or cands
+        best = min(pool, key=lambda b: (_grade(b), (b.get('metadata', {}) or {}).get('filename', '')))
+        why = 'baseline in the same folder' if same else 'baseline in another folder of the same tissue'
+        if len(pool) > 1:
+            why += f', best QC grade of {len(pool)}'
+        return best, why
+
     baseline_map = {}
-
     for key, group_results in groups.items():
-        baselines = _find_baseline(group_results)
-        best_bl = _pick_best_baseline(baselines)
-
-        # Fallback: no baseline in electrode-specific group → search base group
-        if best_bl is None:
-            bkey = _get_base_key(group_results[0])
-            all_in_base = base_groups.get(bkey, [])
-            baselines_fallback = _find_baseline(all_in_base)
-            best_bl = _pick_best_baseline(baselines_fallback)
-
-        # Check if baseline passes inclusion criteria
-        bl_passed = True
-        if best_bl is not None:
-            bl_inclusion = best_bl.get('inclusion', {})
-            bl_passed = bl_inclusion.get('passed', True)
+        candidates = _find_baseline(group_results)
+        other_electrode = False
+        if not _usable(candidates):
+            fallback = _find_baseline(base_groups.get(_get_base_key(group_results[0]), []))
+            if _usable(fallback):
+                candidates, other_electrode = fallback, True
 
         for r in group_results:
-            fname = r.get('metadata', {}).get('filename', '')
-            if _is_baseline(r) or _is_control(r) or not bl_passed or best_bl is None:
-                baseline_map[fname] = None
+            rk = recording_key(r)
+            fi = r.get('file_info', {}) or {}
+            if _is_baseline(r) or _is_control(r):
+                baseline_map[rk] = None
+                continue
+            if fi.get('dual_tissue'):
+                bl, why = None, 'two tissues in one file (one per electrode): not paired automatically'
             else:
-                baseline_map[fname] = best_bl
+                bl, why = _choose(r, candidates)
+                if bl is not None and not (bl.get('inclusion', {}) or {}).get('passed', True):
+                    why = f"baseline failed inclusion ({(bl.get('inclusion', {}) or {}).get('reason', '')})"
+                    bl = None
+                elif bl is not None and other_electrode:
+                    why += ' (baseline analysed on the other electrode)'
+            baseline_map[rk] = bl
+            if details is not None:
+                details[rk] = {
+                    'baseline_file': (bl.get('metadata', {}) or {}).get('filename', '') if bl is not None else '',
+                    'reason': why,
+                    'candidates': [(b.get('metadata', {}) or {}).get('filename', '') for b in candidates],
+                }
 
     return baseline_map
 
@@ -219,6 +294,9 @@ def compute_normalized_parameters(result, baseline_result, cfg=None):
         'baseline_fpd_reliable': True,
         'drug_fpd_reliable': True,
         'fpd_reliable': True,
+        # Why %ΔFPDcF was not computed although both recordings exist
+        # (near cessation, see max_beat_period_for_fpdc_ms); '' otherwise.
+        'fpdc_withheld': '',
     }
 
     if baseline_result is None:
@@ -270,10 +348,24 @@ def compute_normalized_parameters(result, baseline_result, cfg=None):
         if dr_bp and not np.isnan(dr_bp):
             norm['pct_bp_change'] = (dr_bp - bl_bp) / bl_bp * 100
 
+    # Near-cessation guard: Fridericia divides FPD by RR^(1/3), so on a
+    # tissue that has almost stopped (beating period of tens of seconds) the
+    # corrected FPD is meaningless — +580 % for a cisapride recording at
+    # RR = 40 s on the Visone 2023 data. BP and amplitude changes are kept.
+    limit = getattr(cfg, 'max_beat_period_for_fpdc_ms', 6000.0) if cfg is not None else 6000.0
+    slow = []
+    for side, s in (('baseline', bl_summary), ('drug', dr_summary)):
+        bp = s.get('beat_period_ms_median', s.get('beat_period_ms_mean'))
+        if bp is not None and not np.isnan(bp) and bp > limit:
+            slow.append(f"{side} {bp / 1000:.1f} s")
+    if slow:
+        norm['fpdc_withheld'] = (f"beating period above {limit / 1000:g} s ({', '.join(slow)}): "
+                                 f"near cessation, FPDc not compared")
+
     # FPDcF change (the key metric for QT prolongation)
     if bl_fpdc and not np.isnan(bl_fpdc) and bl_fpdc > 0:
         norm['baseline_fpdc_ms'] = bl_fpdc
-        if dr_fpdc and not np.isnan(dr_fpdc):
+        if not slow and dr_fpdc and not np.isnan(dr_fpdc):
             pct = (dr_fpdc - bl_fpdc) / bl_fpdc * 100
             norm['pct_fpdc_change'] = pct
 
@@ -396,8 +488,10 @@ def classify_drug(results_list, cfg=None):
     n_fpd_excluded = 0
     n_na_excluded = 0
     for r in results_list:
-        if _is_baseline(r) or _is_control(r):
+        if _is_baseline(r) or _is_control(r) or is_washout(r):
             continue
+        if canonical_drug_name((r.get('file_info', {}) or {}).get('drug')) in VEHICLE_NAMES:
+            continue   # vehicle: %Δ kept in the normalisation table, not a drug call
         norm = r.get('normalization', {})
         if not norm.get('has_baseline'):
             continue
@@ -412,7 +506,7 @@ def classify_drug(results_list, cfg=None):
             continue
 
         fi = r.get('file_info', {})
-        drug = str(fi.get('drug', '') or '').lower()
+        drug = canonical_drug_name(fi.get('drug'))
         conc = fi.get('concentration', '')
         pct = norm.get('pct_fpdc_change', np.nan)
 
@@ -472,11 +566,11 @@ def classify_drug(results_list, cfg=None):
 
     if enable_cess:
         for r in results_list:
-            if _is_baseline(r) or _is_control(r):
+            if _is_baseline(r) or _is_control(r) or is_washout(r):
                 continue
             fi = r.get('file_info', {})
-            drug = str(fi.get('drug', '') or '').lower()
-            if not drug:
+            drug = canonical_drug_name(fi.get('drug'))
+            if not drug or drug in VEHICLE_NAMES:
                 continue
 
             # Check cessation
@@ -586,7 +680,8 @@ def normalize_all_results(results_list, cfg=None):
     Runs drug-level classification and adds 'drug_classification' to each drug result.
     Returns the modified results_list.
     """
-    baseline_map = pair_with_baselines(results_list)
+    pairing = {}
+    baseline_map = pair_with_baselines(results_list, details=pairing)
 
     # Lazy import to avoid circular dependency
     try:
@@ -599,8 +694,8 @@ def normalize_all_results(results_list, cfg=None):
         compute_morphology_change_score = None
 
     for r in results_list:
-        fname = r.get('metadata', {}).get('filename', '')
-        bl = baseline_map.get(fname)
+        rk = recording_key(r)
+        bl = baseline_map.get(rk)
 
         if bl is not None:
             r['normalization'] = compute_normalized_parameters(r, bl, cfg=cfg)
@@ -639,7 +734,10 @@ def normalize_all_results(results_list, cfg=None):
                 'exceeds_HIGH': False,
                 'tdp_score': 0,
                 'spectral_change_score': np.nan,
+                'fpdc_withheld': '',
             }
+        if rk in pairing:
+            r['normalization']['pairing'] = pairing[rk]
 
     # Drug-level classification
     drug_cls = classify_drug(results_list, cfg=cfg)
@@ -647,8 +745,8 @@ def normalize_all_results(results_list, cfg=None):
     # Annotate each result with its drug classification
     for r in results_list:
         fi = r.get('file_info', {})
-        drug = str(fi.get('drug', '') or '').lower()
-        if drug in drug_cls:
+        drug = canonical_drug_name(fi.get('drug'))
+        if drug in drug_cls and not is_washout(r):
             r['normalization']['drug_classification'] = drug_cls[drug]
 
     return results_list

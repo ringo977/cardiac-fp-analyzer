@@ -21,7 +21,7 @@ Modules:
   overrides       — Sidecar .overrides.json for manual beat corrections
 """
 
-__version__ = '3.6.0'
+__version__ = '3.7.0'
 
 # ── Package-level logger ──
 # Usage in submodules:  import logging; logger = logging.getLogger(__name__)

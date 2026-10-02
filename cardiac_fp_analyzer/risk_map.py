@@ -34,28 +34,14 @@ matplotlib.use('Agg')
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 
-# ── Drug-name normalisation (same aliases used across the pipeline) ────
-
-_DRUG_ALIASES: dict[str, str] = {
-    'terfe': 'terfenadine',
-    'quinidine': 'quinidine',
-    'dofe': 'dofetilide', 'dofetilide': 'dofetilide',
-    'alfus': 'alfuzosin', 'alfuso': 'alfuzosin', 'alfu': 'alfuzosin',
-    'mexi': 'mexiletine', 'mexil': 'mexiletine', 'mexilitine': 'mexiletine',
-    'nifedipine': 'nifedipine', 'nife': 'nifedipine',
-    'ranolazine': 'ranolazine',
-}
-
+# ── Drug-name normalisation ────────────────────────────────────────────
+# One alias table for the whole pipeline (normalization.canonical_drug_name):
+# risk map, drug classification and CDISC export must agree on what a drug is.
 
 def _canonical_drug(raw: str) -> str:
     """Map raw drug name from filename to canonical name."""
-    raw_l = raw.lower().strip()
-    if raw_l in _DRUG_ALIASES:
-        return _DRUG_ALIASES[raw_l]
-    for prefix, canon in _DRUG_ALIASES.items():
-        if raw_l.startswith(prefix):
-            return canon
-    return raw_l
+    from .normalization import canonical_drug_name
+    return canonical_drug_name(raw)
 
 
 # ── Per-drug metric aggregation ────────────────────────────────────────

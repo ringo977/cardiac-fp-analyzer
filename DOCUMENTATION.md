@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.6.0
+**Versione**: 3.7.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -199,13 +199,26 @@ Legge i file CSV prodotti dal sistema Digilent WaveForms (Analog Discovery 2). I
 
 **Nota sulla nomenclatura (v3.5)**: nei nomi dei file, `ch1`/`ch2`/`ch3` indicano le *camere* (chamber) del chip. Le colonne del CSV, che rappresentano i due *elettrodi* di registrazione del Digilent, sono rinominate in `el1`/`el2` per evitare ambiguità.
 
-#### `parse_filename(filename)`
+#### `parse_filename(filename)` e `describe_recording(path)`
 
-Estrae informazioni strutturate dal nome del file. Convenzione: `chipX_chN_farmaco_concentrazione.csv`.
+`parse_filename` estrae dal nome del file farmaco, concentrazione e se si tratta di un baseline. `describe_recording` aggiunge l'identità del **tessuto** ricavata dalle cartelle: esperimento, giorno, chip e camera. La chiave `tissue` (per esempio `exp5/day7/chipA_ch1`) è quella su cui la normalizzazione abbina baseline e dosi.
 
-**Esempio**: `chipA_ch1_terfe_300nM.csv` → `{chip: 'A', channel: 1, drug: 'terfenadine', concentration: '300 nM', is_baseline: False}`
+| Convenzione | Esempio | Tessuto |
+|---|---|---|
+| tessuto nel nome | `Exp5/Day7/chipA/chipA_ch1_terfe_300nM.csv` | `exp5/day7/chipA_ch1` |
+| Accelera: chip nella cartella, camera come prefisso | `Exp12_Accelera/Day 7/Chip 537/Ch2_DMSO10-1_2000fs_1_3K.csv` | `exp12/day7/chip537_ch2` |
+| Accelera: chip come numero, camera in una cartella | `Day8/529/Ch1_…`, `Chip 569/Ch2 Bepridil/Ch2_…` | `…/chip529_ch1`, `…/chip569_ch2` |
+| due tessuti nello stesso file (uno per elettrodo) | `Exp5_chipC_ch1_chipA_ch1_baseline.csv` | nessuno: `dual_tissue`, non abbinato |
 
-**Razionale**: I nomi dei file codificano l'identità del microtessuto (chip+camera+elettrodo) e la condizione sperimentale. Questa informazione è essenziale per il pairing baseline–farmaco nella normalizzazione.
+Le regole sono queste:
+
+- **Esperimento:** la cartella più interna del tipo `Exp<N>`, senza distinguere maiuscole e minuscole e con o senza separatore (`Exp5`, `EXP 5`, `exp1`, `Exp_10`, `Exp12_Accelera`). Sono accettate anche le cartelle che iniziano con `EXP`, come prima.
+- **Giorno:** la cartella `Day<N>` (`Day7`, `day 7`, `day 8 Accelera`).
+- **Concentrazione:** compare senza separatore iniziale (`300 nM`; prima era `.300 nM`). Un numero senza unità non resta nel nome del farmaco (`NIFEDIPINE_10` diventa farmaco `NIFEDIPINE`, concentrazione `10`). `2andhalf` vale 2,5. I token di acquisizione dei nomi Accelera (`20000_1_3k`, `2000fs`, `chan1`, `_1h`…) vengono ignorati.
+
+**Esempio**: `chipA_ch1_terfe_300nM.csv` → `{chip: 'A', channel: 1, drug: 'terfe', concentration: '300 nM', is_baseline: False}`. Il nome canonico del farmaco (`terfenadine`) viene assegnato in fase di classificazione (`normalization.canonical_drug_name`).
+
+**Perché (ottobre 2026)**: fino alla v3.6 l'esperimento veniva letto solo da cartelle che iniziano con `EXP` maiuscolo, e il giorno veniva ignorato. Con cartelle `Exp5`, `exp1` o `Exp 5`, ogni lettera di chip era condivisa tra esperimenti e giorni. Sul dataset Visone 2023, 29 gruppi su 31 mescolavano esperimenti diversi: le dosi venivano normalizzate sul baseline di un altro esperimento (per esempio −27 % invece di +10 %).
 
 #### Selezione automatica dell'elettrodo
 
@@ -674,11 +687,21 @@ La qualità dei dati µECG è variabile: chip con cattivo contatto, microtessuti
 
 #### Pairing baseline–farmaco
 
-Ogni drug recording viene accoppiato al baseline dello stesso chip+camera+elettrodo nello stesso esperimento. Se più baseline esistono, viene preferito quello con grado QC migliore.
+Ogni registrazione di farmaco viene abbinata a un baseline **dello stesso tessuto** (esperimento + giorno + chip + camera, vedi `describe_recording`) e dello stesso elettrodo.
 
-**Fallback cross-electrode**: in modalità `auto`, ogni file sceglie indipendentemente l'elettrodo migliore. Può accadere che il baseline scelga el2 (il migliore) e il drug scelga el1 (perché il CSV ha colonne identiche, quindi pareggio → default el1). In questo caso la chiave di raggruppamento `EXP/chipA_ch1/el2` non combacerebbe con `EXP/chipA_ch1/el1`. Il sistema fa **fallback** cercando il baseline sullo stesso chip+camera senza vincolo sull'elettrodo. Questo garantisce che il pairing funzioni anche quando gli elettrodi selezionati differiscono.
+- **Più baseline nello stesso tessuto** (per esempio `baseline` e `new baseline/`, oppure `_bis`): si preferisce quello nella **stessa cartella** della registrazione, poi il grado QC migliore, poi il nome del file.
+- **Baseline esclusi:** quelli che il verdetto di analizzabilità rifiuta non vengono mai usati. Se il baseline scelto non supera i criteri di inclusione, la registrazione resta senza abbinamento.
+- **Motivazione registrata:** la scelta e il motivo finiscono in `normalization['pairing']` (`baseline_file`, `reason`, `candidates`).
+- **Chiave di abbinamento:** l'abbinamento è indicizzato per percorso completo più elettrodo (`recording_key`), non più per nome del file. Così due file omonimi in cartelle diverse, o le analisi el1 ed el2 dello stesso file in modalità `both`, non si sovrascrivono.
+- **File con due tessuti** (un tessuto per elettrodo, convenzione GG): non vengono abbinati automaticamente, e il motivo resta registrato.
 
-> **Nota**: il cross-electrode pairing può introdurre un bias sistematico sull'FPDcF se i due elettrodi misurano durate diverse. Per questo motivo i filtri QC sulla normalizzazione (vedi sotto) sono particolarmente importanti.
+**Un elettrodo per tessuto** (`batch_analyze`, `channel='auto'`, dalla v3.7): i baseline vengono analizzati per primi con la scelta automatica. Ogni tessuto adotta l'elettrodo scelto per il suo baseline di riferimento, cioè quello nella cartella che contiene la maggior parte delle sue registrazioni. Su quell'elettrodo vengono poi analizzate dosi e controlli. Gli eventuali altri baseline del tessuto vengono rianalizzati sullo stesso elettrodo. `file_info['tissue_electrode']` e `['tissue_electrode_from']` riportano la scelta.
+
+Prima, la selezione file per file faceva sì che una serie dose-risposta mescolasse el1 ed el2 dello stesso microtessuto: è successo in 39 registrazioni su 75 del dataset Visone 2023.
+
+**Fallback sull'altro elettrodo**: se il gruppo dell'elettrodo non ha un baseline, cosa possibile con `el1`/`el2` espliciti, si usa quello dello stesso tessuto sull'altro elettrodo, e `pairing.reason` lo segnala. In modalità `auto` questo caso non si presenta più.
+
+**Arresto (dalla v3.7)**: se il baseline o la registrazione di farmaco hanno un periodo di battito oltre `NormalizationConfig.max_beat_period_for_fpdc_ms` (6 s, cioè 10 battiti/min), la %ΔFPDcF non viene calcolata e il motivo va in `fpdc_withheld`. Con RR di decine di secondi la correzione di Fridericia non ha senso: una cisapride a RR = 40 s dava +580 %. Le variazioni di BP e di ampiezza restano, e l'override di arresto vede comunque la registrazione.
 
 #### Parametri normalizzati
 
@@ -732,6 +755,15 @@ Tre metodi disponibili per aggregare le concentrazioni:
 - **max** (default): positivo se QUALSIASI concentrazione supera la soglia. Massima sensibilità, ma vulnerabile a singoli outlier.
 - **mean**: positivo se la MEDIA delle concentrazioni supera la soglia. Riduce l'impatto degli outlier.
 - **n_above**: positivo se ≥ N concentrazioni superano la soglia. Richiede conferma da più concentrazioni.
+
+**Nomi dei farmaci (dalla v3.7)**: le registrazioni vengono raggruppate per nome canonico (`canonical_drug_name`: `DOFE` → `dofetilide`, `Quinid` → `quinidine`, `NIFEDIPINE 10` → `nifedipine`). I codici come `Ti07` restano invariati. Prima il raggruppamento usava la stringa grezza, e lo stesso farmaco poteva risultare positivo con un'abbreviazione e negativo con un'altra: sul dataset Visone 2023, 8 farmaci diventavano 17.
+
+**Registrazioni escluse dalla decisione** (la loro %Δ resta nella tabella di normalizzazione):
+
+- washout e recovery, perché non sono una concentrazione;
+- il veicolo (`dmso`, `vehicle`), perché non è un farmaco da classificare.
+
+> **Nota (ottobre 2026)**: con il metodo `max` basta un singolo tessuto a una singola concentrazione per rendere positivo il farmaco. Applicato alle variazioni misurate dagli autori del paper Visone 2023 sugli esperimenti 5–9, classifica positivi tutti e tre i farmaci negativi presenti (mexiletina, nifedipina, alfuzosina). La scelta della regola predefinita è in revisione su tutti i 12 composti del paper.
 
 | Config | Default | Descrizione |
 |--------|---------|-------------|
@@ -1127,6 +1159,20 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.7.0 (Ottobre 2026) — abbinamento baseline e raggruppamento dei farmaci nel batch
+
+Correzioni emerse eseguendo `batch_analyze` sul dataset Visone 2023 (§4.10 e §3, `parse_filename` e `describe_recording`). L'interfaccia PySide non è toccata, perché usa gruppi definiti dall'utente.
+
+1. **Identità del tessuto dal percorso** (esperimento + giorno + chip + camera), comprese le cartelle Accelera. In precedenza l'esperimento si leggeva solo da cartelle `EXP…` e il giorno veniva ignorato, così le dosi venivano normalizzate sul baseline di un altro esperimento.
+2. **Un elettrodo per tessuto** in modalità `auto` (baseline prima).
+3. **Scelta del baseline** per cartella, poi per grado QC, registrata in `normalization['pairing']`. L'abbinamento è indicizzato per percorso più elettrodo.
+4. **Nomi canonici dei farmaci** in `classify_drug`; washout e veicolo esclusi dalla decisione.
+5. **Arresto**: %ΔFPDcF non calcolata oltre 6 s di periodo (`max_beat_period_for_fpdc_ms`).
+
+**Verifica**: su Exp5 ed Exp8 del paper le variazioni prodotte dal batch coincidono con quelle calcolate abbinando a mano ogni tessuto. La suite comprende 600 test, di cui 33 nuovi (`tests/test_tissue_pairing.py`).
+
+**CI**: action su Node 24 e runner fissato a `ubuntu-24.04`, in vista del passaggio di `ubuntu-latest` a 26.04.
 
 ### v3.6.0 (Ottobre 2026) — selezione dell'onda di ripolarizzazione
 
