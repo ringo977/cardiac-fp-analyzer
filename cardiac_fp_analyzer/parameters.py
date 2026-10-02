@@ -554,11 +554,31 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None,
                             "FPD analysis skipped (signal too weak)",
                             median_amp_uV, min_amp_uV)
 
+    # ─── Rhythm for the template search window ───
+    # See RepolarizationConfig.window_rr_from_template_beats. The window
+    # must reach the T-wave of the beats that FORM the template; on
+    # over-detected recordings the full-train median RR is ~half the true
+    # cycle and the window closed before the T-wave. Use the longer of the
+    # two estimates and let the template search guard the extension.
+    window_bp_s = median_bp_s
+    window_guard_after_ms = None
+    if getattr(rc, 'window_rr_from_template_beats', False) and len(beat_indices) >= 3:
+        kept_bp = np.diff(np.asarray(beat_indices, dtype=float)) / fs
+        kept_bp = kept_bp[kept_bp > 0]
+        if len(kept_bp) > 0:
+            kept_med = float(np.median(kept_bp))
+            if median_bp_s is None or kept_med > median_bp_s:
+                old_end_ms = rc.search_end_ms
+                if getattr(rc, 'search_end_pct_rr', 0.0) > 0 and median_bp_s:
+                    old_end_ms = max(old_end_ms, rc.search_end_pct_rr * median_bp_s * 1000)
+                window_guard_after_ms = old_end_ms
+                window_bp_s = kept_med
+
     if template is not None and not signal_too_weak:
         pre_ms = rc.segment_pre_ms
         fpd_result = _find_repolarization_on_template(
             template, fs, pre_ms=pre_ms, cfg=cfg,
-            median_bp_s=median_bp_s)
+            median_bp_s=window_bp_s, guard_after_ms=window_guard_after_ms)
         if fpd_result[0] is not None:
             template_fpd_samples = fpd_result[0]
             template_repol_sign = fpd_result[1]
@@ -730,8 +750,14 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None,
     # Add template info and config to summary
     if template_fpd_samples is not None:
         summary['template_fpd_ms'] = template_fpd_samples / fs * 1000
+        summary['template_repol_sign'] = int(template_repol_sign)
     summary['fpd_method'] = rc.fpd_method
+    summary['repol_candidate_rule'] = getattr(rc, 'repol_candidate_rule', 'max_prominence')
     summary['correction'] = rc.correction
+    # Rhythm actually used for the template search window (diagnostic).
+    if window_bp_s is not None:
+        summary['repol_window_rr_ms'] = window_bp_s * 1000
+        summary['repol_window_extended'] = window_guard_after_ms is not None
 
     # Multi-method consensus info
     if consensus_info is not None:

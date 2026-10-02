@@ -221,13 +221,15 @@ SPEC: tuple[FieldSpec, ...] = (
         attr="fpd_method", section="repolarization", kind="choice",
         page=PAGE_REPOL, label="Metodo FPD",
         tooltip=(
-            "tangent = tangente al punto di max-downslope (gold "
-            "standard); peak = picco di repolarizzazione "
-            "(sottostima ~25%); max_slope = punto di max-downslope; "
-            "50pct = 50% ampiezza discesa; baseline_return = "
-            "zero-crossing; consensus = voto tra metodi."
+            "peak = picco dell'onda di ripolarizzazione (default dalla "
+            "v3.6.0: convenzione della misura manuale di riferimento); "
+            "tangent = tangente al punto di max-downslope (fine "
+            "dell'onda, qualche % più lunga; default fino alla v3.5); "
+            "max_slope = punto di max-downslope; 50pct = 50% ampiezza "
+            "discesa; baseline_return = zero-crossing; consensus = voto "
+            "tra metodi."
         ),
-        choices=("tangent", "peak", "max_slope", "50pct",
+        choices=("peak", "tangent", "max_slope", "50pct",
                  "baseline_return", "consensus"),
     ),
     FieldSpec(

@@ -72,9 +72,15 @@ def build_config_from_sidebar() -> AnalysisConfig:
 
         # ── FPD ──
         with st.expander(f"📏 {T('cfg_fpd')}", expanded=False):
+            _fpd_choices = ['peak', 'tangent', 'max_slope', '50pct', 'baseline_return', 'consensus']
             config.repolarization.fpd_method = st.selectbox(
                 T('cfg_fpd_method'),
-                ['tangent', 'peak', 'max_slope', '50pct', 'baseline_return', 'consensus'],
+                _fpd_choices,
+                # Start from the library default, not from the first item:
+                # with 'tangent' listed first the UI silently overrode the
+                # default when it changed to 'peak' (v3.6.0).
+                index=_fpd_choices.index(config.repolarization.fpd_method)
+                if config.repolarization.fpd_method in _fpd_choices else 0,
                 help=T('cfg_fpd_method_help'),
                 key='cfg_fpd_method'
             )

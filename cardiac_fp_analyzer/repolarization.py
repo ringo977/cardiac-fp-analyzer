@@ -196,13 +196,85 @@ def consensus_fpd(seg_det, best_pk, best_sign, fs, search_start, spike_idx, cfg=
     return selected_fpd, method_details
 
 
+def next_spike_cut_index(template, fs, spike_idx, scan_from_idx, scan_to_idx, cfg=None):
+    """First index in ``[scan_from_idx, scan_to_idx)`` where the template
+    contains a depolarisation-like event (the next beat), or ``None``.
+
+    Shape-based, not derivative-based: on noisy templates the derivative of
+    the noise is only 3–6× smaller than the spike's, so a dV/dt threshold
+    fires on noise. Here a window must correlate with the main spike's shape
+    (≥ ``next_spike_guard_min_corr``) AND reach a comparable peak-to-peak
+    (≥ ``next_spike_guard_min_amp`` × main) — random noise does neither.
+    Returns the index of the event's onset (start of the matching window).
+    """
+    rc = _get_repol_cfg(cfg)
+    x = np.asarray(template, dtype=float)
+    a, b = int(0.005 * fs), int(0.015 * fs)
+    if spike_idx - a < 0 or spike_idx + b > len(x):
+        return None
+    k = x[spike_idx - a:spike_idx + b]
+    k = k - k.mean()
+    kn = float(np.linalg.norm(k))
+    kptp = float(np.ptp(k))
+    if kn == 0.0 or kptp == 0.0:
+        return None
+    L = len(k)
+    lo = max(int(scan_from_idx), spike_idx + b)
+    hi = min(int(scan_to_idx), len(x) - L)
+    if hi <= lo:
+        return None
+    # Vectorised sliding correlation over the scan range
+    win = np.lib.stride_tricks.sliding_window_view(x[lo:hi + L - 1], L)
+    win = win - win.mean(axis=1, keepdims=True)
+    wn = np.linalg.norm(win, axis=1)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        corr = (win @ k) / (wn * kn)
+    amp = np.ptp(win, axis=1)
+    hits = np.where((corr >= rc.next_spike_guard_min_corr)
+                    & (amp >= rc.next_spike_guard_min_amp * kptp))[0]
+    if len(hits) == 0:
+        return None
+    return int(lo + hits[0])
+
+
+def _select_candidate(cands, rc, fs):
+    """Pick the repolarisation wave among eligible candidates.
+
+    ``cands`` : list of (peak_idx, prominence, sign). See
+    ``RepolarizationConfig.repol_candidate_rule`` for the rationale.
+    Returns the chosen tuple or None.
+    """
+    if not cands:
+        return None
+    top = max(cands, key=lambda c: c[1])
+    rule = getattr(rc, 'repol_candidate_rule', 'max_prominence')
+    if rule == 'max_prominence':
+        return top
+    if rule == 'prefer_positive':
+        f = float(getattr(rc, 'repol_positive_min_rel_prom', 0.5))
+        w = getattr(rc, 'repol_positive_max_offset_ms', 400.0)
+        w_samples = None if w is None else w / 1000.0 * fs
+        pos = [c for c in cands
+               if c[2] > 0 and c[1] >= f * top[1]
+               and (w_samples is None or abs(c[0] - top[0]) <= w_samples)]
+        return max(pos, key=lambda c: c[1]) if pos else top
+    raise ValueError(f"Unknown repol_candidate_rule: {rule!r}")
+
+
 def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None,
-                                    median_bp_s=None):
+                                    median_bp_s=None, guard_after_ms=None):
     """
     Find the repolarization wave on a clean averaged template.
 
     Uses the configured fpd_method (default: tangent) to determine the
     FPD endpoint after finding the repolarization peak.
+
+    ``guard_after_ms`` : when the caller has lengthened the search window
+    beyond what it would otherwise be (see
+    ``RepolarizationConfig.window_rr_from_template_beats``), the latency
+    where the old window ended. The extension beyond it is cut before the
+    first depolarisation-like event, so the window never crosses into the
+    next beat.
 
     Returns: fpd_samples (int), repol_sign (+1 or -1), repol_amplitude,
              confidence (float 0-1), peak_samples (int), consensus_details
@@ -238,6 +310,19 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None,
 
     if search_end > len(template):
         search_end = len(template)
+
+    # Guard the window EXTENSION (if any) against the next depolarisation.
+    if guard_after_ms is not None:
+        old_end = spike_idx + int(guard_after_ms / 1000 * fs)
+        if old_end < search_end:
+            cut = next_spike_cut_index(template, fs, spike_idx, old_end, search_end, cfg=rc)
+            if cut is not None:
+                margin = int(rc.next_spike_guard_margin_ms / 1000 * fs)
+                new_end = max(old_end, cut - margin)
+                logger.debug("Template window extension cut at %.0f ms (next-beat event at %.0f ms)",
+                             (new_end - spike_idx) / fs * 1000, (cut - spike_idx) / fs * 1000)
+                search_end = min(search_end, new_end)
+
     if search_start >= search_end or (search_end - search_start) < int(0.05 * fs):
         return None, 1, 0.0, 0.0, None, None
 
@@ -295,21 +380,23 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None,
     best_prom = 0
     best_sign = 1
 
+    # Collect every eligible candidate of both polarities, then let the
+    # configured rule pick (see RepolarizationConfig.repol_candidate_rule).
     peak_dist = int(rc.peak_min_distance_ms / 1000 * fs)
+    candidates = []
     for sign in [1, -1]:
         threshold = np.std(seg_det) * rc.peak_prominence_factor
         pks, props = sig.find_peaks(sign * seg_det,
                                      prominence=threshold,
                                      distance=peak_dist)
-        if len(pks) > 0:
+        for j in range(len(pks)):
             # Exclude peaks that would give FPD < min_fpd_ms
-            for j in range(len(pks)):
-                if pks[j] < min_pk_idx:
-                    continue
-                if props['prominences'][j] > best_prom:
-                    best_prom = props['prominences'][j]
-                    best_pk = pks[j]
-                    best_sign = sign
+            if pks[j] < min_pk_idx:
+                continue
+            candidates.append((int(pks[j]), float(props['prominences'][j]), sign))
+    chosen = _select_candidate(candidates, rc, fs)
+    if chosen is not None:
+        best_pk, best_prom, best_sign = chosen
 
     if best_pk is None:
         # No qualifying peak found by find_peaks in the search window →
@@ -532,7 +619,12 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
     prom_factor = getattr(rc, 'per_beat_prominence_factor', rc.peak_prominence_factor)
     repol_prom_threshold = effective_noise * prom_factor
 
+    prefer_same_sign = getattr(rc, 'per_beat_prefer_template_sign', False)
     for sign in [template_repol_sign, -template_repol_sign]:
+        if prefer_same_sign and sign != template_repol_sign and best_idx is not None:
+            # A same-sign repolarisation peak qualified: do not let the
+            # opposite lobe of a biphasic wave compete with it.
+            break
         pks, props = sig.find_peaks(sign * seg_det,
                                      prominence=repol_prom_threshold,
                                      distance=peak_dist)

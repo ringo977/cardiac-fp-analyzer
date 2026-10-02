@@ -392,13 +392,23 @@ class RepolarizationConfig:
     """Repolarization detection and FPD measurement parameters."""
 
     # --- FPD measurement method ---
-    # 'tangent'         : max-downslope → tangent-baseline intersection (gold standard)
-    # 'peak'            : repolarization peak only (simpler, underestimates ~25%)
+    # 'peak'            : peak of the repolarisation wave (default since
+    #                     v3.6.0)
+    # 'tangent'         : max-downslope → tangent-baseline intersection
+    #                     (default until v3.5.x)
     # 'max_slope'       : point of maximum downslope after peak
     # '50pct'           : 50% amplitude on descending side
-    # 'baseline_return' : zero-crossing after peak (overestimates ~5%)
-    # 'consensus'       : run all methods, pick by cluster agreement (most robust)
-    fpd_method: str = 'tangent'
+    # 'baseline_return' : zero-crossing after peak
+    # 'consensus'       : run all methods, pick by cluster agreement
+    # Evidence (Oct 2026, manual gold standard GG, DEV split,
+    # full pipeline): the analyst marks the PEAK of the repolarisation wave.
+    # With the wave chosen correctly (repol_candidate_rule), 'peak' gives a
+    # median signed error of 0.0 % and 61 % of electrodes within ±10 %
+    # (grade A 74 %); 'tangent' gives +2.5 % and 54 % (grade A 65 %). The
+    # older note that 'peak' "underestimates ~25 %" is not supported by
+    # either reference. The paper corpus (Visone 2023) stays within
+    # tolerance with both.
+    fpd_method: str = 'peak'
 
     # --- Correction formula ---
     # 'fridericia' : FPDcF = FPD / RR^(1/3)
@@ -501,6 +511,53 @@ class RepolarizationConfig:
     peak_prominence_factor: float = 0.15  # min prominence = factor × std(segment)
     peak_min_distance_ms: float = 50.0    # min distance between candidate peaks
 
+    # --- Which candidate wave is the repolarisation (Oct 2026, phase 2) ---
+    # 'max_prominence'  : historical — the most prominent peak of either
+    #                     polarity beyond the min-FPD floor.
+    # 'prefer_positive' : the repolarisation of these recordings is often
+    #                     BIPHASIC (a positive and a negative lobe 60–200 ms
+    #                     apart). The manual reference (GG, 87
+    #                     electrodes with a matching candidate) marks the
+    #                     POSITIVE lobe in 76 of 87, whether it comes first
+    #                     or second; the negative lobe is often the more
+    #                     prominent one, so 'max_prominence' picked it. Rule:
+    #                     among eligible candidates, take the most prominent
+    #                     positive peak whose prominence is ≥
+    #                     ``repol_positive_min_rel_prom`` × the overall
+    #                     maximum and which lies within
+    #                     ``repol_positive_max_offset_ms`` of it (same
+    #                     repolarisation complex); otherwise fall back to the
+    #                     overall maximum (monophasic negative T-waves).
+    # Calibrated on the DEV split only; leave-one-experiment-out chose the
+    # same parameters in every fold (f 0.5–0.6, W 400 ms) and held-out
+    # accuracy (67.9 % within ±10 %) matched in-sample (68.8 %).
+    # A polarity convention, not a latency prior: it does not pull FPD
+    # towards any value, so drug-induced prolongation is measured as-is.
+    # It also makes the choice deterministic where two lobes have similar
+    # size, instead of flipping between them across concentrations.
+    repol_candidate_rule: str = 'prefer_positive'
+    repol_positive_min_rel_prom: float = 0.5
+    repol_positive_max_offset_ms: float = 400.0
+
+    # --- Rhythm used for the template search window (Oct 2026) ---
+    # The adaptive window end (search_end_pct_rr × RR) and the adaptive
+    # min-FPD floor need the TRUE cycle length. Since v3.4 the beat-period
+    # summary (correctly) uses the full detected train for rate correction,
+    # and the window inherited it — but on over-detected recordings that
+    # train contains spurious beats and its median RR is ~half the true one,
+    # so the window closed before the T-wave (22 of 25 DEV electrodes with
+    # no candidate near the analyst's value). The re-segmentation guard in
+    # analyze.py already lengthens the template using the RR of the beats
+    # that survive QC; the window now uses it too: RR_window =
+    # max(RR of full train, RR of the beats forming the template).
+    # The extension beyond the old window is scanned for a depolarisation-
+    # like event (next beat) and stops before it, so the new window always
+    # contains the old one and never crosses a spike.
+    window_rr_from_template_beats: bool = True
+    next_spike_guard_min_corr: float = 0.9   # correlation with the main spike shape
+    next_spike_guard_min_amp: float = 0.5    # peak-to-peak relative to the main spike
+    next_spike_guard_margin_ms: float = 30.0
+
     # --- Tangent method ---
     tangent_max_slope_window_ms: float = 300.0  # max distance peak → max-slope
     tangent_max_extension_ms: float = 400.0     # max distance peak → tangent intersection
@@ -510,6 +567,16 @@ class RepolarizationConfig:
     per_beat_peak_distance_ms: float = 30.0
     per_beat_distance_penalty_ms: float = 50.0  # distance penalty scale
     per_beat_prominence_factor: float = 0.15  # same as template; sensitivity comes from MAD-based noise estimate
+    # Per-beat polarity: search the template's repolarisation sign first and
+    # consider the opposite sign only if no same-sign peak qualifies. With a
+    # biphasic repolarisation the opposite lobe sits 60–200 ms away, inside
+    # the per-beat window, and is often larger — scoring both signs together
+    # lets individual beats jump to the other lobe that the template
+    # deliberately did not choose.
+    # Evaluated on the DEV split (Oct 2026): no gain (−1 electrode within
+    # ±10 % with the other phase-2 changes on), so OFF by default; kept as
+    # an option.
+    per_beat_prefer_template_sign: bool = False
     # A beat counts as polarity-inverted (repolarisation sign flipped,
     # template peak guidance dropped) only if its spike window is
     # anti-correlated with the template's at or below this value.
