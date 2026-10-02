@@ -280,6 +280,9 @@ def main():
     ap.add_argument('--split', choices=['dev', 'test', 'all'], default='dev',
                     help='dev = Exp5/8/10 (development), test = Exp6/7/9 (held out, run once at the end)')
     ap.add_argument('--tag', default='', help='label for the output files (e.g. pipeline version)')
+    ap.add_argument('--set', action='append', default=[], metavar='SECTION.FIELD=VALUE',
+                    help='override a config field, e.g. repolarization.repol_candidate_rule=max_prominence '
+                         '(repeatable; values parsed as Python literals when possible)')
     args = ap.parse_args()
     gold_dir = Path(args.gold_dir).resolve()
     rec_dir = Path(args.rec_dir).resolve()
@@ -289,6 +292,21 @@ def main():
     print(f"gold: {len(gold)} (chip, channel, dose) entries, {len(raw)} raw beat blocks")
 
     cfg = AnalysisConfig()
+    import ast
+    for item in args.set:
+        lhs, rhs = item.split('=', 1)
+        try:
+            val = ast.literal_eval(rhs)
+        except (ValueError, SyntaxError):
+            val = rhs
+        target = cfg
+        *path, field = lhs.split('.')
+        for part in path:
+            target = getattr(target, part)
+        if not hasattr(target, field):
+            raise SystemExit(f'unknown config field: {lhs}')
+        setattr(target, field, val)
+        print(f'config override: {lhs} = {val!r}')
     rows = []
     csvs = sorted(p for p in rec_dir.rglob('*.csv') if '_report' not in p.parts)
     n_unmatched = 0

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.5.1
+**Versione**: 3.6.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
@@ -142,7 +142,7 @@ results = batch_analyze('/path/to/data/', config=config)
 
 ## Stato della validazione
 
-**Ottobre 2026 — gold standard manuale cieco (GG, 313 elettrodi).** Vedi tabella nel changelog v3.5.0. In sintesi: dove il segnale è buono (grado A) il software è affidabile (BP entro ±10 % nel 91 %, FPD nel 69 % sul test cieco); dove non lo è, ora **lo dichiara** invece di produrre numeri. Resta aperto: la misura dell'FPD sui segnali di grado B/C (entro ±10 % nel 41 %/20 %) e la copertura (77 %).
+**Ottobre 2026 — gold standard manuale cieco (GG, 313 elettrodi).** Vedi i changelog v3.5.0 e v3.6.0. In sintesi, sul test tenuto da parte: dove il segnale è buono (grado A) il software è affidabile (BP entro ±10 % nel 91 %, FPD nell'84 %); sui gradi B/C l'FPD è entro ±10 % nel 59 %/50 %; dove il segnale non è analizzabile **lo dichiara** invece di produrre numeri. Resta aperto: la copertura (77 %), i template senza onda T visibile e la sovra-rilevazione residua sui segnali rumorosi.
 
 Il confronto con i valori pubblicati (Visone et al. 2023) è documentato in
 `VALIDAZIONE_vs_paper_Visone2023.md` e nei file `ASSESSMENT_*.md`. In sintesi, ad ottobre 2026:
@@ -170,9 +170,18 @@ Il modulo QC valida ogni battito rilevato:
 
 ## Changelog
 
+### v3.6.0 (Ottobre 2026) — selezione dell'onda di ripolarizzazione
+Calibrata sullo split di sviluppo del gold standard manuale, verificata una volta sul test tenuto da parte (Exp 6/7/9): **FPD entro ±10 % dal 48 % al 69 %** (grado A 69 → 84 %, B 41 → 59 %, C 20 → 50 %), errore mediano −1.3 % → −0.1 %. Corpus del paper invariato (errore medio 3.4 → 3.2 %). Dettagli in `docs/FPD_vs_gold_standard_2026-10.md`.
+- **Fix: allineamento dei battiti prima della mediana** (`_align_beats_xcorr`): uno sfasamento d'indice spostava di 50 ms anche i battiti già allineati e amplificava il jitter; ogni template era 50 ms in ritardo rispetto ai suoi battiti
+- **Fix: inversione di polarità per battito** decisa per anti-correlazione con lo spike del template; col template sfasato il vecchio test leggeva la linea di base e in ~40 % degli elettrodi marcava invertiti quasi tutti i battiti, togliendo loro la guida del template
+- **Regola `prefer_positive`** (`repol_candidate_rule`): nelle ripolarizzazioni bifasiche si prende il lobo positivo (prominenza ≥ 0.5× il massimo, entro 400 ms), come fa l'analista nell'87 % dei casi; parametri stabili in leave-one-experiment-out
+- **Finestra di ricerca con l'RR dei battiti del template** quando il treno completo è sovra-rilevato (`window_rr_from_template_beats`), con guardia di forma che ferma l'estensione prima del battito successivo
+- **Punto finale `peak` di default** (era `tangent`): è la convenzione dell'analista; con l'onda giusta, errore mediano 0.0 % contro +2.5 %. `tangent` resta disponibile
+- `tools/compare_gold.py --set sezione.campo=valore` per le ablazioni
+
 ### v3.5.1 (Ottobre 2026)
 - **Minimo FPD adattivo**: tetto `max_adaptive_min_fpd_ms` 350 → 600 ms. Su ritmi lenti il template sceglieva un after-potential a ~500 ms al posto della T a ~0.5×RR; anticipi per battito 12.5 → 9.1 %, entro ±20 % 76 → 80 % (DEV), neutro su TEST a livello di elettrodo
-- **Caratterizzazione dell'errore FPD** contro il gold standard, battito per battito: nessun bias di convenzione (tangente e picco coincidono con l'analista in mediana); il residuo sono *candidati diversi* (32 anticipi, 14 ritardi su 74 elettrodi di grado A) — `docs/FPD_vs_gold_standard_2026-10.md`
+- **Caratterizzazione dell'errore FPD** contro il gold standard, battito per battito: il residuo sono *onde diverse* scelte da software e analista, non punti di misura diversi — `docs/FPD_vs_gold_standard_2026-10.md` (i conteggi per il grado A riportati in questa voce erano errati e sono corretti nel documento)
 - Segnalati 5 blocchi del gold standard con FPD > RR (sfasamento di riga probabile)
 
 ### v3.5.0 (Ottobre 2026) — prima validazione cieca su gold standard manuale

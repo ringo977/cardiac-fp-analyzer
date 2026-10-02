@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.5.1
+**Versione**: 3.6.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -327,7 +327,11 @@ Il software costruisce un template rappresentativo del battito tipico della regi
 
 Il FPD è l'intervallo dallo spike di depolarizzazione al punto di ripolarizzazione. La sua misurazione è il passaggio più critico e tecnicamente complesso dell'analisi.
 
-**Metodo tangente** (default): Trova il punto di massima pendenza discendente sulla curva di ripolarizzazione, poi traccia la tangente fino all'intersezione con la baseline. È il metodo standard in letteratura per i FP cardiaci.
+**Metodo del picco** (default dalla v3.6.0): l'FPD termina al picco dell'onda di ripolarizzazione. È la convenzione della misura manuale di riferimento (errore mediano 0.0 % contro il gold standard, +2.5 % per la tangente).
+
+**Metodo tangente** (default fino alla v3.5.x): trova il punto di massima pendenza discendente dopo il picco e traccia la tangente fino all'intersezione con la baseline; misura la fine dell'onda, quindi qualche punto percentuale più lungo del picco.
+
+**Quale onda.** Prima del punto di misura conta la scelta dell'onda: con ripolarizzazioni bifasiche (lobo positivo e negativo vicini) la regola `prefer_positive` (default) prende il lobo positivo se ha almeno metà della prominenza del più grande ed è entro 400 ms; `max_prominence` è il comportamento storico.
 
 **Metodo peak**: Identifica il picco di ripolarizzazione (deflessione positiva o negativa dopo lo spike). Più semplice ma meno preciso.
 
@@ -372,7 +376,9 @@ A livello di registrazione, la confidenza FPD combina la confidenza del template
 
 | Config | Default | Descrizione |
 |--------|---------|-------------|
-| `fpd_method` | 'tangent' | Metodo di misurazione FPD |
+| `fpd_method` | 'peak' | Metodo di misurazione FPD (era 'tangent' fino alla v3.5.x) |
+| `repol_candidate_rule` | 'prefer_positive' | Scelta dell'onda di ripolarizzazione ('max_prominence' = storico) |
+| `window_rr_from_template_beats` | True | Finestra di ricerca con l'RR dei battiti del template |
 | `correction` | 'fridericia' | Formula di correzione |
 | `max_beats_template` | 60 | N. max battiti per il template |
 | `search_start_ms` | 150 | Inizio ricerca ripolarizzazione |
@@ -822,7 +828,7 @@ config = AnalysisConfig.from_json('my_config.json')
 
 | Preset | Descrizione |
 |--------|-------------|
-| `default` | Parametri standard (tangent FPD, Fridericia, tutti i filtri) |
+| `default` | Parametri standard (FPD al picco, Fridericia, tutti i filtri) |
 | `conservative` | Soglie più strette, meno falsi positivi |
 | `sensitive` | Soglie più rilassate, meno falsi negativi |
 | `peak_method` | Usa il metodo peak per FPD (più semplice) |
@@ -1121,6 +1127,20 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.6.0 (Ottobre 2026) — selezione dell'onda di ripolarizzazione
+
+Seconda fase del lavoro sul gold standard manuale (GG). Analisi a livello di candidati sul template (riprodotta la scelta della pipeline in 121/121 elettrodi): l'onda dell'analista era tra i candidati nel 78 % degli elettrodi contro il 53 % scelto; le ripolarizzazioni sono spesso bifasiche e l'analista segna il picco del lobo positivo; in 22 elettrodi la finestra di ricerca si chiudeva prima dell'onda perché l'RR del treno completo era dimezzato dalla sovra-rilevazione.
+
+- `parameters._align_beats_xcorr`: corretto uno sfasamento d'indice per cui l'allineamento spostava di `alignment_max_shift_ms` (50 ms) anche i battiti già allineati e raddoppiava il jitter; ora correlazione normalizzata con lag zero al centro. Test di regressione che falliscono sul codice vecchio.
+- `parameters.beat_spike_inverted`: inversione per anti-correlazione (≤ `inversion_corr_threshold`, −0.5) invece del confronto tra deflessioni; prima, col template sfasato, il ~40 % degli elettrodi aveva quasi tutti i battiti marcati invertiti.
+- `RepolarizationConfig.repol_candidate_rule = 'prefer_positive'` (+ `repol_positive_min_rel_prom` 0.5, `repol_positive_max_offset_ms` 400): parametri scelti con leave-one-experiment-out dentro il DEV (stessi valori in ogni piega; 67.9 % sull'esperimento escluso contro 68.8 % interno).
+- `RepolarizationConfig.window_rr_from_template_beats = True`: finestra e pavimento adattivo del template usano max(RR del treno completo, RR dei battiti del template); `repolarization.next_spike_cut_index` (guardia di forma: correlazione ≥ 0.9 e ampiezza ≥ 0.5 con lo spike principale) ferma l'estensione prima del battito successivo.
+- `RepolarizationConfig.fpd_method = 'peak'` (era 'tangent').
+- `per_beat_prefer_template_sign` aggiunto ma spento (valutato: nessun guadagno).
+- Diagnostica nel summary: `template_repol_sign`, `repol_candidate_rule`, `repol_window_rr_ms`, `repol_window_extended`.
+
+Risultati, FPD entro ±10 % tra gli elettrodi riportati: DEV 45 → 61 % (grado A 61 → 74 %); **test tenuto da parte 48 → 69 %** (grado A 69 → 84 %, B 41 → 59 %, C 20 → 50 %), errore mediano −1.3 → −0.1 %. BP invariato. Corpus del paper invariato (errore medio 3.4 → 3.2 %). 567 test.
 
 ### v3.5.1 (Ottobre 2026)
 
