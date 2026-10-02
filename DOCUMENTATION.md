@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.8.0
+**Versione**: 3.8.1
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -837,7 +837,11 @@ La classificazione riporta:
 
 Genera una mappa di rischio 2D nello stile CiPA, posizionando ogni farmaco su due assi:
 
-**Asse X — Max ΔFPDcF (%)**: Il prolungamento massimo del FPDcF osservato tra tutte le concentrazioni. Cattura il rischio di prolungamento della ripolarizzazione.
+**Asse X — ΔFPDcF della decisione per farmaco (dalla v3.8.1)**: il numero che `classify_drug` confronta con la soglia (`decision_value`). Con il metodo predefinito è il livello che la media tra tessuti mantiene su 2 concentrazioni adiacenti; con `mean` è la media, con `max` e `n_above` il massimo. La linea verticale continua è la soglia della decisione (15 %), quindi un farmaco a destra della linea è positivo.
+- La decisione viene ricalcolata sui risultati passati alla mappa: unendo più batch, ogni farmaco usa tutti i suoi tessuti.
+- Il veicolo viene posizionato con la stessa statistica.
+- I farmaci senza decisione (meno di 2 tessuti per concentrazione) compaiono vuoti in una fascia a sinistra, "no decision".
+- Fino alla v3.8.0 l'asse era la variazione massima di una singola registrazione: sul dataset Visone 2023 metteva oltre la soglia tutti i composti negativi.
 
 **Asse Y — Indice proaritmico (0–100)**: Composito a tre componenti:
 
@@ -855,7 +859,7 @@ Genera una mappa di rischio 2D nello stile CiPA, posizionando ogni farmaco su du
 | INTERMEDIATE (giallo) | 20–40 | Effetti sospetti, richiede investigazione |
 | HIGH (rosso) | > 40 | Alto rischio proaritmico |
 
-Le linee verticali a X = 10% e 20% separano i livelli di prolungamento FPDcF.
+Le linee verticali tratteggiate a X = 10% e 20% separano i livelli di prolungamento FPDcF; quella continua è la soglia della decisione.
 
 #### Drug name normalization
 
@@ -1201,6 +1205,10 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.8.1 (Ottobre 2026) — risk map allineata alla decisione per farmaco
+
+L'asse X della risk map (§4.11) è la statistica che `classify_drug` confronta con la soglia (`decision_value`), non più la variazione massima di una singola registrazione. La decisione è ricalcolata sui risultati passati alla mappa, il veicolo è posizionato con la stessa statistica, i farmaci senza decisione stanno in una fascia a sinistra e i washout non compaiono più come farmaci. Stessa logica nella pagina Streamlit.
 
 ### v3.8.0 (Ottobre 2026) — decisione sul farmaco, riferimento pre-dose, registrazioni a 20 kHz
 

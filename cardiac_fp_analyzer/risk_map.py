@@ -2,7 +2,12 @@
 risk_map.py — CiPA-style 2D risk map for drug proarrhythmic classification.
 
 Generates a scatter plot placing each drug on two axes:
-  X-axis : max ΔFPDcF (%) — repolarisation prolongation
+  X-axis : ΔFPDcF (%) — the statistic the drug call compares with the
+           threshold (normalization.classify_drug 'decision_value'). With
+           the default method it is the level the tissue mean holds over
+           two adjacent concentrations; until v3.8.0 it was the largest
+           single recording, which put every negative compound of the
+           Visone 2023 data above the threshold.
   Y-axis : proarrhythmic index (0-100) — composite of beat irregularity,
            cessation, and spectral morphology change
 
@@ -76,14 +81,23 @@ class DrugRiskMetrics:
     n_with_normalization: int = 0
     # Classification
     cessation_override: bool = False
+    # Drug call (normalization.classify_drug): X coordinate and decision
+    fpdc_decision_pct: float = np.nan        # 'decision_value'; NaN = insufficient data
+    decision: str = ''                       # 'positive' | 'negative' | 'insufficient data' | ''
+    decision_method: str = ''
+    threshold_pct: float = np.nan
 
 
-def aggregate_drug_metrics(results_list) -> dict[str, DrugRiskMetrics]:
+def aggregate_drug_metrics(results_list, cfg=None) -> dict[str, DrugRiskMetrics]:
     """
     Walk the full results list and aggregate risk-relevant metrics per
     canonical drug name.
+
+    The drug call is recomputed on ``results_list`` with ``cfg``
+    (NormalizationConfig, default settings when None), so a map built from
+    several batches combined places each drug on all of its tissues.
     """
-    from .normalization import _is_baseline, _is_control
+    from .normalization import _is_baseline, _is_control, is_washout
 
     buckets = defaultdict(lambda: {
         'pct': [], 'bp_cv': [], 'cess_conf': [], 'spec': [], 'fpd_conf': [],
@@ -93,7 +107,9 @@ def aggregate_drug_metrics(results_list) -> dict[str, DrugRiskMetrics]:
     })
 
     for r in results_list:
-        if _is_baseline(r) or _is_control(r):
+        # washouts are not an exposure to the drug (and 'chip3_ch2_wash12hours'
+        # carries no drug name at all: it showed up as a drug of its own)
+        if _is_baseline(r) or _is_control(r) or is_washout(r):
             continue
         fi = r.get('file_info', {})
         drug_raw = str(fi.get('drug', '') or '').lower()
@@ -182,7 +198,34 @@ def aggregate_drug_metrics(results_list) -> dict[str, DrugRiskMetrics]:
             m.min_fpd_confidence = min(b['fpd_conf'])
         m.n_concentrations = len(b['bp_cv'])
         out[drug] = m
+
+    from .normalization import classify_drug
+    for drug, c in classify_drug(results_list, cfg=cfg, include_vehicle=True).items():
+        m = out.get(drug)
+        if m is None:
+            continue
+        m.fpdc_decision_pct = float(c.get('decision_value', np.nan))
+        m.decision = c.get('decision', '')
+        m.decision_method = c.get('method', '')
+        m.threshold_pct = float(c.get('threshold_used', np.nan))
+        m.cessation_override = bool(c.get('cessation_override', False))
     return out
+
+
+_X_LABELS = {
+    'concentration': 'ΔFPDcF (%) — tissue mean held over 2 adjacent concentrations',
+    'mean': 'Mean ΔFPDcF (%) of all recordings',
+    'max': 'Max ΔFPDcF (%)',
+    'n_above': 'Max ΔFPDcF (%)',
+}
+
+
+def x_axis_label(metrics, consecutive=2):
+    """Axis title for the X coordinate (fpdc_decision_pct) of ``metrics``."""
+    methods = {m.decision_method for m in metrics.values() if m.decision_method}
+    method = methods.pop() if len(methods) == 1 else 'concentration'
+    label = _X_LABELS.get(method, _X_LABELS['concentration'])
+    return label.replace('2 adjacent', f'{consecutive} adjacent') if method == 'concentration' else label
 
 
 # ── Proarrhythmic index ────────────────────────────────────────────────
@@ -297,19 +340,20 @@ def generate_risk_map(
     if zone_cfg is None:
         zone_cfg = RiskZoneConfig()
 
-    metrics = aggregate_drug_metrics(results_list)
+    norm_cfg = getattr(config, 'normalization', None) if config is not None else None
+    metrics = aggregate_drug_metrics(results_list, cfg=norm_cfg)
 
-    # Compute coordinates
+    # Compute coordinates. Drugs without a decision value (fewer tissues per
+    # concentration than the rule needs) are drawn hollow at the left edge.
     drugs, xs, ys = [], [], []
     for drug, m in sorted(metrics.items()):
-        x = m.max_pct_fpdc_change if not np.isnan(m.max_pct_fpdc_change) else 0.0
-        y = compute_proarrhythmic_index(m)
         drugs.append(drug)
-        xs.append(x)
-        ys.append(y)
+        xs.append(m.fpdc_decision_pct)
+        ys.append(compute_proarrhythmic_index(m))
 
-    xs = np.array(xs)
-    ys = np.array(ys)
+    xs = np.array(xs, dtype=float)
+    ys = np.array(ys, dtype=float)
+    undecided = np.isnan(xs)
 
     if len(xs) == 0:
         fig, ax = plt.subplots(figsize=figsize)
@@ -322,8 +366,12 @@ def generate_risk_map(
     fig, ax = plt.subplots(figsize=figsize)
 
     # Risk zone backgrounds
-    x_min = min(xs.min() - 10, -15)
-    x_max = max(xs.max() + 10, zone_cfg.fpdc_mid_high + 15)
+    placed = xs[~undecided]
+    x_min = min(placed.min() - 10 if placed.size else 0.0, -15)
+    x_max = max(placed.max() + 10 if placed.size else 0.0, zone_cfg.fpdc_mid_high + 15)
+    # undecided drugs get their own strip left of the axis range
+    x_lo = x_min - 16 if undecided.any() else x_min
+    xs = np.where(undecided, x_min - 8, xs)
     y_min = -2
     y_max = max(ys.max() + 10, zone_cfg.proarrh_mid_high + 15)
 
@@ -337,9 +385,12 @@ def generate_risk_map(
     ax.axhspan(zone_cfg.proarrh_mid_high, y_max + 20, xmin=0, xmax=1,
                color='#f8d7da', alpha=0.5, zorder=0)
 
-    # FPDcF prolongation threshold lines
+    # FPDcF prolongation threshold lines, and the threshold of the drug call
     ax.axvline(zone_cfg.fpdc_low_mid, color='#888', ls='--', lw=0.8, alpha=0.7)
     ax.axvline(zone_cfg.fpdc_mid_high, color='#888', ls='--', lw=0.8, alpha=0.7)
+    thresholds = {m.threshold_pct for m in metrics.values() if not np.isnan(m.threshold_pct)}
+    if len(thresholds) == 1:
+        ax.axvline(thresholds.pop(), color='#495057', ls='-', lw=1.0, alpha=0.8)
     ax.axhline(zone_cfg.proarrh_low_mid, color='#888', ls='--', lw=0.8, alpha=0.7)
     ax.axhline(zone_cfg.proarrh_mid_high, color='#888', ls='--', lw=0.8, alpha=0.7)
 
@@ -377,8 +428,12 @@ def generate_risk_map(
         # Larger point if cessation detected
         size = 180 if m_obj.has_cessation else 120
 
-        ax.scatter(x, y, c=color, marker=marker, s=size, edgecolors='white',
-                   linewidths=1.2, zorder=5)
+        if undecided[i]:
+            ax.scatter(x, y, facecolors='none', edgecolors='#6c757d', marker=marker,
+                       s=size, linewidths=1.5, zorder=5)
+        else:
+            ax.scatter(x, y, c=color, marker=marker, s=size, edgecolors='white',
+                       linewidths=1.2, zorder=5)
 
         # Drug label with white outline for readability
         label = drug.capitalize()
@@ -394,11 +449,16 @@ def generate_risk_map(
             txt2.set_path_effects([pe.withStroke(linewidth=2, foreground='white')])
 
     # ── Axes ──
-    ax.set_xlabel('Max ΔFPDcF (%)', fontsize=12, fontweight='bold')
+    consecutive = getattr(norm_cfg, 'classification_consecutive', 2) if norm_cfg is not None else 2
+    ax.set_xlabel(x_axis_label(metrics, consecutive), fontsize=12, fontweight='bold')
     ax.set_ylabel('Proarrhythmic Index (0–100)', fontsize=12, fontweight='bold')
     ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
 
-    ax.set_xlim(x_min, x_max)
+    ax.set_xlim(x_lo, x_max)
+    if undecided.any():
+        ax.axvspan(x_lo, x_min, color='#f1f3f5', zorder=1)
+        ax.text((x_lo + x_min) / 2, y_min + 1, 'no decision', fontsize=8, color='#6c757d',
+                ha='center', va='bottom')
     ax.set_ylim(y_min, y_max)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
@@ -418,13 +478,17 @@ def generate_risk_map(
     legend_elements.append(Line2D([0], [0], marker='$⚡$', color='w',
                            markerfacecolor='#212529', markersize=12,
                            label='Cessation detected'))
+    if undecided.any():
+        legend_elements.append(Line2D([0], [0], marker='o', color='w', markerfacecolor='none',
+                               markeredgecolor='#6c757d', markersize=10,
+                               label='No decision (grey strip)'))
 
     ax.legend(handles=legend_elements, loc='upper left', fontsize=9,
               framealpha=0.9, edgecolor='#dee2e6')
 
     # ── Annotation: axis explanation ──
     ax.text(0.98, 0.02,
-            'X = max FPDcF change across concentrations\n'
+            'X = statistic of the drug call (solid line: its threshold)\n'
             'Y = composite: spectral (70%) + morph. instability (25%) + EAD (5%)',
             transform=ax.transAxes, fontsize=7.5, color='#6c757d',
             ha='right', va='bottom')

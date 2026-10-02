@@ -205,17 +205,19 @@ def _show_risk_map(results, config, ground_truth):
         compute_proarrhythmic_index,
     )
 
-    metrics = aggregate_drug_metrics(results)
+    norm_cfg = getattr(config, 'normalization', None)
+    metrics = aggregate_drug_metrics(results, cfg=norm_cfg)
     if not metrics:
         st.warning("Nessun dato farmaco disponibile per la risk map.")
         return
 
     zone_cfg = RiskZoneConfig()
 
-    # Build data
+    # Build data. X = statistic of the drug call (classify_drug
+    # 'decision_value'); drugs without one go to a strip on the left.
     rows = []
     for drug, m in sorted(metrics.items()):
-        x = m.max_pct_fpdc_change if not np.isnan(m.max_pct_fpdc_change) else 0.0
+        x = m.fpdc_decision_pct
         y = compute_proarrhythmic_index(m)
         gt = ground_truth.get(drug)
         label = "hERG+" if gt is True else ("hERG−" if gt is False else "?")
@@ -235,16 +237,22 @@ def _show_risk_map(results, config, ground_truth):
             'ead_pct': m.max_ead_incidence_pct,
             'n_conc': m.n_concentrations,
             'cessation': m.has_cessation,
+            'decision': {'positive': 'positivo', 'negative': 'negativo',
+                         'insufficient data': 'dati insufficienti'}.get(m.decision, '—'),
         })
 
     df = pd.DataFrame(rows)
+    df['undecided'] = df['x'].isna()
 
     fig = go.Figure()
 
     # Zone backgrounds
-    x_min = min(df['x'].min() - 10, -15)
-    x_max = max(df['x'].max() + 10, 35)
+    placed = df.loc[~df['undecided'], 'x']
+    x_min = min(placed.min() - 10 if len(placed) else 0.0, -15)
+    x_max = max(placed.max() + 10 if len(placed) else 0.0, 35)
     y_max = max(df['y'].max() + 10, 55)
+    x_lo = x_min - 16 if df['undecided'].any() else x_min
+    df['x_plot'] = df['x'].where(~df['undecided'], x_min - 8)
 
     fig.add_shape(type="rect", x0=x_min, x1=x_max, y0=0, y1=zone_cfg.proarrh_low_mid,
                   fillcolor="rgba(40,167,69,0.12)", line_width=0)
@@ -256,6 +264,14 @@ def _show_risk_map(results, config, ground_truth):
     # Threshold lines
     for xv in [zone_cfg.fpdc_low_mid, zone_cfg.fpdc_mid_high]:
         fig.add_vline(x=xv, line_dash="dash", line_color="gray", opacity=0.5)
+    thresholds = {m.threshold_pct for m in metrics.values() if not np.isnan(m.threshold_pct)}
+    if len(thresholds) == 1:
+        fig.add_vline(x=thresholds.pop(), line_color="#495057", opacity=0.8)
+    if df['undecided'].any():
+        fig.add_shape(type="rect", x0=x_lo, x1=x_min, y0=-2, y1=y_max,
+                      fillcolor="rgba(233,236,239,0.9)", line_width=0)
+        fig.add_annotation(x=(x_lo + x_min) / 2, y=0, text="nessuna decisione",
+                           showarrow=False, font=dict(size=10, color="#6c757d"))
     for yv in [zone_cfg.proarrh_low_mid, zone_cfg.proarrh_mid_high]:
         fig.add_hline(y=yv, line_dash="dash", line_color="gray", opacity=0.5)
 
@@ -268,30 +284,37 @@ def _show_risk_map(results, config, ground_truth):
         if sub.empty:
             continue
         fig.add_trace(go.Scatter(
-            x=sub['x'], y=sub['y'],
+            x=sub['x_plot'], y=sub['y'],
             mode='markers+text',
             name=gt_label,
             marker=dict(
-                color=color_map[gt_label],
+                color=[('rgba(0,0,0,0)' if u else color_map[gt_label]) for u in sub['undecided']],
                 size=14,
                 symbol=symbol_map[gt_label],
-                line=dict(color='white', width=1.5)
+                line=dict(color=[(color_map[gt_label] if u else 'white') for u in sub['undecided']], width=1.5)
             ),
             text=sub['drug'],
+            customdata=sub[['x', 'decision']].to_numpy(),
             textposition='top right',
             textfont=dict(size=11, color='#333'),
             hovertemplate=(
                 "<b>%{text}</b><br>"
-                "ΔFPDcF: %{x:.1f}%<br>"
+                "ΔFPDcF: %{customdata[0]:.1f}%<br>"
+                "Decisione: %{customdata[1]}<br>"
                 "Proarrhythmic Index: %{y:.1f}<br>"
                 "<extra></extra>"
             )
         ))
 
+    methods = {m.decision_method for m in metrics.values() if m.decision_method}
+    method = methods.pop() if len(methods) == 1 else 'concentration'
+    consecutive = getattr(norm_cfg, 'classification_consecutive', 2) if norm_cfg is not None else 2
+    x_title = {'concentration': f"ΔFPDcF (%) — media tra tessuti su {consecutive} concentrazioni adiacenti",
+               'mean': "ΔFPDcF medio (%) di tutte le registrazioni"}.get(method, "ΔFPDcF max (%)")
     fig.update_layout(
-        xaxis_title="Max ΔFPDcF (%)",
+        xaxis_title=x_title,
         yaxis_title="Indice Proaritmico (0–100)",
-        xaxis=dict(range=[x_min, x_max]),
+        xaxis=dict(range=[x_lo, x_max]),
         yaxis=dict(range=[-2, y_max]),
         height=550,
         margin=dict(t=40, b=50),
@@ -302,8 +325,9 @@ def _show_risk_map(results, config, ground_truth):
 
     # Metrics table
     st.subheader("Metriche per farmaco")
-    display_df = df[['drug', 'gt', 'x', 'y', 'spectral', 'morph', 'ead_pct', 'zone', 'n_conc']].copy()
-    display_df.columns = ['Farmaco', 'Classe', 'ΔFPDcF%', 'Indice', 'Spectral', 'Morph Inst', 'EAD%', 'Zona', 'N conc.']
+    display_df = df[['drug', 'gt', 'x', 'decision', 'y', 'spectral', 'morph', 'ead_pct', 'zone', 'n_conc']].copy()
+    display_df.columns = ['Farmaco', 'Classe', 'ΔFPDcF%', 'Decisione', 'Indice', 'Spectral', 'Morph Inst', 'EAD%',
+                          'Zona', 'N conc.']
     st.dataframe(
         display_df.style.format({
             'ΔFPDcF%': '{:.1f}', 'Indice': '{:.1f}',

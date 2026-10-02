@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.8.0
+**Versione**: 3.8.1
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
@@ -169,6 +169,17 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.8.1 (Ottobre 2026) — risk map allineata alla decisione per farmaco
+- **Asse X della risk map = statistica della decisione per farmaco** (`decision_value` di `classify_drug`).
+  - Con il metodo predefinito è il livello che la media tra tessuti mantiene su 2 concentrazioni adiacenti.
+  - La linea continua è la soglia: a destra il farmaco è positivo, a sinistra negativo.
+  - Prima l'asse era la variazione massima di una singola registrazione. Sul dataset Visone 2023 quinidina e cisapride arrivavano a circa 500 % e il veicolo a 234 %, quindi tutti i negativi stavano oltre la soglia.
+- La decisione viene ricalcolata sui risultati passati alla mappa: unendo più batch, ogni farmaco usa tutti i suoi tessuti. Il veicolo è posizionato con la stessa statistica; i farmaci senza decisione stanno in una fascia grigia a sinistra.
+- I washout non compaiono più come farmaci a sé (`wash12hours`, `washout1h`).
+- Stessa logica nella risk map interattiva di Streamlit, con la decisione nella tabella.
+- `classify_drug` restituisce `decision_value` e accetta `include_vehicle`.
+- **Verifica**: risk map sui 10 esperimenti del paper, ogni farmaco dal lato della soglia che corrisponde alla sua decisione. Aggiunti 3 test
 
 ### v3.8.0 (Ottobre 2026) — decisione sul farmaco, riferimento pre-dose, registrazioni a 20 kHz
 Correzioni emerse confrontando le regole di decisione sui 12 composti del paper Visone 2023 (etichetta FDA come verità). Riguardano `batch_analyze` e `classify_drug`; l'interfaccia PySide non è toccata. **Cambia la decisione per farmaco**: chi la usa da `classify_drug` o dagli strumenti in `tools/` deve aspettarsi chiamate diverse.

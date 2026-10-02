@@ -334,3 +334,52 @@ def test_a_tissue_with_its_own_concentrations_is_reported(caplog):
     with caplog.at_level('WARNING'):
         classify_drug(rs, cfg=NormalizationConfig())
     assert any('exp8/day6/chipD_ch2 shares no concentration' in m.getMessage() for m in caplog.records)
+
+
+# ── 6. risk map X axis = statistic of the drug call ─────────────────────
+
+
+def _two_tissue_drug():
+    rs = [_dose('D/Exp5/Day7/chipA_ch1', 'dofe', '1nM', 16.0), _dose('D/Exp5/Day7/chipA_ch1', 'dofe', '10nM', 22.0),
+          _dose('D/Exp5/Day7/chipB_ch2', 'dofe', '1nM', 20.0), _dose('D/Exp5/Day7/chipB_ch2', 'dofe', '10nM', 18.0),
+          _dose('D/Exp5/Day7/chipC_ch3', 'dofe', '100nM', 60.0)]   # one tissue only: not used
+    return rs
+
+
+def test_decision_value_is_what_the_call_compares_with_the_threshold():
+    rs = _two_tissue_drug()
+    c = classify_drug(rs, cfg=NormalizationConfig())['dofetilide']
+    assert c['decision_value'] == pytest.approx(18.0) and c['positive'] is True
+    for method, expected in (('max', 60.0), ('mean', np.mean([16, 22, 20, 18, 60]))):
+        cfg = NormalizationConfig()
+        cfg.classification_method = method
+        assert classify_drug(rs, cfg=cfg)['dofetilide']['decision_value'] == pytest.approx(expected)
+
+
+def test_risk_map_places_drugs_by_the_drug_call_and_keeps_the_vehicle():
+    from cardiac_fp_analyzer.risk_map import aggregate_drug_metrics
+    rs = _two_tissue_drug()
+    rs += [_dose('D/Exp5/Day7/chipD_ch1', 'DMSO', c, v) for c, v in (('01', 2.0), ('02', 4.0))]
+    rs += [_dose('D/Exp5/Day7/chipE_ch1', 'DMSO', c, v) for c, v in (('01', 0.0), ('02', 6.0))]
+    m = aggregate_drug_metrics(rs)
+    assert m['dofetilide'].fpdc_decision_pct == pytest.approx(18.0)
+    assert m['dofetilide'].max_pct_fpdc_change == pytest.approx(60.0)       # still reported
+    assert m['dofetilide'].decision == 'positive' and m['dofetilide'].threshold_pct == 15.0
+    assert m['dmso'].fpdc_decision_pct == pytest.approx(1.0)               # min(mean 0.1 %, mean 0.2 %)
+    assert 'dmso' not in classify_drug(rs, cfg=NormalizationConfig())     # no drug call for the vehicle
+
+
+def test_risk_map_puts_drugs_without_a_decision_in_their_own_strip():
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    from cardiac_fp_analyzer.risk_map import aggregate_drug_metrics, generate_risk_map
+    rs = _two_tissue_drug() + [_dose('D/Exp5/Day7/chipA_ch3', 'terfe', c, v) for c, v in (('1nM', 30.0), ('10nM', 40.0))]
+    m = aggregate_drug_metrics(rs)
+    assert np.isnan(m['terfenadine'].fpdc_decision_pct) and m['terfenadine'].decision == 'insufficient data'
+    fig = generate_risk_map(rs)
+    ax = fig.axes[0]
+    assert ax.get_xlim()[0] < -15 - 15                       # strip added left of the axis range
+    assert 'adjacent concentrations' in ax.get_xlabel()
+    plt.close(fig)

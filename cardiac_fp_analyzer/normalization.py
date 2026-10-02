@@ -596,7 +596,7 @@ def _per_concentration(entries, threshold, min_tissues, consecutive):
     return table, kept, run, n_unplaced
 
 
-def classify_drug(results_list, cfg=None):
+def classify_drug(results_list, cfg=None, include_vehicle=False):
     """
     Classify each drug as positive/negative for QT prolongation.
 
@@ -624,6 +624,9 @@ def classify_drug(results_list, cfg=None):
     authors' values (only cisapride wrong, as in the paper) and 8/12 with
     the software's.
 
+    ``include_vehicle=True`` classifies the vehicle as well (the risk map
+    places it with the same statistic); the drug calls leave it out.
+
     The cessation override (cessation detected and minimum FPD confidence
     below ``cessation_override_max_fpd_confidence``) is reported as
     ``cessation_flag`` and changes the call only when
@@ -642,6 +645,11 @@ def classify_drug(results_list, cfg=None):
         'per_concentration': list of {'concentration', 'value', 'mean_pct',
                              'n_tissues', 'used'} (method 'concentration'),
         'effective_concentration': first concentration of the deciding run,
+        'decision_value': the number compared with the threshold — for
+                          'concentration' the highest level the tissue mean
+                          holds over ``consecutive`` adjacent concentrations
+                          (NaN with insufficient data), for 'mean' the mean,
+                          for 'max' and 'n_above' the maximum,
         'cessation_flag', 'cessation_override': bool, 'cessation_info': dict,
     }
     """
@@ -675,7 +683,7 @@ def classify_drug(results_list, cfg=None):
     for r in results_list:
         if _is_baseline(r) or _is_control(r) or is_washout(r):
             continue
-        if canonical_drug_name((r.get('file_info', {}) or {}).get('drug')) in VEHICLE_NAMES:
+        if not include_vehicle and canonical_drug_name((r.get('file_info', {}) or {}).get('drug')) in VEHICLE_NAMES:
             continue   # vehicle: %Δ kept in the normalisation table, not a drug call
         norm = r.get('normalization', {})
         if not norm.get('has_baseline'):
@@ -756,7 +764,7 @@ def classify_drug(results_list, cfg=None):
             continue
         fi = r.get('file_info', {})
         drug = canonical_drug_name(fi.get('drug'))
-        if not drug or drug in VEHICLE_NAMES:
+        if not drug or (drug in VEHICLE_NAMES and not include_vehicle):
             continue
 
         # Check cessation
@@ -798,9 +806,11 @@ def classify_drug(results_list, cfg=None):
         n_above = sum(1 for p in pct_values if p >= threshold)
 
         per_conc, effective, n_unplaced = [], None, 0
+        decision_value = max_pct
         if method == 'mean':
             positive = mean_pct >= threshold
             decision = 'positive' if positive else 'negative'
+            decision_value = mean_pct
         elif method == 'n_above':
             positive = n_above >= cfg.classification_n_above
             decision = 'positive' if positive else 'negative'
@@ -809,6 +819,8 @@ def classify_drug(results_list, cfg=None):
             decision = 'positive' if positive else 'negative'
         else:   # 'concentration' (default)
             per_conc, kept, run, n_unplaced = _per_concentration(entries, threshold, min_tissues, consecutive)
+            windows = [kept[i:i + consecutive] for i in range(len(kept) - consecutive + 1)]
+            decision_value = max((min(t['mean_pct'] for t in w) for w in windows), default=np.nan)
             positive = run is not None
             if positive:
                 decision = 'positive'
@@ -851,6 +863,7 @@ def classify_drug(results_list, cfg=None):
             'n_tissues': len({e['tissue'] for e in entries}),
             'per_concentration': per_conc,
             'effective_concentration': effective,
+            'decision_value': float(decision_value),
             'min_tissues': min_tissues if method == 'concentration' else None,
             'consecutive': consecutive if method == 'concentration' else None,
             'n_without_concentration': n_unplaced,
@@ -884,6 +897,7 @@ def classify_drug(results_list, cfg=None):
             'n_tissues': 0,
             'per_concentration': [],
             'effective_concentration': None,
+            'decision_value': np.nan,
             'min_tissues': min_tissues if method == 'concentration' else None,
             'consecutive': consecutive if method == 'concentration' else None,
             'n_without_concentration': 0,
