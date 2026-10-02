@@ -682,19 +682,41 @@ def _run_batch_jobs(jobs, config, n_workers, verbose, show_channel, counter):
 
 
 def _choose_tissue_electrodes(baseline_out, infos, csv_files):
-    """Electrode for each tissue = the one auto-selected on its reference baseline.
+    """Electrode for each tissue = the one auto-selected on its reference.
 
-    The reference baseline is the one in the folder holding most of the
-    tissue's other recordings (a 'new baseline' sub-folder or a '_bis'
-    copy loses to the baseline recorded with the dose series), then the
-    better QC grade, then the file name.
+    The reference is the last one recorded before the tissue's first dose
+    (acquisition time from the file header; Oct 2026), the same rule
+    normalization.pair_with_baselines applies. Without times: t0 first,
+    then the one in the folder holding most of the tissue's other
+    recordings (a 'new baseline' sub-folder or a '_bis' copy loses to the
+    baseline recorded with the dose series), then the better QC grade,
+    then the file name. References the analysability verdict rejected are
+    used only when the tissue has no other.
     """
+    from .loader import recording_datetime
+    from .normalization import (
+        canonical_drug_name,
+        last_reference_before,
+        recording_time,
+        reference_kind,
+    )
+
     grade_rank = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'F': 4}
     others = defaultdict(list)
+    first_dose = {}
     for f in csv_files:
         info = infos[f]
-        if info.get('tissue') and not info.get('is_baseline'):
-            others[info['tissue']].append(f.parent)
+        tissue = info.get('tissue')
+        if not tissue or info.get('is_baseline'):
+            continue
+        others[tissue].append(f.parent)
+        drug = canonical_drug_name(info.get('drug'))
+        text = f"{info.get('drug') or ''} {f.name}".lower()
+        if drug.startswith('ctr') or 'wash' in text or 'recovery' in text:
+            continue
+        ts = recording_datetime(f)
+        if ts is not None and (tissue not in first_dose or ts < first_dose[tissue]):
+            first_dose[tissue] = ts
     by_tissue = defaultdict(list)
     for (f, _), r in baseline_out.items():
         by_tissue[infos[f]['tissue']].append((f, r))
@@ -704,8 +726,11 @@ def _choose_tissue_electrodes(baseline_out, infos, csv_files):
             f, r = fr
             same_dir = sum(1 for d in others.get(tissue, []) if d == f.parent)
             grade = getattr(r.get('qc_report'), 'grade', 'F')
-            return (-same_dir, grade_rank.get(grade, 5), f.name)
-        f, r = min(cands, key=score)
+            return (reference_kind(r) != 't0', -same_dir, grade_rank.get(grade, 5), f.name)
+        usable = [fr for fr in cands if not (fr[1].get('summary') or {}).get('not_analysable', False)] or cands
+        picked, _ = last_reference_before([(fr, recording_time(fr[1])) for fr in usable],
+                                          first_dose.get(tissue), score)
+        f, r = picked if picked is not None else min(usable, key=score)
         chosen[tissue] = {'electrode': r['file_info'].get('analyzed_channel', 'el1'),
                           'baseline_file': f.name}
     return chosen

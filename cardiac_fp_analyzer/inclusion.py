@@ -8,8 +8,11 @@ Implements the multi-tier inclusion workflow inspired by Visone et al. 2023:
   4. Physiological FPDcF range (opt-in)
   5. Population outlier detection via MAD (opt-in)
 
-Baselines that fail any criterion are excluded together with all
-drug recordings belonging to the same group (chip + channel).
+A group (tissue + electrode) whose references all fail is excluded
+together with all its drug recordings. When at least one reference passes
+the group is kept, and pairing leaves a recording unpaired if the reference
+chosen for it failed (Oct 2026; before, one failing reference removed the
+group).
 """
 
 import logging
@@ -84,6 +87,7 @@ def apply_inclusion_criteria(results, verbose=True, cfg=None, report_out=None):
     # produces *absence* of numbers, which is far harder to notice than
     # wrong ones.
     excluded_groups = {}
+    passing_groups = set()
     n_bl_ok = 0
     n_bl_fail = 0
     n_bl_conf_fail = 0
@@ -226,7 +230,7 @@ def apply_inclusion_criteria(results, verbose=True, cfg=None, report_out=None):
                         n_bl_outlier_fail += 1
 
         if fail_reason:
-            excluded_groups[group] = {
+            excluded_groups.setdefault(group, {
                 'group': group,
                 'baseline_file': r.get('metadata', {}).get('filename', '?'),
                 'criterion': fail_criterion,
@@ -238,13 +242,22 @@ def apply_inclusion_criteria(results, verbose=True, cfg=None, report_out=None):
                 'experiment': exp,
                 'n_drug_recordings_lost': 0,   # filled in step 2
                 'drug_recordings_lost': [],
-            }
+            })
             r['inclusion'] = {'passed': False, 'reason': fail_reason,
                               'criterion': fail_criterion}
             n_bl_fail += 1
         else:
             r['inclusion'] = {'passed': True, 'reason': ''}
+            passing_groups.add(group)
             n_bl_ok += 1
+
+    # A group is removed only when none of its references passes (Oct 2026).
+    # With several references per tissue ('baseline' and 't0', 'baseline_1'
+    # and 'baseline_2') one failing reference used to take down the whole
+    # dose series even when the reference actually used passed; on the Visone
+    # 2023 data this removed 2 of the 4 sotalol tissues. Pairing then leaves
+    # a recording unpaired if the reference chosen for it failed.
+    excluded_groups = {g: v for g, v in excluded_groups.items() if g not in passing_groups}
 
     if verbose:
         if getattr(cfg, 'enabled_combined_rule', False):

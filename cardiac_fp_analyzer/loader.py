@@ -7,14 +7,72 @@ and returns a clean DataFrame plus a metadata dict.
 """
 
 import re
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 
+# ── Sample rate ───────────────────────────────────────────────────────
+# The pipeline is tuned for ~2 kHz recordings: window lengths are given in
+# samples (Savitzky–Golay, detector) and the 0.5–500 Hz band-pass is designed
+# as (b, a) coefficients. At 20 kHz (the Accelera chips of Exp11 in the Visone
+# 2023 data) that band-pass has a pole outside the unit circle, the filtered
+# signal overflows and no beat is found ('only 0 depolarisation(s) detected'
+# on all 37 files). Since Oct 2026 recordings above MAX_SAMPLE_RATE are
+# decimated on load to about TARGET_SAMPLE_RATE (FIR anti-alias filter, zero
+# phase); metadata keeps the original rate.
+TARGET_SAMPLE_RATE = 2000.0
+MAX_SAMPLE_RATE = 3000.0
 
-def load_csv(filepath):
+
+def _decimate(df, fs):
+    """Decimate the electrode columns by round(fs / TARGET_SAMPLE_RATE)."""
+    q = int(round(fs / TARGET_SAMPLE_RATE))
+    if q < 2:
+        return df, 1
+    from scipy.signal import decimate
+    cols = {c: decimate(df[c].to_numpy(dtype=float), q, ftype='fir', zero_phase=True)
+            for c in ('el1', 'el2')}
+    n = len(cols['el1'])
+    out = pd.DataFrame({'time': df['time'].to_numpy()[::q][:n], **cols})
+    return out, q
+
+
+def parse_header_datetime(text):
+    """'2019-10-21 14:54:02.102' → datetime, or None."""
+    for fmt in ('%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S'):
+        try:
+            return datetime.strptime(str(text).strip(), fmt)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def recording_datetime(filepath):
+    """Start of acquisition from the '#Date Time:' header line, or None.
+
+    Reads only the header, so it is cheap enough to call on every file of a
+    batch before analysis (used to pick the pre-dose reference).
+    """
+    try:
+        with open(filepath, errors='replace') as f:
+            for line in f:
+                if not line.startswith('#'):
+                    break
+                if line.startswith('#Date Time:'):
+                    return parse_header_datetime(line.split(':', 1)[1])
+    except OSError:
+        return None
+    return None
+
+
+def load_csv(filepath, max_sample_rate=MAX_SAMPLE_RATE):
     """
     Load a Digilent WaveForms CSV file.
+
+    Recordings sampled above ``max_sample_rate`` are decimated to about
+    TARGET_SAMPLE_RATE (``None`` keeps the original rate); metadata then
+    carries 'original_sample_rate' and 'decimation_factor'.
 
     Returns
     -------
@@ -78,6 +136,15 @@ def load_csv(filepath):
         if dt > 0:
             metadata['sample_rate'] = round(1.0 / dt, 1)
 
+    fs = metadata['sample_rate']
+    if max_sample_rate is not None and fs and fs > max_sample_rate:
+        df, q = _decimate(df, fs)
+        if q > 1:
+            metadata['original_sample_rate'] = fs
+            metadata['decimation_factor'] = q
+            metadata['sample_rate'] = fs / q
+            metadata['n_samples'] = len(df)
+
     return metadata, df
 
 
@@ -87,7 +154,7 @@ def load_csv(filepath):
 #   * 'Ch3_Alfu100nM_20000_1_3k_…'     chamber prefix, chip in the folder
 #                                      ('Chip 537/…', Accelera-style)
 # A number followed by a unit is the concentration; '2andhalf' is 2.5.
-_CONC = re.compile(r'(?<![\d.])(\d+andhalf|\d+(?:[._]\d+)?)[\s_]*(nM|uM|µM|μM|mM)(?![A-Za-z]*\d)',
+_CONC = re.compile(r'(?<![\d.,])(\d+andhalf|\d+(?:[._,]\d+)?)[\s_]*(nM|uM|µM|μM|mM)(?![A-Za-z]*\d)',
                    re.IGNORECASE)
 _CHAMBER_PREFIX = re.compile(r'^ch[\s_-]*(\d+)[\s_-]+', re.IGNORECASE)
 # Acquisition settings that follow the drug token in Accelera names
@@ -95,13 +162,24 @@ _CHAMBER_PREFIX = re.compile(r'^ch[\s_-]*(\d+)[\s_-]+', re.IGNORECASE)
 _ACQ_TOKEN = re.compile(r'^(?:\d+fs|\d+k?hz\w*|\d{4,}|\d+k|chan\d+|dif+|diff\w*|conf\d+.*|\d+h(?:our)?\d*|our\w*)$',
                         re.IGNORECASE)
 _BASELINE_WORD = re.compile(r'(?:baseline|basline|(?:^|[_\s])base(?:$|[_\s]))', re.IGNORECASE)
+# Two-electrode layout used before 2020 ('Ch2_Sotalol_15_channel1_sx_channel2_dx',
+# 'ch1_t0_sx_channel2_dx', '…_channel1_sx_channel2_dx_bis'): the suffix and any
+# note after it ('_bis', '_sfter3', '_AFTERAAL') carry no drug information.
+_ELECTRODE_SUFFIX = re.compile(r'[_\s]*(?:channel\d_)?sx_channel\d_dx.*$', re.IGNORECASE)
+# 't0' / 'T0' / 'T02': the pre-dose reference recorded right before the first
+# dose in those protocols; the authors of the Visone 2023 paper normalised to
+# it, not to the earlier file named 'baseline' (13 of 15 tissues).
+_T0_TOKEN = re.compile(r'(?:^|[_\s-])t0\d?(?=$|[_\s-])', re.IGNORECASE)
+# 't1'…'t7' with no drug, or 'Ctrl': time-matched control recordings.
+_TIME_CONTROL = re.compile(r'(?:t(\d{1,2}))?[\s_-]*(ctrl|ctr|control)?', re.IGNORECASE)
+_TISSUE_IN_NAME = re.compile(r'chip[\s_-]*[A-Za-z0-9]+?[\s_-]*ch[\s_-]*\d+[\s_-]*', re.IGNORECASE)
 
 
 def _conc_value(num):
     num = num.lower()
     if num.endswith('andhalf'):
         return str(int(num[:-7] or 0) + 0.5)
-    return num.replace('_', '.')
+    return num.replace('_', '.').replace(',', '.')
 
 
 def parse_filename(filename):
@@ -123,7 +201,9 @@ def parse_filename(filename):
     """
     info = {'chip': None, 'channel': None, 'drug': None,
             'concentration': None, 'is_baseline': False}
-    name = Path(filename).stem
+    stem = Path(filename).stem
+    old_layout = bool(_ELECTRODE_SUFFIX.search(stem))
+    name = _ELECTRODE_SUFFIX.sub('', stem) or stem
 
     m = re.search(r'chip([A-Za-z])', name, re.IGNORECASE)
     if m: info['chip'] = m.group(1).upper()
@@ -131,13 +211,15 @@ def parse_filename(filename):
     m = re.search(r'ch(\d+)', name, re.IGNORECASE)
     if m: info['channel'] = int(m.group(1))
 
-    if _BASELINE_WORD.search(name):
+    t0 = bool(_T0_TOKEN.search(name))
+    if _BASELINE_WORD.search(stem) or t0:
         info['is_baseline'] = True
         info['drug'] = 'baseline'
         info['concentration'] = '0'
+        info['reference_kind'] = 't0' if t0 else 'baseline'
         return info
 
-    remainder = re.sub(r'chip[A-Za-z0-9]+?_?ch\d+_?', '', name, flags=re.IGNORECASE).strip('_')
+    remainder = _TISSUE_IN_NAME.sub('', name).strip('_')
     # 'Exp10_ChipF_ch2_Ti07_A(_v2|_only)': experiment prefix, then a test-item
     # code and the dose condition letter (the folder A/B/C holds the files).
     remainder = re.sub(r'^exp[\s_-]*\d+[\s_]*', '', remainder, flags=re.IGNORECASE)
@@ -151,10 +233,18 @@ def parse_filename(filename):
         tokens = remainder[accelera.end():].split('_')
         kept = []
         for tok in tokens:
-            if _ACQ_TOKEN.match(tok.strip()):
+            # the old two-electrode layout has no acquisition tokens, and its
+            # '1000' is a concentration ('Ch1_Terfe_1000'), not a sample count
+            if not old_layout and _ACQ_TOKEN.match(tok.strip()):
                 break
             kept.append(tok)
         remainder = '_'.join(kept).strip('_ ')
+
+    tc = _TIME_CONTROL.fullmatch(remainder)
+    if tc and (tc.group(1) or tc.group(2)):
+        info['drug'] = 'ctrl'
+        info['concentration'] = f't{int(tc.group(1))}' if tc.group(1) else ''
+        return info
 
     m_conc = _CONC.search(remainder)
     if m_conc:
@@ -168,13 +258,14 @@ def parse_filename(filename):
         return info
 
     # No unit: split a leading or trailing bare number off the drug name
-    # ('NIFEDIPINE_10', 'bepridil 001', 'DMSO10-1', '01DMSO').
-    m = (re.fullmatch(r'([A-Za-z]+)[\s_-]*(\d[\d._-]*)', remainder)
-         or re.fullmatch(r'(\d[\d._-]*)[\s_-]*([A-Za-z]+)', remainder))
+    # ('NIFEDIPINE_10', 'bepridil 001', 'DMSO10-1', '01DMSO', 'Sotalol_3,25',
+    # '01%_DMSO', and number-first names followed by a short note: '10_VERAP_e').
+    m = (re.fullmatch(r'([A-Za-z]+)[\s_-]*(\d[\d.,_-]*)%?', remainder)
+         or re.fullmatch(r'(\d[\d.,_-]*)%?[\s_-]*([A-Za-z]+)(?:[\s_-]+[A-Za-z0-9]{1,3})*', remainder))
     if m:
         drug, conc = (m.group(1), m.group(2)) if m.group(1)[0].isalpha() else (m.group(2), m.group(1))
         info['drug'] = drug
-        info['concentration'] = conc.strip('_-')
+        info['concentration'] = conc.strip('_-').replace(',', '.')
     elif remainder:
         info['drug'] = remainder.replace('_', ' ').strip()
     return info
@@ -190,7 +281,9 @@ def parse_filename(filename):
 # experiment's baseline.
 _EXP_DIR = re.compile(r'^exp[\s_-]*(\d+)', re.IGNORECASE)
 _DAY_DIR = re.compile(r'^day[\s_-]*(\d+)', re.IGNORECASE)
-_CHIP_DIR = re.compile(r'^chip[\s_-]*(\S.*?)\s*$', re.IGNORECASE)
+# chip id = first token of the folder name: 'Chip 537' → 537, 'chipB_sotalol'
+# → B ('chipA_dmso_aspirin', 'ChipC_Verapamil_Terfenadine' in exp1)
+_CHIP_DIR = re.compile(r'^chip[\s_-]*([A-Za-z0-9]+)', re.IGNORECASE)
 _CHAMBER_DIR = re.compile(r'^ch[\s_-]*(\d+)(?:\b|_)', re.IGNORECASE)
 _TISSUE_TOKEN = re.compile(r'chip[\s_-]*([A-Za-z0-9]+?)[\s_-]*ch[\s_-]*(\d+)', re.IGNORECASE)
 
@@ -209,9 +302,12 @@ def describe_recording(filepath):
                   different tissue, so the file is not paired automatically
 
     Chip and chamber come from the file name ('chipA_ch1_…'); for names
-    that start with the chamber ('Ch2_…') the chip is the deepest folder
-    named 'Chip <id>' or, failing that, a parent folder that is a bare
-    number ('Day8/529/Ch1_…'); the chamber can also be a 'Ch2 …' folder.
+    that start with the chamber ('Ch2_…') the chip is the first token of
+    the deepest folder named 'Chip <id>' ('Chip 537', 'chipB_sotalol'),
+    failing that a parent folder that is a bare number ('Day8/529/Ch1_…'),
+    failing that the deepest folder below the experiment that is not a day
+    or chamber folder ('Exp2/inj1/ch3_…' → chip 'INJ1'); the chamber can
+    also be a 'Ch2 …' folder.
     """
     p = Path(filepath)
     info = parse_filename(p.name)
@@ -243,6 +339,13 @@ def describe_recording(filepath):
             chip = _CHIP_DIR.match(chip_dir).group(1)
         elif dirs and dirs[-1].isdigit():
             chip = dirs[-1]
+        elif exp is not None and chamber is not None:
+            # 'Exp2/inj1/ch3_…', 'Exp3/day6/inj2/ch1_…': the folder below the
+            # experiment (day and chamber folders skipped) is the chip
+            i = len(dirs) - 1 - list(reversed(dirs)).index(exp)
+            below = [d for d in dirs[i + 1:] if not (_DAY_DIR.match(d) or _CHAMBER_DIR.match(d))]
+            if below:
+                chip = re.sub(r'\W+', '', below[-1]) or None
     if chamber is not None:
         info['channel'] = chamber
     if chip is not None and chamber is not None and not info.get('dual_tissue'):

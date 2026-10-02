@@ -891,20 +891,30 @@ class NormalizationConfig:
     classification_threshold: str = 'mid'  # 'low', 'mid', 'high'
 
     # Classification method for drug-level decision
-    # 'max'  : drug positive if any concentration > threshold
-    # 'mean' : drug positive if mean across concentrations > threshold
-    # 'n_above' : drug positive if ≥ n concentrations > threshold
-    classification_method: str = 'max'
+    # 'concentration' : tissue mean at each concentration (≥ min_tissues
+    #                   tissues) reaches the threshold at `consecutive`
+    #                   adjacent concentrations — default since Oct 2026
+    # 'max'  : drug positive if any recording ≥ threshold (default until
+    #          v3.7.0: on the Visone 2023 data it called every negative
+    #          compound positive, see normalization.classify_drug)
+    # 'mean' : drug positive if the mean of all recordings ≥ threshold
+    # 'n_above' : drug positive if ≥ n recordings ≥ threshold
+    classification_method: str = 'concentration'
     classification_n_above: int = 2  # used when method = 'n_above'
+    # used when method = 'concentration'; min_tissues=1 and consecutive=1
+    # give the rule of Visone et al. 2023
+    classification_min_tissues: int = 2
+    classification_consecutive: int = 2
 
     # Smart cessation override
     # When a drug causes cessation AND waveform destruction (low FPD confidence),
     # elevate the drug to positive even if FPDcF measurement failed.
-    # This catches drugs like dofetilide that destroy waveform morphology.
-    # Only triggers when min FPD confidence across concentrations < threshold,
-    # preventing false positives for drugs with cessation at extreme doses
-    # but good FPD data (e.g. ranolazine at 100µM).
-    enable_cessation_override: bool = True
+    # Only triggers when min FPD confidence across concentrations < threshold.
+    # Off by default since Oct 2026: on the Visone 2023 data it would have
+    # made 10 of 12 compounds positive, four negatives included (cessation
+    # detections on vehicle recordings too). The condition is always reported
+    # as 'cessation_flag' in the drug classification.
+    enable_cessation_override: bool = False
     cessation_override_max_fpd_confidence: float = 0.60
 
     # ── QC filter for normalized recordings ──

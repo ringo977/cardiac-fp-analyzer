@@ -39,7 +39,7 @@ _DRUG_ALIASES = (
     ('terfe', 'terfenadine'), ('quinid', 'quinidine'), ('dofe', 'dofetilide'),
     ('alfu', 'alfuzosin'), ('mexi', 'mexiletine'), ('nife', 'nifedipine'),
     ('rano', 'ranolazine'), ('cisa', 'cisapride'), ('sotal', 'sotalol'),
-    ('verap', 'verapamil'), ('aspir', 'aspirin'), ('bepri', 'bepridil'),
+    ('verap', 'verapamil'), ('aspir', 'aspirin'), ('bepri', 'bepridil'), ('sot', 'sotalol'),
     ('torem', 'toremifene'), ('chloro', 'chloroquine'), ('cloro', 'chloroquine'),
     ('dmso', 'dmso'), ('vehicle', 'vehicle'),
 )
@@ -66,6 +66,87 @@ def is_washout(result):
     fi = result.get('file_info', {}) or {}
     text = f"{fi.get('drug', '') or ''} {(result.get('metadata', {}) or {}).get('filename', '')}".lower()
     return 'wash' in text or 'recovery' in text
+
+
+# ─── Concentrations ───
+# The drug call compares tissues at the same concentration and needs the
+# concentrations in order, so the label from the file name ('300 nM',
+# '0.3 uM', '10', '001', 'B') becomes a number.
+_UNIT_TO_UM = {'nm': 1e-3, 'um': 1.0, 'µm': 1.0, 'μm': 1.0, 'mm': 1e3}
+_CONC_LABEL = re.compile(r'(\d+(?:[.,_]\d+)?)\s*(nm|um|µm|μm|mm)?\s*%?', re.IGNORECASE)
+
+
+def concentration_value(label, default_unit=None):
+    """Sortable value of a concentration label, in µM when a unit is known.
+
+    '300 nM' → 0.3, '2.5 um' → 2.5, '7,5' → 7.5; bare numbers take
+    ``default_unit`` when given. Accelera names write decimals with a
+    leading zero and no point ('001' → 0.01, '05' → 0.5); 'DMSO10-1' gives
+    '10-1' → 0.1. A single capital letter (the GG dose conditions A, B, C)
+    is its rank in the alphabet. Anything else ('', 't2') → None.
+    """
+    if label is None:
+        return None
+    s = str(label).strip()
+    if not s:
+        return None
+    if re.fullmatch(r'[A-Z]', s):
+        return float(ord(s) - ord('A') + 1)
+    m = _CONC_LABEL.fullmatch(s)
+    if m is None:
+        m = re.fullmatch(r'10-(\d+)', s)
+        return 10.0 ** -int(m.group(1)) if m else None
+    num, unit = m.group(1), (m.group(2) or default_unit or '').lower()
+    v = float('0.' + num[1:]) if re.fullmatch(r'0\d+', num) else float(re.sub(r'[,_]', '.', num))
+    return v * _UNIT_TO_UM.get(unit, 1.0)
+
+
+def _default_unit(labels):
+    """Most frequent explicit unit among one drug's labels ('10' next to
+    '30 nM' is read as nM), or None."""
+    units = [m.group(2).lower() for m in (_CONC_LABEL.fullmatch(str(x).strip()) for x in labels if x)
+             if m is not None and m.group(2)]
+    return max(set(units), key=units.count) if units else None
+
+
+# ─── Pre-dose reference ───
+# A tissue may have several reference recordings: 'baseline' and 't0' in the
+# protocols before 2020 (t0 is recorded right before the first dose, and the
+# Visone 2023 authors normalised to it in 13 of 15 tissues), 'baseline_1' /
+# 'baseline_2', a 'new baseline' folder. Since Oct 2026 the reference is the
+# last one recorded before the first dose, from the '#Date Time:' header;
+# without times, t0 is preferred, then the earlier rule.
+
+def recording_time(result):
+    """Acquisition start of an analysed recording (metadata 'datetime')."""
+    from .loader import parse_header_datetime
+    return parse_header_datetime((result.get('metadata', {}) or {}).get('datetime'))
+
+
+def reference_kind(result):
+    """'t0' or 'baseline' for reference recordings."""
+    return (result.get('file_info', {}) or {}).get('reference_kind') or 'baseline'
+
+
+def last_reference_before(cands, first_dose_time, fallback_key):
+    """Latest candidate recorded before ``first_dose_time``.
+
+    ``cands``: list of (item, time). Returns (item, reason) or (None, '')
+    when the rule cannot be applied (a candidate without time, no dose
+    time, or no candidate before the first dose). Ties go to the smallest
+    ``fallback_key(item)``.
+    """
+    if not cands or first_dose_time is None or any(t is None for _, t in cands):
+        return None, ''
+    pre = [(c, t) for c, t in cands if t <= first_dose_time]
+    if not pre:
+        return None, ''
+    latest = max(t for _, t in pre)
+    best = min((c for c, t in pre if t == latest), key=fallback_key)
+    why = f"last reference before the first dose (recorded {latest:%H:%M})"
+    if len(pre) > 1:
+        why += f", latest of {len(pre)}"
+    return best, why
 
 # ─── Thresholds (module-level defaults, overridden by NormalizationConfig) ───
 THRESHOLD_LOW = 10.0    # %FPDcF change ≥ 10%
@@ -170,9 +251,13 @@ def pair_with_baselines(results_list, details=None):
     Pair each drug recording with its baseline.
 
     Groups results by tissue (experiment + day + chip + chamber) and
-    electrode. Among the baselines of the tissue, a recording is paired
-    with the one in its own folder; if there are several, or none in its
-    folder, with the best QC grade (then the file name). Baselines the
+    electrode. The reference recordings of the tissue are the baselines,
+    including 't0' (pre-dose reference of the protocols before 2020).
+    When every reference and at least one dose carry an acquisition time,
+    the tissue's reference is the last one recorded before its first dose
+    (Oct 2026). Otherwise a recording is paired with the reference in its
+    own folder, t0 first; if there are several, or none in its folder,
+    with the best QC grade (then the file name). Baselines the
     analysability verdict rejected are never used. If the chosen baseline
     failed the inclusion criteria the recording is left unpaired.
 
@@ -213,6 +298,9 @@ def pair_with_baselines(results_list, details=None):
                 baselines = controls[:1]
         return baselines
 
+    def _fname(b):
+        return (b.get('metadata', {}) or {}).get('filename', '')
+
     def _choose(r, candidates):
         cands = _usable(candidates)
         if not cands:
@@ -221,11 +309,22 @@ def pair_with_baselines(results_list, details=None):
         here = _folder(r)
         same = [b for b in cands if here is not None and _folder(b) == here]
         pool = same or cands
-        best = min(pool, key=lambda b: (_grade(b), (b.get('metadata', {}) or {}).get('filename', '')))
+        best = min(pool, key=lambda b: (reference_kind(b) != 't0', _grade(b), _fname(b)))
         why = 'baseline in the same folder' if same else 'baseline in another folder of the same tissue'
-        if len(pool) > 1:
+        if reference_kind(best) == 't0' and len(pool) > 1:
+            why += ', t0 (recorded right before dosing) preferred'
+        elif len(pool) > 1:
             why += f', best QC grade of {len(pool)}'
         return best, why
+
+    def _timed(candidates, group_results):
+        """One reference for the tissue: the last before its first dose."""
+        doses = [x for x in group_results
+                 if not (_is_baseline(x) or _is_control(x) or is_washout(x))]
+        times = [t for t in (recording_time(x) for x in doses) if t is not None]
+        first = min(times) if times else None
+        cands = [(b, recording_time(b)) for b in _usable(candidates)]
+        return last_reference_before(cands, first, lambda b: (_grade(b), _fname(b)))
 
     baseline_map = {}
     for key, group_results in groups.items():
@@ -235,6 +334,7 @@ def pair_with_baselines(results_list, details=None):
             fallback = _find_baseline(base_groups.get(_get_base_key(group_results[0]), []))
             if _usable(fallback):
                 candidates, other_electrode = fallback, True
+        timed_bl, timed_why = _timed(candidates, group_results)
 
         for r in group_results:
             rk = recording_key(r)
@@ -244,6 +344,8 @@ def pair_with_baselines(results_list, details=None):
                 continue
             if fi.get('dual_tissue'):
                 bl, why = None, 'two tissues in one file (one per electrode): not paired automatically'
+            elif timed_bl is not None:
+                bl, why = timed_bl, timed_why
             else:
                 bl, why = _choose(r, candidates)
                 if bl is not None and not (bl.get('inclusion', {}) or {}).get('passed', True):
@@ -443,24 +545,104 @@ def _compute_tdp_score(result, norm, cfg=None):
         return 0
 
 
+def _per_concentration(entries, threshold, min_tissues, consecutive):
+    """Tissue-mean %ΔFPDcF at each concentration of one drug.
+
+    Recordings of the same tissue at the same concentration are averaged
+    first, so a repeated recording does not count as a second tissue.
+    Returns (table, kept, run, n_unplaced): ``table`` lists every
+    concentration in increasing order with its mean and number of tissues,
+    ``kept`` those measured in at least ``min_tissues`` tissues, ``run`` the
+    first ``consecutive`` adjacent kept concentrations whose means all reach
+    ``threshold`` (None when there is none) and ``n_unplaced`` the
+    recordings whose concentration label could not be read as a number.
+    """
+    unit = _default_unit([e['concentration'] for e in entries])
+    by_conc = defaultdict(lambda: defaultdict(list))
+    label = {}
+    n_unplaced = 0
+    for e in entries:
+        v = concentration_value(e['concentration'], default_unit=unit)
+        if v is None:
+            n_unplaced += 1
+            continue
+        by_conc[v][e['tissue']].append(e['pct_fpdc_change'])
+        label.setdefault(v, str(e['concentration']))
+    table = []
+    for v in sorted(by_conc):
+        per_tissue = [float(np.mean(p)) for p in by_conc[v].values()]
+        table.append({'concentration': label[v], 'value': v, 'mean_pct': float(np.mean(per_tissue)),
+                      'n_tissues': len(per_tissue), 'used': len(per_tissue) >= min_tissues})
+    # A tissue that shares no concentration with the others usually has the
+    # unit wrong in its file names ('Alfus_1000uM' for 1000 nM); it is still
+    # used, but its concentrations stand alone.
+    if len({t for c in by_conc.values() for t in c}) > 1:
+        concs_of = defaultdict(set)
+        for v, tissues in by_conc.items():
+            for t in tissues:
+                concs_of[t].add(v)
+        for t, cs in concs_of.items():
+            if not any(cs & o for u, o in concs_of.items() if u != t):
+                logger.warning("%s shares no concentration with the other tissues of the drug "
+                               "(%s): check the units in its file names", t,
+                               ', '.join(label[v] for v in sorted(cs)))
+    kept = [t for t in table if t['used']]
+    run = None
+    for i in range(len(kept) - consecutive + 1):
+        window = kept[i:i + consecutive]
+        if all(t['mean_pct'] >= threshold for t in window):
+            run = window
+            break
+    return table, kept, run, n_unplaced
+
+
 def classify_drug(results_list, cfg=None):
     """
     Classify each drug as positive/negative for QT prolongation.
 
-    Groups drug recordings by drug name (across all chips/channels/concentrations)
-    and applies the classification method from config:
-      - 'max'     : positive if ANY concentration exceeds threshold (default, most sensitive)
-      - 'mean'    : positive if MEAN %FPDcF change exceeds threshold (reduces borderline FPs)
-      - 'n_above' : positive if ≥ N concentrations exceed threshold (strict)
+    Groups drug recordings by canonical drug name and applies the method
+    from config (``classification_method``):
+
+      - 'concentration' (default since Oct 2026): the %ΔFPDcF of each tissue
+        is averaged across tissues at each concentration; a concentration
+        counts only when measured in at least ``classification_min_tissues``
+        tissues; the drug is positive when the tissue mean reaches the
+        threshold at ``classification_consecutive`` adjacent concentrations.
+        With min_tissues=1 and consecutive=1 this is the rule of Visone et
+        al. 2023 (tissue mean above the threshold at any concentration).
+        'insufficient data' when fewer than ``consecutive`` concentrations
+        have enough tissues.
+      - 'max'     : positive if ANY recording reaches the threshold
+      - 'mean'    : positive if the mean of all recordings reaches it
+      - 'n_above' : positive if ≥ N recordings reach it
+
+    Why the default changed: on the Visone 2023 data (12 compounds, FDA
+    label as truth, threshold 15 %) 'max' called every negative compound
+    positive, the vehicle included, with the authors' values and with the
+    software's (5/12 and 6/12 correct); with 18–54 recordings per compound
+    one of them exceeds 15 % by noise. The rule above gave 11/12 with the
+    authors' values (only cisapride wrong, as in the paper) and 8/12 with
+    the software's.
+
+    The cessation override (cessation detected and minimum FPD confidence
+    below ``cessation_override_max_fpd_confidence``) is reported as
+    ``cessation_flag`` and changes the call only when
+    ``enable_cessation_override`` is on (off by default since Oct 2026: on
+    the same data it would have made 10 of 12 compounds positive, four
+    negatives included; the paper reports cessation separately).
 
     Returns dict: drug_name → {
         'positive': bool,
+        'decision': 'positive' | 'negative' | 'insufficient data',
         'method': str,
-        'max_pct_change': float,
-        'mean_pct_change': float,
-        'n_above': int,
+        'max_pct_change', 'mean_pct_change': float,
+        'n_above_threshold', 'n_concentrations': int,
         'concentrations': list of (conc, pct_change),
         'threshold_used': float,
+        'per_concentration': list of {'concentration', 'value', 'mean_pct',
+                             'n_tissues', 'used'} (method 'concentration'),
+        'effective_concentration': first concentration of the deciding run,
+        'cessation_flag', 'cessation_override': bool, 'cessation_info': dict,
     }
     """
     if cfg is None:
@@ -470,6 +652,9 @@ def classify_drug(results_list, cfg=None):
     t_low, t_mid, t_high = _get_norm_thresholds(cfg)
     threshold_map = {'low': t_low, 'mid': t_mid, 'high': t_high}
     threshold = threshold_map.get(cfg.classification_threshold, t_mid)
+    method = getattr(cfg, 'classification_method', 'concentration')
+    min_tissues = max(1, int(getattr(cfg, 'classification_min_tissues', 2)))
+    consecutive = max(1, int(getattr(cfg, 'classification_consecutive', 2)))
 
     # ── QC / CV filters for drug-level classification ──
     grade_order = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'F': 4}
@@ -544,6 +729,7 @@ def classify_drug(results_list, cfg=None):
                 'concentration': conc,
                 'pct_fpdc_change': pct,
                 'tdp_score': norm.get('tdp_score', 0),
+                'tissue': _get_base_key(r),
             })
 
     # Surface how many recordings the opt-in filters removed. Without this
@@ -557,46 +743,49 @@ def classify_drug(results_list, cfg=None):
             n_qc_excluded, n_fpd_excluded, n_na_excluded,
         )
 
-    # Collect cessation data per drug (from ALL drug recordings, not just those
-    # with valid FPD — the whole point is to catch drugs that destroy waveforms)
+    # Cessation per drug (from ALL drug recordings, not just those with valid
+    # FPD — the point is to catch drugs that destroy waveforms). Always
+    # collected and reported; it changes the call only with the override on.
     drug_cessation = defaultdict(lambda: {'has_cessation': False, 'min_fpd_conf': 1.0,
                                            'cessation_details': []})
-    enable_cess = getattr(cfg, 'enable_cessation_override', True)
+    enable_cess = getattr(cfg, 'enable_cessation_override', False)
     cess_max_conf = getattr(cfg, 'cessation_override_max_fpd_confidence', 0.60)
 
-    if enable_cess:
-        for r in results_list:
-            if _is_baseline(r) or _is_control(r) or is_washout(r):
-                continue
-            fi = r.get('file_info', {})
-            drug = canonical_drug_name(fi.get('drug'))
-            if not drug or drug in VEHICLE_NAMES:
-                continue
+    for r in results_list:
+        if _is_baseline(r) or _is_control(r) or is_washout(r):
+            continue
+        fi = r.get('file_info', {})
+        drug = canonical_drug_name(fi.get('drug'))
+        if not drug or drug in VEHICLE_NAMES:
+            continue
 
-            # Check cessation
-            cess = r.get('cessation_report')
-            if cess is not None and cess.has_cessation and cess.cessation_confidence > 0.5:
-                drug_cessation[drug]['has_cessation'] = True
-                drug_cessation[drug]['cessation_details'].append({
-                    'concentration': fi.get('concentration', ''),
-                    'type': cess.cessation_type,
-                    'confidence': cess.cessation_confidence,
-                })
+        # Check cessation
+        cess = r.get('cessation_report')
+        if cess is not None and cess.has_cessation and cess.cessation_confidence > 0.5:
+            drug_cessation[drug]['has_cessation'] = True
+            drug_cessation[drug]['cessation_details'].append({
+                'concentration': fi.get('concentration', ''),
+                'type': cess.cessation_type,
+                'confidence': cess.cessation_confidence,
+            })
 
-            # Track min FPD confidence across all concentrations
-            summary = r.get('summary', {})
-            fpd_conf = summary.get('fpd_confidence', 1.0)
-            if fpd_conf is not None and not np.isnan(fpd_conf):
-                drug_cessation[drug]['min_fpd_conf'] = min(
-                    drug_cessation[drug]['min_fpd_conf'], fpd_conf)
+        # Track min FPD confidence across all concentrations
+        summary = r.get('summary', {})
+        fpd_conf = summary.get('fpd_confidence', 1.0)
+        if fpd_conf is not None and not np.isnan(fpd_conf):
+            drug_cessation[drug]['min_fpd_conf'] = min(
+                drug_cessation[drug]['min_fpd_conf'], fpd_conf)
 
-            # Track spectral morphology change (from normalization step)
-            norm = r.get('normalization', {})
-            spec_score = norm.get('spectral_change_score', np.nan)
-            if spec_score is not None and not np.isnan(spec_score):
-                if 'spectral_scores' not in drug_cessation[drug]:
-                    drug_cessation[drug]['spectral_scores'] = []
-                drug_cessation[drug]['spectral_scores'].append(spec_score)
+        # Track spectral morphology change (from normalization step)
+        norm = r.get('normalization', {})
+        spec_score = norm.get('spectral_change_score', np.nan)
+        if spec_score is not None and not np.isnan(spec_score):
+            if 'spectral_scores' not in drug_cessation[drug]:
+                drug_cessation[drug]['spectral_scores'] = []
+            drug_cessation[drug]['spectral_scores'].append(spec_score)
+
+    def _cess_flag(info):
+        return bool(info.get('has_cessation', False) and info.get('min_fpd_conf', 1.0) < cess_max_conf)
 
     # Classify each drug
     classifications = {}
@@ -608,24 +797,40 @@ def classify_drug(results_list, cfg=None):
         mean_pct = np.mean(pct_values)
         n_above = sum(1 for p in pct_values if p >= threshold)
 
-        if cfg.classification_method == 'mean':
+        per_conc, effective, n_unplaced = [], None, 0
+        if method == 'mean':
             positive = mean_pct >= threshold
-        elif cfg.classification_method == 'n_above':
+            decision = 'positive' if positive else 'negative'
+        elif method == 'n_above':
             positive = n_above >= cfg.classification_n_above
-        else:  # 'max' (default)
+            decision = 'positive' if positive else 'negative'
+        elif method == 'max':
             positive = max_pct >= threshold
+            decision = 'positive' if positive else 'negative'
+        else:   # 'concentration' (default)
+            per_conc, kept, run, n_unplaced = _per_concentration(entries, threshold, min_tissues, consecutive)
+            positive = run is not None
+            if positive:
+                decision = 'positive'
+                effective = run[0]['concentration']
+            elif len(kept) < consecutive:
+                decision = 'insufficient data'
+            else:
+                decision = 'negative'
+            if n_unplaced:
+                logger.warning("%s: %d recording(s) without a readable concentration left out of the "
+                               "per-concentration call", drug, n_unplaced)
 
-        # Smart cessation override: if the drug causes cessation AND waveform
-        # destruction (low FPD confidence), elevate to positive.
-        # This catches drugs like dofetilide that destroy waveform morphology
-        # so FPD can't be measured, but does NOT trigger for drugs like
-        # ranolazine that have cessation at extreme doses with intact FPD.
-        cessation_override = False
+        # Cessation override (opt-in since Oct 2026): if the drug causes
+        # cessation AND waveform destruction (low FPD confidence), elevate it
+        # to positive. Meant for drugs like dofetilide that destroy waveform
+        # morphology so FPD can't be measured.
         cess_info = drug_cessation.get(drug, {})
-        if (enable_cess and cess_info.get('has_cessation', False)
-                and cess_info.get('min_fpd_conf', 1.0) < cess_max_conf):
-            cessation_override = True
+        cessation_flag = _cess_flag(cess_info)
+        cessation_override = bool(enable_cess and cessation_flag)
+        if cessation_override:
             positive = True
+            decision = 'positive'
 
         # Spectral morphology change summary for this drug
         spec_scores = cess_info.get('spectral_scores', [])
@@ -634,7 +839,8 @@ def classify_drug(results_list, cfg=None):
 
         classifications[drug] = {
             'positive': positive,
-            'method': cfg.classification_method,
+            'decision': decision,
+            'method': method,
             'max_pct_change': max_pct,
             'mean_pct_change': mean_pct,
             'n_above_threshold': n_above,
@@ -642,31 +848,49 @@ def classify_drug(results_list, cfg=None):
             'concentrations': conc_list,
             'threshold_used': threshold,
             'threshold_name': cfg.classification_threshold,
+            'n_tissues': len({e['tissue'] for e in entries}),
+            'per_concentration': per_conc,
+            'effective_concentration': effective,
+            'min_tissues': min_tissues if method == 'concentration' else None,
+            'consecutive': consecutive if method == 'concentration' else None,
+            'n_without_concentration': n_unplaced,
+            'cessation_flag': cessation_flag,
             'cessation_override': cessation_override,
-            'cessation_info': cess_info if cessation_override else {},
+            'cessation_info': dict(cess_info) if cess_info else {},
             'max_spectral_change': max_spec,
             'mean_spectral_change': mean_spec,
         }
 
-    # Also check for drugs that ONLY have cessation (no valid FPD data at all)
-    # but were detected in the cessation scan
-    if enable_cess:
-        for drug, cess_info in drug_cessation.items():
-            if drug not in classifications and cess_info['has_cessation']:
-                if cess_info['min_fpd_conf'] < cess_max_conf:
-                    classifications[drug] = {
-                        'positive': True,
-                        'method': 'cessation_only',
-                        'max_pct_change': np.nan,
-                        'mean_pct_change': np.nan,
-                        'n_above_threshold': 0,
-                        'n_concentrations': 0,
-                        'concentrations': [],
-                        'threshold_used': threshold,
-                        'threshold_name': cfg.classification_threshold,
-                        'cessation_override': True,
-                        'cessation_info': cess_info,
-                    }
+    # Drugs with cessation but no valid FPD data at all: listed with the flag;
+    # positive only with the override on.
+    for drug, cess_info in drug_cessation.items():
+        if drug in classifications or not cess_info['has_cessation']:
+            continue
+        flag = _cess_flag(cess_info)
+        override = bool(enable_cess and flag)
+        if not (flag or override):
+            continue
+        classifications[drug] = {
+            'positive': override,
+            'decision': 'positive' if override else 'insufficient data',
+            'method': 'cessation_only' if override else method,
+            'max_pct_change': np.nan,
+            'mean_pct_change': np.nan,
+            'n_above_threshold': 0,
+            'n_concentrations': 0,
+            'concentrations': [],
+            'threshold_used': threshold,
+            'threshold_name': cfg.classification_threshold,
+            'n_tissues': 0,
+            'per_concentration': [],
+            'effective_concentration': None,
+            'min_tissues': min_tissues if method == 'concentration' else None,
+            'consecutive': consecutive if method == 'concentration' else None,
+            'n_without_concentration': 0,
+            'cessation_flag': flag,
+            'cessation_override': override,
+            'cessation_info': dict(cess_info),
+        }
 
     return classifications
 

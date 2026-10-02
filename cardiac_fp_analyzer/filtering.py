@@ -31,6 +31,29 @@ def _butter_coeffs(order, low, high, btype):
     return signal.butter(order, [low, high] if btype == 'band' else low, btype=btype)
 
 
+@lru_cache(maxsize=8)
+def _butter_sos(order, low, high, btype):
+    return signal.butter(order, [low, high] if btype == 'band' else low, btype=btype, output='sos')
+
+
+@lru_cache(maxsize=8)
+def _ba_is_stable(order, low, high, btype):
+    """(b, a) designs with a very low normalised cut-off (0.5 Hz at 20 kHz)
+    round a pole onto or outside the unit circle and filtfilt overflows."""
+    _, a = _butter_coeffs(order, low, high, btype)
+    return bool(np.all(np.abs(np.roots(a)) < 1.0))
+
+
+def _butter_filtfilt(data, order, low, high, btype):
+    """filtfilt with the (b, a) design used since v1 — results at the usual
+    ~2 kHz are unchanged — and second-order sections when that design is
+    numerically unstable (Oct 2026)."""
+    if _ba_is_stable(order, low, high, btype):
+        b, a = _butter_coeffs(order, low, high, btype)
+        return signal.filtfilt(b, a, data)
+    return signal.sosfiltfilt(_butter_sos(order, low, high, btype), data)
+
+
 # ── Filter functions ────────────────────────────────────────────────
 
 def notch_filter(data, fs, freq=50.0, n_harmonics=3, Q=30):
@@ -49,22 +72,19 @@ def bandpass_filter(data, fs, lowcut=0.5, highcut=500.0, order=4):
     nyq = 0.5 * fs
     low = max(lowcut / nyq, 1e-5)
     high = min(highcut / nyq, 0.9999)
-    b, a = _butter_coeffs(order, low, high, 'band')
-    return signal.filtfilt(b, a, data)
+    return _butter_filtfilt(data, order, low, high, 'band')
 
 
 def highpass_filter(data, fs, cutoff=0.5, order=4):
     """Remove baseline drift with a high-pass Butterworth filter."""
     nyq = 0.5 * fs
-    b, a = _butter_coeffs(order, cutoff / nyq, 0.0, 'high')
-    return signal.filtfilt(b, a, data)
+    return _butter_filtfilt(data, order, cutoff / nyq, 0.0, 'high')
 
 
 def lowpass_filter(data, fs, cutoff=200.0, order=4):
     """Low-pass Butterworth filter for gentle smoothing."""
     nyq = 0.5 * fs
-    b, a = _butter_coeffs(order, cutoff / nyq, 0.0, 'low')
-    return signal.filtfilt(b, a, data)
+    return _butter_filtfilt(data, order, cutoff / nyq, 0.0, 'low')
 
 
 def smooth_savgol(data, window_length=11, polyorder=3):

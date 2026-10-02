@@ -198,14 +198,15 @@ def test_unreliable_recording_can_flip_the_drug_call():
 
     The fixture is built so the unreliable point (B, +33%) is above the
     15% classification threshold while the reliable one (A, +4%) is well
-    below it.  Because ``classification_method`` defaults to ``'max'``, a
-    single unreliable recording decides the whole drug call.
+    below it.  With ``classification_method='max'`` (the default until
+    v3.7.0) a single unreliable recording decides the whole drug call.
 
     This is the ``max``-of-N behaviour flagged separately; here it is used
     to show the concrete cost of ignoring ``fpd_reliable``.
     """
     results = _build_mixed_results()
     cfg = AnalysisConfig().normalization
+    cfg.classification_method = 'max'
 
     cfg.norm_require_fpd_reliable = False
     off = classify_drug(results, cfg=cfg)['ti12']

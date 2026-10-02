@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.7.0
+**Versione**: 3.8.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -197,6 +197,10 @@ Legge i file CSV prodotti dal sistema Digilent WaveForms (Analog Discovery 2). I
 
 **Output**: `(metadata, DataFrame)` dove metadata contiene sample_rate, device, serial, datetime, range e offset per ciascun elettrodo. Il DataFrame ha colonne `['time', 'el1', 'el2']`.
 
+**Frequenze di campionamento alte (dalla v3.8)**: le registrazioni sopra 3 kHz vengono decimate al caricamento a circa 2 kHz, con filtro anti-aliasing FIR a fase zero. In metadata restano `original_sample_rate` e `decimation_factor`; `load_csv(path, max_sample_rate=None)` lascia la frequenza originale. La pipeline è tarata su 2 kHz: le finestre sono in campioni e il passa-banda 0,5–500 Hz è progettato come coefficienti (b, a). A 20 kHz quel filtro ha un polo fuori dal cerchio unitario, il segnale filtrato diverge e non viene trovato nessun battito. Era il caso di tutti i 37 file Accelera di Exp11 del dataset Visone 2023. Decimati, combaciano con gli autori: BP 838,5 contro 838,9 ms, FPDc 532 contro 527 ms.
+
+`recording_datetime(path)` legge solo la riga `#Date Time:` dell'intestazione. Il batch la usa per scegliere il riferimento pre-dose (vedi 4.10).
+
 **Nota sulla nomenclatura (v3.5)**: nei nomi dei file, `ch1`/`ch2`/`ch3` indicano le *camere* (chamber) del chip. Le colonne del CSV, che rappresentano i due *elettrodi* di registrazione del Digilent, sono rinominate in `el1`/`el2` per evitare ambiguità.
 
 #### `parse_filename(filename)` e `describe_recording(path)`
@@ -208,13 +212,19 @@ Legge i file CSV prodotti dal sistema Digilent WaveForms (Analog Discovery 2). I
 | tessuto nel nome | `Exp5/Day7/chipA/chipA_ch1_terfe_300nM.csv` | `exp5/day7/chipA_ch1` |
 | Accelera: chip nella cartella, camera come prefisso | `Exp12_Accelera/Day 7/Chip 537/Ch2_DMSO10-1_2000fs_1_3K.csv` | `exp12/day7/chip537_ch2` |
 | Accelera: chip come numero, camera in una cartella | `Day8/529/Ch1_…`, `Chip 569/Ch2 Bepridil/Ch2_…` | `…/chip529_ch1`, `…/chip569_ch2` |
+| due elettrodi nel nome, prima del 2020 (dalla v3.8) | `exp1/day6/chipB_sotalol/Ch2_Sotalol_7,5_channel1_sx_channel2_dx.csv` | `exp1/day6/chipB_ch2` |
+| chip come cartella sotto l'esperimento (dalla v3.8) | `Exp2/inj1/ch3_1000Terfe_channel1_sx_channel2_dx.csv` | `exp2/-/chipINJ1_ch3` |
 | due tessuti nello stesso file (uno per elettrodo) | `Exp5_chipC_ch1_chipA_ch1_baseline.csv` | nessuno: `dual_tissue`, non abbinato |
 
 Le regole sono queste:
 
 - **Esperimento:** la cartella più interna del tipo `Exp<N>`, senza distinguere maiuscole e minuscole e con o senza separatore (`Exp5`, `EXP 5`, `exp1`, `Exp_10`, `Exp12_Accelera`). Sono accettate anche le cartelle che iniziano con `EXP`, come prima.
 - **Giorno:** la cartella `Day<N>` (`Day7`, `day 7`, `day 8 Accelera`).
-- **Concentrazione:** compare senza separatore iniziale (`300 nM`; prima era `.300 nM`). Un numero senza unità non resta nel nome del farmaco (`NIFEDIPINE_10` diventa farmaco `NIFEDIPINE`, concentrazione `10`). `2andhalf` vale 2,5. I token di acquisizione dei nomi Accelera (`20000_1_3k`, `2000fs`, `chan1`, `_1h`…) vengono ignorati.
+- **Chip da cartella:** il primo token del nome (`Chip 537` → `537`, `chipB_sotalol` → `B`). Se nessuna cartella `Chip…` o numerica lo indica, si usa la cartella più interna sotto quella dell'esperimento, saltando giorno e camera (`inj1`).
+- **Concentrazione:** compare senza separatore iniziale (`300 nM`; prima era `.300 nM`). Un numero senza unità non resta nel nome del farmaco (`NIFEDIPINE_10` diventa farmaco `NIFEDIPINE`, concentrazione `10`). `2andhalf` vale 2,5 e la virgola decimale vale come punto (`7,5`). I token di acquisizione dei nomi Accelera (`20000_1_3k`, `2000fs`, `chan1`, `_1h`…) vengono ignorati.
+- **Nomi con due elettrodi (dalla v3.8):** il suffisso `channel1_sx_channel2_dx`, e quanto segue (`_bis`, `_sfter3`), viene ignorato. Il numero può precedere il farmaco (`ch1_30_sotalol`, `ch3_1000Terfe`, `ch1_01%_DMSO`).
+- **Riferimento t0 (dalla v3.8):** `t0`, `T0`, `T02` indicano la registrazione fatta subito prima della prima dose. È un riferimento come il baseline (`is_baseline`, `reference_kind = 't0'`). Gli autori del paper Visone 2023 normalizzavano su t0, non sul file chiamato baseline registrato prima: il periodo di battito delle loro tabelle è più vicino a t0 in 13 tessuti su 15.
+- **Controlli nel tempo (dalla v3.8):** `t1`…`t7` senza farmaco e `Ctrl` diventano farmaco `ctrl`, concentrazione `tN`. Sono controlli, non farmaci.
 
 **Esempio**: `chipA_ch1_terfe_300nM.csv` → `{chip: 'A', channel: 1, drug: 'terfe', concentration: '300 nM', is_baseline: False}`. Il nome canonico del farmaco (`terfenadine`) viene assegnato in fase di classificazione (`normalization.canonical_drug_name`).
 
@@ -261,7 +271,7 @@ Il segnale FP grezzo contiene rumore da diverse sorgenti: interferenza di rete (
 
 1. **Filtro notch** a 50 Hz + armoniche (100, 150 Hz): rimuove l'interferenza di rete. Q=30 per bande strette che non distorcono il segnale cardiaco. Configurabile per 60 Hz (USA) o disattivabile completamente (opzione "Off").
 
-2. **Filtro passa-banda Butterworth** (0.5–500 Hz, ordine 4): rimuove sia il drift DC (< 0.5 Hz) sia il rumore ad alta frequenza (> 500 Hz). La banda 0.5–500 Hz preserva interamente la morfologia del FP cardiaco.
+2. **Filtro passa-banda Butterworth** (0.5–500 Hz, ordine 4): rimuove sia il drift DC (< 0.5 Hz) sia il rumore ad alta frequenza (> 500 Hz). La banda 0.5–500 Hz preserva interamente la morfologia del FP cardiaco. Dalla v3.8, se il progetto (b, a) è numericamente instabile (polo sul cerchio unitario o fuori, come a 20 kHz), si usano sezioni del secondo ordine. A 2 kHz il risultato resta identico a prima.
 
 3. **Smoothing Savitzky-Golay** (finestra 7 campioni, ordine 3): smoothing finale che preserva i picchi (non li attenua come un filtro passa-basso convenzionale). Ideale per mantenere la forma dello spike di depolarizzazione.
 
@@ -689,13 +699,15 @@ La qualità dei dati µECG è variabile: chip con cattivo contatto, microtessuti
 
 Ogni registrazione di farmaco viene abbinata a un baseline **dello stesso tessuto** (esperimento + giorno + chip + camera, vedi `describe_recording`) e dello stesso elettrodo.
 
-- **Più baseline nello stesso tessuto** (per esempio `baseline` e `new baseline/`, oppure `_bis`): si preferisce quello nella **stessa cartella** della registrazione, poi il grado QC migliore, poi il nome del file.
+- **Più riferimenti nello stesso tessuto (dalla v3.8):** `baseline` e `t0`, `baseline_1` e `baseline_2`, una cartella `new baseline/`, un `_bis`. Se tutti i riferimenti e almeno una dose hanno l'orario nell'intestazione (`#Date Time:`), il tessuto usa **l'ultimo registrato prima della prima dose**. Riferimenti registrati dopo, come un baseline dopo il lavaggio, non vengono usati.
+  - Sul dataset Visone 2023 questa regola riproduce la scelta degli autori in tutti i casi verificati tranne uno: t0 nei protocolli prima del 2020, `baseline_2` in exp4, `baseline_bis` in Exp7 chipD. L'eccezione è Exp7 chipE ch2, dove gli autori usano il baseline registrato prima di `new baseline/`.
+- **Senza orari:** si preferisce t0, poi il riferimento nella **stessa cartella** della registrazione, poi il grado QC migliore, poi il nome del file.
 - **Baseline esclusi:** quelli che il verdetto di analizzabilità rifiuta non vengono mai usati. Se il baseline scelto non supera i criteri di inclusione, la registrazione resta senza abbinamento.
 - **Motivazione registrata:** la scelta e il motivo finiscono in `normalization['pairing']` (`baseline_file`, `reason`, `candidates`).
 - **Chiave di abbinamento:** l'abbinamento è indicizzato per percorso completo più elettrodo (`recording_key`), non più per nome del file. Così due file omonimi in cartelle diverse, o le analisi el1 ed el2 dello stesso file in modalità `both`, non si sovrascrivono.
 - **File con due tessuti** (un tessuto per elettrodo, convenzione GG): non vengono abbinati automaticamente, e il motivo resta registrato.
 
-**Un elettrodo per tessuto** (`batch_analyze`, `channel='auto'`, dalla v3.7): i baseline vengono analizzati per primi con la scelta automatica. Ogni tessuto adotta l'elettrodo scelto per il suo baseline di riferimento, cioè quello nella cartella che contiene la maggior parte delle sue registrazioni. Su quell'elettrodo vengono poi analizzate dosi e controlli. Gli eventuali altri baseline del tessuto vengono rianalizzati sullo stesso elettrodo. `file_info['tissue_electrode']` e `['tissue_electrode_from']` riportano la scelta.
+**Un elettrodo per tessuto** (`batch_analyze`, `channel='auto'`, dalla v3.7): i baseline vengono analizzati per primi con la scelta automatica. Ogni tessuto adotta l'elettrodo scelto per il suo riferimento, con la stessa regola dell'abbinamento (dalla v3.8: l'ultimo prima della prima dose; senza orari t0, poi la cartella che contiene la maggior parte delle sue registrazioni). Su quell'elettrodo vengono poi analizzate dosi e controlli. Gli eventuali altri baseline del tessuto vengono rianalizzati sullo stesso elettrodo. `file_info['tissue_electrode']` e `['tissue_electrode_from']` riportano la scelta.
 
 Prima, la selezione file per file faceva sì che una serie dose-risposta mescolasse el1 ed el2 dello stesso microtessuto: è successo in 39 registrazioni su 75 del dataset Visone 2023.
 
@@ -733,7 +745,7 @@ Valore 0 = identico al baseline, 1 = completamente diverso. I farmaci hERG+ most
 
 #### Smart cessation override
 
-Se un recording mostra cessazione (waveform destruction) con bassa confidenza FPD (< 0.60), viene classificato come positivo indipendentemente dal ΔFPDcF. Questo cattura farmaci che distruggono il segnale prima che il FPD possa allungarsi.
+Se un farmaco mostra cessazione con bassa confidenza FPD (< 0.60), la condizione viene riportata in `cessation_flag` della classificazione. Dalla v3.8 rende positivo il farmaco solo con `enable_cessation_override = True`; il default è spento. Sul dataset Visone 2023 avrebbe reso positivi 10 composti su 12, compresi quattro negativi (alfuzosina, mexiletina, nifedipina, verapamil). Il rilevatore di cessazione scatta anche su registrazioni del veicolo. Il paper riporta la cessazione a parte, nella colonna "Stop".
 
 #### Filtri QC sulla normalizzazione
 
@@ -750,20 +762,60 @@ Le drug recording con segnale di bassa qualità possono produrre valori FPDcF in
 
 #### Classificazione farmaco
 
-Tre metodi disponibili per aggregare le concentrazioni:
+Quattro metodi per passare dalle registrazioni alla decisione sul farmaco (`classification_method`):
 
-- **max** (default): positivo se QUALSIASI concentrazione supera la soglia. Massima sensibilità, ma vulnerabile a singoli outlier.
-- **mean**: positivo se la MEDIA delle concentrazioni supera la soglia. Riduce l'impatto degli outlier.
-- **n_above**: positivo se ≥ N concentrazioni superano la soglia. Richiede conferma da più concentrazioni.
+- **concentration** (default dalla v3.8). Per ogni concentrazione si fa la media della %ΔFPDcF tra i tessuti; registrazioni ripetute dello stesso tessuto alla stessa concentrazione contano una volta sola.
+  - Una concentrazione conta solo se è misurata in almeno `classification_min_tissues` tessuti (2).
+  - Il farmaco è positivo quando la media raggiunge la soglia in `classification_consecutive` concentrazioni adiacenti (2).
+  - Con 1 e 1 è la regola del paper Visone 2023: media tra tessuti sopra soglia a una concentrazione qualsiasi.
+  - Se meno di `consecutive` concentrazioni hanno abbastanza tessuti, la decisione è `insufficient data`, non negativa.
+- **max** (default fino alla v3.7): positivo se una registrazione qualsiasi supera la soglia.
+- **mean**: positivo se la media di tutte le registrazioni supera la soglia. Dipende da quante concentrazioni basse sono state provate: perde i composti che agiscono solo alle dosi alte.
+- **n_above**: positivo se almeno N registrazioni superano la soglia.
+
+**Concentrazioni:** l'etichetta del nome diventa un numero (`normalization.concentration_value`).
+- `300 nM` e `0.3 uM` sono la stessa concentrazione.
+- Un numero senza unità prende l'unità più frequente del farmaco.
+- `001` vale 0,01 e `05` vale 0,5 (convenzione Accelera); `10-1` vale 0,1.
+- Le lettere delle condizioni (A, B, C) seguono l'ordine alfabetico.
+- Le registrazioni con un'etichetta illeggibile restano fuori dalla decisione per concentrazione, con un avviso nel log.
+
+La classificazione riporta:
+- `decision` e `positive`;
+- `per_concentration`: media, numero di tessuti e se la concentrazione è usata;
+- `effective_concentration`: la prima concentrazione della coppia che decide;
+- `n_tissues`, `cessation_flag` e `cessation_info`.
+
+**Perché è cambiato il default (ottobre 2026).** La regola è stata scelta sui 12 composti del paper Visone 2023, con l'etichetta FDA come verità, soglia fissa al 15 % e nessuna taratura. Il veicolo è valutato come un composto negativo. Le regole sono state confrontate su tre misure:
+
+1. le variazioni degli autori, prese dai loro workbook (54 tessuti). Riproducono esattamente la Tabella 2 del paper per 7 composti;
+2. quelle del software con riferimenti e concentrazioni assegnati a mano (49 tessuti utilizzabili);
+3. il batch v3.8 sui file così come sono.
+
+| Regola | Valori autori | Software, assegnazione a mano | Batch v3.8 |
+|---|---|---|---|
+| max | 5/12 | 6/12 | 6/12 |
+| mean | 10/12 | 9/12 | 8/12 |
+| paper (media per concentrazione) | 10/12 | 4/12 | 6/12 |
+| **concentration (≥ 2 tessuti, 2 concentrazioni consecutive)** | **11/12** | **8/12** | **7/12** |
+
+- `max` sbaglia tutti i negativi, veicolo compreso, con tutte e tre le misure. Con 18–54 registrazioni per composto, almeno una supera il 15 % per rumore.
+- La regola del paper funziona sui valori degli autori, ma sul software una sola registrazione anomala domina la media di una concentrazione con pochi tessuti.
+- Le due protezioni la rendono robusta: con i valori degli autori sbaglia solo la cisapride, che nel modello accorcia l'FPDcF, come nel paper.
+- Nel batch i nomi dei file pesano:
+  - la dose di sotalolo da 7,5 µM è scritta `7`, `75`, `7,5` e `7.5` in esperimenti diversi, quindi non si allinea tra tessuti;
+  - alcuni file di Exp8 ed Exp5 hanno l'unità sbagliata (`Alfus_1000uM` per nM, `Quinidine0_06nM` per µM): il software lo segnala nel log;
+  - la terfenadina manca la soglia di 0,2 punti (14,8 % a 300 nM, 10 tessuti).
+- Con 12 composti, differenze di 1–2 composti restano nel rumore. `mean` resta disponibile ed è vicino sul software, ma dipende da quante concentrazioni basse sono state provate.
+- Con tre livelli di concentrazione (A, B, C) la regola richiede l'effetto sia a B sia a C.
 
 **Nomi dei farmaci (dalla v3.7)**: le registrazioni vengono raggruppate per nome canonico (`canonical_drug_name`: `DOFE` → `dofetilide`, `Quinid` → `quinidine`, `NIFEDIPINE 10` → `nifedipine`). I codici come `Ti07` restano invariati. Prima il raggruppamento usava la stringa grezza, e lo stesso farmaco poteva risultare positivo con un'abbreviazione e negativo con un'altra: sul dataset Visone 2023, 8 farmaci diventavano 17.
 
 **Registrazioni escluse dalla decisione** (la loro %Δ resta nella tabella di normalizzazione):
 
 - washout e recovery, perché non sono una concentrazione;
-- il veicolo (`dmso`, `vehicle`), perché non è un farmaco da classificare.
-
-> **Nota (ottobre 2026)**: con il metodo `max` basta un singolo tessuto a una singola concentrazione per rendere positivo il farmaco. Applicato alle variazioni misurate dagli autori del paper Visone 2023 sugli esperimenti 5–9, classifica positivi tutti e tre i farmaci negativi presenti (mexiletina, nifedipina, alfuzosina). La scelta della regola predefinita è in revisione su tutti i 12 composti del paper.
+- il veicolo (`dmso`, `vehicle`), perché non è un farmaco da classificare;
+- i controlli nel tempo (`ctrl`, `t1`…`t7`).
 
 | Config | Default | Descrizione |
 |--------|---------|-------------|
@@ -771,21 +823,11 @@ Tre metodi disponibili per aggregare le concentrazioni:
 | `threshold_mid` | 15.0% | Soglia TdP score 2 (ottimale, paper) |
 | `threshold_high` | 20.0% | Soglia TdP score 3 |
 | `classification_threshold` | `'mid'` | Soglia per classificazione positivo |
-| `classification_method` | `'max'` | Metodo di aggregazione |
+| `classification_method` | `'concentration'` | Metodo di aggregazione |
+| `classification_min_tissues` | `2` | Tessuti minimi per concentrazione (metodo `concentration`) |
+| `classification_consecutive` | `2` | Concentrazioni adiacenti sopra soglia (metodo `concentration`) |
 | `classification_n_above` | `2` | N minimo per metodo `n_above` |
-
-#### Confronto configurazioni sul dataset di validazione
-
-Accuratezza CiPA su 7 farmaci (3 positivi, 4 negativi) dal dataset Visone et al. 2023:
-
-| Configurazione | TERFE | DOFE | QUINI | ALFUZ | MEXIL | NIFED | RANOL | Score |
-|---|---|---|---|---|---|---|---|---|
-| Default (no filter, max) | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ | 4/7 |
-| **QC≥C + max** | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | **5/7** |
-| QC≥C + n_above(2) | ✓ | ✗ | ✓ | ✓ | ✗ | ✓ | ✓ | 5/7 |
-| Visone et al. 2023 | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | 6/7 |
-
-**Nota**: mexiletine rimane un falso positivo in tutte le configurazioni. Il prolungamento osservato (+28-39%) sulle concentrazioni QC≥C proviene da un unico chip (chipA_ch2, EXP 8) — potrebbe essere un effetto chip-specifico anziché un vero effetto farmacologico. Il paper originale riporta anche mexiletine come l'unico errore (6/7).
+| `enable_cessation_override` | `False` | La cessazione con bassa confidenza FPD rende positivo il farmaco |
 
 ---
 
@@ -1159,6 +1201,18 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.8.0 (Ottobre 2026) — decisione sul farmaco, riferimento pre-dose, registrazioni a 20 kHz
+
+Correzioni emerse confrontando le regole di decisione sui 12 composti del paper Visone 2023 (§4.10, §4.1, §4.2). L'interfaccia PySide non è toccata.
+
+1. **Decisione per farmaco** (`classification_method='concentration'`, default): media tra tessuti a ogni concentrazione, almeno 2 tessuti, soglia raggiunta in 2 concentrazioni consecutive; `insufficient data` quando i tessuti non bastano. Risultati sui 12 composti nella tabella di §4.10.
+2. **Override di cessazione** opzionale (`enable_cessation_override=False`), sempre riportato in `cessation_flag`.
+3. **Riferimento pre-dose**: t0 riconosciuto; l'ultimo riferimento registrato prima della prima dose, per orario dell'intestazione; elettrodo scelto sullo stesso riferimento. Un gruppo viene escluso solo se nessun riferimento passa l'inclusione.
+4. **20 kHz**: decimazione a 2 kHz in `load_csv`; passa-banda a sezioni del secondo ordine quando il progetto (b, a) è instabile.
+5. **Nomi dei protocolli prima del 2020** (`channel1_sx_channel2_dx`, `t0`, `t1`…`t7`, virgola decimale, numero prima del farmaco, chip dalla cartella).
+
+**Verifica**: batch completo sui 10 esperimenti del paper (601 registrazioni); la suite comprende 652 test, di cui 52 nuovi (`tests/test_drug_call_and_reference.py`).
 
 ### v3.7.0 (Ottobre 2026) — abbinamento baseline e raggruppamento dei farmaci nel batch
 

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.7.0
+**Versione**: 3.8.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
@@ -169,6 +169,25 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.8.0 (Ottobre 2026) — decisione sul farmaco, riferimento pre-dose, registrazioni a 20 kHz
+Correzioni emerse confrontando le regole di decisione sui 12 composti del paper Visone 2023 (etichetta FDA come verità). Riguardano `batch_analyze` e `classify_drug`; l'interfaccia PySide non è toccata. **Cambia la decisione per farmaco**: chi la usa da `classify_drug` o dagli strumenti in `tools/` deve aspettarsi chiamate diverse.
+- **Nuova regola predefinita `classification_method='concentration'`.** Per ogni concentrazione si fa la media della %ΔFPDcF tra i tessuti, contando solo le concentrazioni misurate in almeno 2 tessuti. Il farmaco è positivo quando la media raggiunge il 15 % in 2 concentrazioni consecutive; con un solo tessuto la decisione è `insufficient data`.
+  - Sui 12 composti: 11/12 con le variazioni degli autori (solo la cisapride sbagliata, come nel paper), 8/12 con quelle del software e 7/12 col batch sui file così come sono.
+  - Con `max`, il default precedente: 5/12, 6/12 e 6/12, con tutti i negativi chiamati positivi, veicolo compreso.
+  - `classification_min_tissues=1` e `classification_consecutive=1` danno la regola del paper; `max`, `mean` e `n_above` restano disponibili.
+- **Override di cessazione spento per default** (`enable_cessation_override=False`). Avrebbe reso positivi 10 composti su 12, compresi quattro negativi. Ora la condizione è riportata in `cessation_flag`.
+- **Riferimento pre-dose.** `t0`/`T0` è riconosciuto come riferimento. Per ogni tessuto si usa l'ultimo riferimento registrato prima della prima dose, letto dall'orario nell'intestazione; senza orari si preferisce t0.
+  - Gli autori normalizzavano su t0 in 13 tessuti su 15, non sul file chiamato baseline registrato prima.
+  - L'elettrodo del tessuto si sceglie sullo stesso riferimento.
+  - Un gruppo viene escluso dall'inclusione solo se nessuno dei suoi riferimenti passa: prima un baseline scartato e non usato faceva perdere la serie intera.
+- **File a 20 kHz.** Vengono decimati a 2 kHz al caricamento. Prima il passa-banda divergeva e non veniva trovato nessun battito: 37 file su 37 di Exp11 Accelera. Il passa-banda passa inoltre a sezioni del secondo ordine quando il progetto (b, a) è instabile; a 2 kHz i risultati non cambiano.
+- **Nomi dei protocolli prima del 2020.**
+  - Riconosciuti il suffisso `channel1_sx_channel2_dx`, la virgola decimale (`7,5`) e il numero prima del farmaco (`ch1_30_sotalol`).
+  - I controlli nel tempo (`t1`…`t7`, `Ctrl`) non sono farmaci; l'abbreviazione `SOT` vale sotalolo.
+  - Il chip si legge dalla prima parola della cartella (`chipB_sotalol`) o dalla cartella sotto l'esperimento (`inj1`).
+  - Un tessuto che non condivide nessuna concentrazione con gli altri dello stesso farmaco viene segnalato nel log: di solito l'unità nel nome è sbagliata.
+- **Verifica**: batch completo sui 10 esperimenti del paper, 601 registrazioni, tutte con un tessuto. In 68 tessuti il riferimento è stato scelto per orario. Aggiunti 52 test
 
 ### v3.7.0 (Ottobre 2026) — abbinamento baseline e raggruppamento dei farmaci nel batch
 Correzioni emerse eseguendo il batch sul dataset Visone 2023. Riguardano `batch_analyze` (CLI, interfaccia Streamlit, report Excel/PDF, export CDISC), non l'interfaccia PySide. **Cambiano i numeri normalizzati** degli studi le cui cartelle non si chiamavano `EXP…`: conviene rianalizzarli.
