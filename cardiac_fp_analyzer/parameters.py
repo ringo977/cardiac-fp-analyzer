@@ -231,6 +231,29 @@ def apply_fpd_reliability_gate(summary, all_params, cfg):
 
 # ─── Template averaging ───
 
+def beat_spike_inverted(template_spike_shape, beat_spike, threshold=-0.5):
+    """True if a beat's depolarisation is polarity-inverted w.r.t. the template.
+
+    ``template_spike_shape`` : demeaned template samples around the spike
+    (or None). ``beat_spike`` : the beat's samples over the same window.
+    Inverted ⇔ Pearson correlation ≤ ``threshold`` (anti-correlated). Robust
+    to biphasic spikes with lobes of similar size, where comparing the
+    largest deflections flips on noise.
+    """
+    if template_spike_shape is None:
+        return False
+    b = np.asarray(beat_spike, dtype=float)
+    m = min(len(b), len(template_spike_shape))
+    if m < 3:
+        return False
+    w = b[:m] - b[:m].mean()
+    k = np.asarray(template_spike_shape[:m], dtype=float)
+    den = float(np.linalg.norm(w) * np.linalg.norm(k))
+    if den <= 0:
+        return False
+    return float(np.dot(w, k)) / den <= threshold
+
+
 def _align_beats_xcorr(beats_data, fs, cfg=None):
     """
     Align beats via cross-correlation to a reference beat.
@@ -251,17 +274,42 @@ def _align_beats_xcorr(beats_data, fs, cfg=None):
     # Reference: median of all beats (robust starting point)
     ref = np.median(np.array(beats), axis=0)
 
-    # Align each beat to reference via cross-correlation
-    dep_len = min(int(rc.alignment_depol_region_ms / 1000 * fs), min_len)
+    # Align each beat to reference via cross-correlation.
+    #
+    # For every candidate shift s ∈ [−max_shift, +max_shift] compare the
+    # reference depolarisation region ref[max_shift : max_shift + dep_len]
+    # with beat[max_shift + s : max_shift + s + dep_len]; the best s is how
+    # much the beat lags the reference, and the beat is moved back by s.
+    #
+    # Fixed Oct 2026. The previous code correlated ref[:dep_len+2M] with
+    # beat[:dep_len], so zero lag landed at index 0 instead of M: an already
+    # aligned beat came out shifted by exactly max_shift (50 ms), beats that
+    # lagged the reference were pinned at the boundary, and beats that led
+    # it had their offset doubled. Every template was therefore 50 ms late
+    # relative to the beats it summarised, with smeared spikes — and the
+    # per-beat inversion test, which reads the template's spike at
+    # ``segment_pre_ms``, was reading baseline noise (see
+    # extract_all_parameters).
+    dep_len = int(rc.alignment_depol_region_ms / 1000 * fs)
+    if dep_len + 2 * max_shift > min_len:
+        dep_len = max(0, min_len - 2 * max_shift)
+    if dep_len < 3:
+        return beats
+    ref_seg = ref[max_shift:max_shift + dep_len]
     aligned = []
     for beat in beats:
-        corr = np.correlate(ref[:dep_len + 2*max_shift],
-                           beat[:dep_len], mode='valid')
+        span = beat[:dep_len + 2 * max_shift]
+        corr = np.correlate(span, ref_seg, mode='valid')
         if len(corr) == 0:
             aligned.append(beat)
             continue
-        shift = np.argmax(corr) - max_shift
-        shift = np.clip(shift, -max_shift, max_shift)
+        # Normalise by the energy of each beat window so that a shift is not
+        # preferred merely because its window captures more of the spike.
+        energy = np.sqrt(np.convolve(span * span, np.ones(dep_len), mode='valid'))
+        with np.errstate(invalid='ignore', divide='ignore'):
+            corr = np.where(energy > 0, corr / energy, -np.inf)
+        shift = int(np.argmax(corr)) - max_shift
+        shift = int(np.clip(shift, -max_shift, max_shift))
 
         if shift > 0:
             padded = np.concatenate([beat[shift:], np.full(shift, beat[-1])])
@@ -530,20 +578,25 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None,
     rise_time_vals, rr_interval_vals = [], []
     pre_samples = int(rc.segment_pre_ms / 1000 * fs)
 
-    # Detect template spike polarity for per-beat inversion detection.
-    # If the template's depolarization spike is positive, and a beat's spike
-    # is negative, the repolarization sign must be flipped for that beat.
-    template_spike_positive = True
+    # Template spike shape for per-beat inversion detection.
+    # A beat whose depolarisation is inverted relative to the template must
+    # have its repolarisation sign flipped. "Inverted" = the beat's spike
+    # window is ANTI-correlated with the template's (corr ≤
+    # ``inversion_corr_threshold``). Until Oct 2026 the test compared which
+    # deflection (max or min) was larger; on biphasic spikes of similar
+    # lobes that verdict flips on noise, and — with the template 50 ms late
+    # because of the alignment bug fixed in _align_beats_xcorr — the
+    # template window held baseline, so in ~40 % of recordings most beats
+    # were declared inverted and lost the template's guidance.
+    t_spike_shape = None
     if template is not None:
         t_pre = int(rc.segment_pre_ms / 1000 * fs)
         t_sp = max(0, t_pre - int(rc.spike_pre_ms / 1000 * fs))
         t_ep = min(len(template), t_pre + int(rc.spike_post_ms / 1000 * fs))
-        t_spike = template[t_sp:t_ep]
-        if len(t_spike) > 0:
-            t_baseline = np.median(template)
-            template_spike_positive = (
-                abs(np.max(t_spike) - t_baseline) >= abs(np.min(t_spike) - t_baseline)
-            )
+        t_spike = np.asarray(template[t_sp:t_ep], dtype=float)
+        if len(t_spike) > 2 and np.ptp(t_spike) > 0:
+            t_spike_shape = t_spike - t_spike.mean()
+    inversion_thr = float(getattr(rc, 'inversion_corr_threshold', -0.5))
 
     for i, (bd, bt) in enumerate(zip(beats_data, beats_time)):
         rr = local_rr[i] if i < len(local_rr) else None
@@ -559,21 +612,16 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None,
         zero_i = np.argmin(np.abs(np.array(bt)))
         b_sp = max(0, zero_i - int(rc.spike_pre_ms / 1000 * fs))
         b_ep = min(len(bd), zero_i + int(rc.spike_post_ms / 1000 * fs))
-        b_spike = bd[b_sp:b_ep]
-        if len(b_spike) > 0:
-            b_baseline = np.median(bd)
-            beat_spike_positive = (
-                abs(np.max(b_spike) - b_baseline) >= abs(np.min(b_spike) - b_baseline)
-            )
-            if beat_spike_positive != template_spike_positive:
-                # Inverted beat: flip repol sign but KEEP template FPD
-                # timing as a guide — the repolarization timing is similar
-                # even when the morphology is inverted.  Drop peak_samples
-                # (exact peak position depends on morphology) but keep
-                # fpd_samples (approximate timing window).
-                beat_repol_sign = -template_repol_sign
-                beat_tpl_peak = None
-                # beat_tpl_fpd stays as template_fpd_samples
+        beat_inverted = beat_spike_inverted(t_spike_shape, bd[b_sp:b_ep], inversion_thr)
+        if beat_inverted:
+            # Inverted beat: flip repol sign but KEEP template FPD
+            # timing as a guide — the repolarization timing is similar
+            # even when the morphology is inverted.  Drop peak_samples
+            # (exact peak position depends on morphology) but keep
+            # fpd_samples (approximate timing window).
+            beat_repol_sign = -template_repol_sign
+            beat_tpl_peak = None
+            # beat_tpl_fpd stays as template_fpd_samples
 
         params = extract_beat_parameters(
             bd, bt, fs, rr_interval=rr,

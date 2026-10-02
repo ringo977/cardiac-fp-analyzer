@@ -510,6 +510,10 @@ class RepolarizationConfig:
     per_beat_peak_distance_ms: float = 30.0
     per_beat_distance_penalty_ms: float = 50.0  # distance penalty scale
     per_beat_prominence_factor: float = 0.15  # same as template; sensitivity comes from MAD-based noise estimate
+    # A beat counts as polarity-inverted (repolarisation sign flipped,
+    # template peak guidance dropped) only if its spike window is
+    # anti-correlated with the template's at or below this value.
+    inversion_corr_threshold: float = -0.5
 
     # --- Repolarization detectability gate ---
     # If the best repolarization candidate has prominence < gate_min_snr × noise,
