@@ -9,6 +9,13 @@
 # in CI and every GUI test began with importorskip, so ~30 % of the suite
 # was silently skipped while the badge stayed green. The "skip budget"
 # step below fails the job if more than a handful of tests are skipped.
+#
+# Runner image pinned to ubuntu-24.04 (Oct 2026): `ubuntu-latest` moves to
+# Ubuntu 26.04 between 19 Oct and 19 Nov 2026. The matrix still covers
+# Python 3.9 (EOL since Oct 2025) and the headless-Qt apt list below was
+# validated on 24.04, so the move to 26.04 should be a deliberate change
+# tested on a branch, not a silent flip of the label. Actions are on their
+# Node 24 majors; the Node 20 ones run under a deprecation warning.
 
 name: CI
 
@@ -29,10 +36,10 @@ env:
 jobs:
   lint:
     name: Lint (ruff)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: pip install ruff
@@ -40,14 +47,14 @@ jobs:
 
   test:
     name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
