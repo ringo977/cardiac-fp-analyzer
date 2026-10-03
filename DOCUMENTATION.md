@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.9.0
+**Versione**: 3.10.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -352,6 +352,28 @@ Esempio: su un segnale con BP reale di ~800 ms, il detector iniziale trova 321 "
 
 Se il primo tentativo rileva meno di 5 battiti in una registrazione > 10 s, il software riprova con parametri rilassati (distanza minima 300 ms invece di 400, threshold ×3 invece di ×4).
 
+#### Treno del ritmo (dalla v3.10)
+
+**Funzione**: `beat_detection.rhythm_train`; configurazione `BeatDetectionConfig.enable_rhythm_train` (attivo di default) e parametri `rhythm_*`.
+
+Oltre ai battiti, il treno rilevato può contenere picchi di rumore (raffiche di rumore ad alta frequenza), artefatti stretti e onde di ripolarizzazione grandi. Sui dati GG, che battono lento e sono rumorosi, il rivelatore trova il 32 % di eventi in più rispetto ai battiti marcati dall'analista (esperimenti di sviluppo). Il CV del treno rilevato supera allora il 25 % su 49 registrazioni su 114, contro 4 per l'analista, e il criterio di inclusione elimina il tessuto.
+
+Quando il CV del treno rilevato raggiunge `rhythm_min_cv` (25 %, come la soglia di inclusione):
+
+1. **Periodo:** primo lobo della frazione di rilevamenti seguiti da un altro dopo un periodo (±10 %). Il primo lobo evita i multipli del periodo, che si accordano altrettanto bene. Il valore è poi affinato alla mediana degli intervalli accordati.
+2. **Sequenza:** la più regolare tra i rilevamenti, per programmazione dinamica. Ogni battito tenuto vale 1; ogni intervallo costa `rhythm_lambda` × |log(intervallo / k·periodo)| / `rhythm_sigma`, più `rhythm_miss_penalty` per ogni battito saltato.
+3. **Lacune:** il recupero guidato dalla periodicità (lo stesso del rilevamento) riempie i buchi della sequenza.
+
+Il treno del ritmo dà periodo di battito, CV (quindi l'inclusione), RR locale della correzione di Fridericia e finestra di ricerca della ripolarizzazione. Segmentazione, QC, FPD e analisi delle aritmie usano ancora tutti i rilevamenti. Il risultato riporta `beat_indices_rhythm` e `detection_info['rhythm_train']`. Non si applica dopo una correzione manuale dei battiti.
+
+| | prima | con il treno del ritmo | analista |
+|---|---|---|---|
+| CV ≥ 25 %, esperimenti GG di sviluppo (114 registrazioni) | 49 | 3 | 4 |
+| CV ≥ 25 %, esperimenti GG di verifica (66) | 30 | 1 | 2 |
+| Periodo entro ±10 % dall'analista, sviluppo / verifica | 74 / 43 | 86 / 47 | |
+
+L'effetto sulle decisioni è positivo su entrambi i dataset: GG, stessa decisione dell'analista per 10 test item su 13 (prima 9); Visone 2023, 8 composti corretti su 12 (prima 7). Il prezzo è che entrano nel confronto registrazioni più rumorose, dove l'FPD è meno affidabile: sulle stesse registrazioni dell'analista la differenza mediana di ΔFPDc passa da 4,9 a 5,8 punti (sviluppo) e da 4,0 a 5,9 (verifica), con più valori sopra il 15 % che l'analista non vede. Per tornare al comportamento precedente: `enable_rhythm_train = False`.
+
 #### Segmentazione
 
 Dopo il rilevamento, ogni battito viene segmentato in una finestra che va da 50 ms prima dello spike a 850 ms dopo. Questa finestra copre l'intero ciclo depolarizzazione–ripolarizzazione anche per battiti con FPD lungo.
@@ -687,7 +709,7 @@ In modalità batch, prima della normalizzazione viene applicata una cascata di c
 
 #### I 5 criteri (in ordine, short-circuit al primo fallimento)
 
-1. **CV del beat period** (default: < 25%): esclude baselines con ritmo troppo irregolare. È il criterio più importante — un baseline instabile rende il ΔFPDcF inaffidabile. Corrisponde al criterio di Visone et al. 2023.
+1. **CV del beat period** (default: < 25%): esclude baselines con ritmo troppo irregolare. È il criterio più importante — un baseline instabile rende il ΔFPDcF inaffidabile. Corrisponde al criterio di Visone et al. 2023. Dalla v3.10 il CV è quello del treno del ritmo quando il treno rilevato supera il 25 % (§4.3): i picchi di rumore e le onde di ripolarizzazione contate come battiti non escludono più il tessuto.
 
 2. **Range di plausibilità FPDcF** (default: 100–1200 ms): safety net per escludere misurazioni chiaramente erronee (artefatti di detection che producono FPDcF impossibili).
 
@@ -1262,6 +1284,10 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.10.0 (Ottobre 2026) — treno del ritmo per periodo e CV
+
+Quando il CV del treno rilevato raggiunge il 25 %, periodo di battito, CV, RR locale della correzione e finestra di ripolarizzazione vengono dal treno del ritmo: la sequenza più regolare tra i rilevamenti, con le lacune riempite (§4.3). Attivo di default (`enable_rhythm_train`). Sui dati GG le registrazioni con CV ≥ 25 % passano da 49 a 3 su 114 (analista: 4) negli esperimenti di sviluppo e da 30 a 1 su 66 (analista: 2) in quelli di verifica. Decisioni: GG 10 test item su 13 come l'analista (prima 9), Visone 2023 8 composti su 12 (prima 7).
 
 ### v3.9.0 (Ottobre 2026) — file con due tessuti e mappa dei campioni
 

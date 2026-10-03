@@ -382,6 +382,35 @@ class BeatDetectionConfig:
     deriv_smooth_ms: float = 2.0       # smoothing window for derivative (ms)
     peak_refine_window_ms: float = 10.0  # ±window for peak refinement (ms)
 
+    # ── Rhythm train (Oct 2026) ──
+    # Besides the beats, the detected train can hold noise peaks (bursts of
+    # noise), sharp artefacts and repolarisation waves. On the GG recordings
+    # (slow beating, noisy) there were 32 % more detections than beats marked
+    # by the analyst on the development experiments, and the CV of the
+    # detected train reached 25 % on 49 of 114 recordings (analyst: 4): the
+    # inclusion criterion then removed the tissue. When the detected train's
+    # CV reaches rhythm_min_cv, the rhythm train is used for beat period, CV,
+    # the local RR of the rate correction and the repolarisation search
+    # window: the most regular sequence among the detections (period from
+    # the first lobe of the forward-match fraction; sequence by dynamic
+    # programming, an interval costing rhythm_lambda × |log(interval /
+    # k·period)| / rhythm_sigma plus rhythm_miss_penalty per skipped beat),
+    # with the periodicity-guided recovery filling its gaps. Segmentation,
+    # QC, FPD and the arrhythmia analysis keep every detection.
+    # Development experiments: CV ≥ 25 % on 3 recordings (analyst 4), beat
+    # period within 10 % of the analyst's on 86 of 114 (was 74); held-out
+    # experiments: CV ≥ 25 % on 1 (analyst 2, was 30). Decisions: GG 10 of
+    # 13 test items as the analyst (was 9), Visone 2023 8 of 12 compounds
+    # (was 7).
+    enable_rhythm_train: bool = True
+    rhythm_min_cv: float = 25.0                # % — only trains at least this irregular
+    rhythm_period_frac: float = 0.7
+    rhythm_period_tol: float = 0.10
+    rhythm_lambda: float = 0.3
+    rhythm_sigma: float = 0.15
+    rhythm_miss_penalty: float = 0.6
+    rhythm_min_beats: int = 6
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #   REPOLARIZATION / FPD MEASUREMENT

@@ -17,7 +17,12 @@ import numpy as np
 import pandas as pd
 
 from cardiac_fp_analyzer.arrhythmia import analyze_arrhythmia
-from cardiac_fp_analyzer.beat_detection import compute_beat_periods, detect_beats, segment_beats
+from cardiac_fp_analyzer.beat_detection import (
+    compute_beat_periods,
+    detect_beats,
+    rhythm_train,
+    segment_beats,
+)
 from cardiac_fp_analyzer.channel_selection import select_best_channel
 from cardiac_fp_analyzer.filtering import full_filter_pipeline
 from cardiac_fp_analyzer.inclusion import apply_inclusion_criteria
@@ -128,8 +133,15 @@ def _analyze_from_beats(
     config,
     detection_info=None,
     verbose=True,
+    rhythm_bi=None,
 ):
     """Run the post-detection pipeline on an already-known beat set.
+
+    ``rhythm_bi`` (optional) is the rhythm train among the detections
+    (beat_detection.rhythm_train). When given, beat period, CV, the local RR
+    of the rate correction and the repolarisation search window come from
+    it; segmentation, QC, FPD and the arrhythmia analysis keep every
+    detection.
 
     Parameters
     ----------
@@ -169,6 +181,7 @@ def _analyze_from_beats(
     """
     bi = np.asarray(bi, dtype=int)
     det = detection_info or {}
+    bi_stats = bi if rhythm_bi is None else np.asarray(rhythm_bi, dtype=int)
 
     # ── Detailed pipeline tracing ──
     val_info = det.get('beat_validation', {})
@@ -190,7 +203,7 @@ def _analyze_from_beats(
     # produces a template shorter than the adaptive search window,
     # and repolarization.py silently clips `search_end = len(template)`,
     # missing the real T-wave on slow rhythms (e.g. dofetilide, long BP).
-    _bp_pre = compute_beat_periods(bi, fs)
+    _bp_pre = compute_beat_periods(bi_stats, fs)
     _median_bp_s = float(np.median(_bp_pre)) if len(_bp_pre) > 0 else 0.0
     _pct_rr = getattr(rep_cfg, 'search_end_pct_rr', 0.0)
     _adaptive_end_ms = (_pct_rr * _median_bp_s * 1000.0
@@ -365,7 +378,7 @@ def _analyze_from_beats(
     # actual rhythm rather than the QC rejection pattern.
     all_p, summary = extract_all_parameters(bd_fpd, btm_fpd, bi_fpd, fs,
                                              cfg=rep_cfg,
-                                             all_beat_indices=bi)
+                                             all_beat_indices=bi_stats)
     if _resegmented_info is not None:
         summary['resegmentation_info'] = _resegmented_info
     # Merge rhythm-classification-derived fields into summary (additive).
@@ -405,6 +418,9 @@ def _analyze_from_beats(
     result = {'metadata': metadata, 'file_info': file_info, 'summary': summary,
             'all_params': all_p, 'arrhythmia_report': ar,
             'beat_indices': bi_clean, 'beat_indices_raw': bi,
+            # The rhythm train (beat_detection.rhythm_train): equal to the
+            # raw detections unless that option removed beats from them.
+            'beat_indices_rhythm': np.asarray(bi_stats, dtype=int),
             # Post rhythm/RR filter + re-segmentation: the beats that
             # actually fed parameter extraction. Used by the UI to mark
             # the "real" included beats on the signal plot.
@@ -624,6 +640,18 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
                           f"-{ov_info['n_removed']}{extras} "
                           f"→ {bi.size} beats")
 
+        # Rhythm train among the detections (off by default); not after a
+        # manual beat correction, which is the user's own beat set.
+        rhythm_bi = None
+        if not det.get('overrides_applied'):
+            bi_r, r_info = rhythm_train(filtered, fs, bi, cfg=bd_cfg)
+            det['rhythm_train'] = r_info
+            if r_info.get('rhythm_train') == 'applied':
+                rhythm_bi = bi_r
+                if verbose:
+                    print(f"  Rhythm train: {r_info['n_kept']}/{r_info['n_input']} detections "
+                          f"(period {r_info['period_ms']:.0f} ms) + {r_info['n_recovered']} recovered")
+
         return _analyze_from_beats(
             bi,
             filtered=filtered,
@@ -635,6 +663,7 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
             config=config,
             detection_info=det,
             verbose=verbose,
+            rhythm_bi=rhythm_bi,
         )
     except _BATCH_SAFE_EXCEPTIONS as e:
         logger.error("Analysis failed for %s: %s", filepath, e, exc_info=True)

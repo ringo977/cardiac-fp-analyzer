@@ -524,6 +524,116 @@ def _detect_auto(data, fs, min_dist, threshold_factor, cfg=None):
     return bi, bt, info
 
 
+def dominant_period(t, lo=0.35, hi=10.0, frac=0.7, tol=0.10):
+    """Beat period of a detected train: the first lobe of the
+    forward-match fraction (detections followed by another one period later,
+    ±tol) that reaches ``frac`` × its maximum; the middle of the top of that
+    lobe (a perfectly regular train matches over the whole ±tol window),
+    refined to the median of the intervals that matched there. Taking the
+    first lobe avoids the multiples of the period, which match as well.
+    NaN when the train is too short."""
+    t = np.asarray(t, dtype=float)
+    if len(t) < 4:
+        return float('nan')
+    span = float(t[-1] - t[0])
+    hi = min(hi, span / 2.0)
+    if hi <= lo:
+        return float('nan')
+    grid = np.exp(np.linspace(np.log(lo), np.log(hi), 400))
+    f = np.empty(len(grid))
+    for k, period in enumerate(grid):
+        j = np.searchsorted(t, t + period * (1.0 - tol))
+        ok = j < len(t)
+        ok[ok] = t[j[ok]] <= t[ok] + period * (1.0 + tol)
+        f[k] = ok.mean()
+    if f.max() <= 0:
+        return float('nan')
+    start = int(np.flatnonzero(f >= frac * f.max())[0])
+    end = start
+    while end + 1 < len(f) and f[end + 1] >= frac * f.max():
+        end += 1
+    lobe = f[start:end + 1]
+    top = np.flatnonzero(lobe >= lobe.max() - 1e-9) + start
+    period = float(np.exp(np.mean(np.log(grid[top]))))
+    # refine: median of the intervals that matched at that period
+    j = np.searchsorted(t, t + period * (1.0 - tol))
+    ok = j < len(t)
+    ok[ok] = t[j[ok]] <= t[ok] + period * (1.0 + tol)
+    if ok.sum() >= 3:
+        period = float(np.median(t[j[ok]] - t[ok]))
+    return period
+
+
+def _regular_subsequence(t, period, lam=0.3, sigma=0.15, miss_penalty=0.6, kmax=3):
+    """Indices of the most regular subsequence of ``t`` (dynamic programming).
+
+    Each kept detection scores 1; each interval between kept detections
+    costs lam × |log(interval / (k × period))| / sigma, with k (1…kmax) the
+    nearest whole number of periods, plus miss_penalty per skipped beat.
+    """
+    n = len(t)
+    best = np.ones(n)
+    prev = np.full(n, -1)
+    for i in range(n):
+        for j in range(i - 1, -1, -1):
+            dt = t[i] - t[j]
+            if dt > (kmax + 0.5) * period:
+                break
+            if dt < 0.6 * period:
+                continue
+            k = max(1, min(kmax, int(round(dt / period))))
+            v = best[j] + 1.0 - lam * abs(np.log(dt / (k * period))) / sigma - (k - 1) * miss_penalty
+            if v > best[i]:
+                best[i], prev[i] = v, j
+    i = int(np.argmax(best))
+    out = []
+    while i >= 0:
+        out.append(i)
+        i = int(prev[i])
+    return np.array(out[::-1], dtype=int)
+
+
+def rhythm_train(data, fs, bi, cfg=None):
+    """The beats of the dominant rhythm among the detections (see
+    ``BeatDetectionConfig.enable_rhythm_train``). Returns (bi_rhythm, info);
+    ``bi`` unchanged when the option is off, the train is short or regular
+    enough (CV below ``rhythm_min_cv``), or every detection already belongs
+    to the rhythm."""
+    c = _get_bd_cfg(cfg)
+    bi = np.asarray(bi, dtype=int)
+    base = {'rhythm_train': 'skipped', 'n_input': len(bi), 'n_output': len(bi)}
+    if not getattr(c, 'enable_rhythm_train', False):
+        return bi, {**base, 'rhythm_train': 'disabled'}
+    if len(bi) < int(getattr(c, 'rhythm_min_beats', 6)):
+        return bi, {**base, 'rhythm_train': 'too_few'}
+    t = bi / fs
+    rr = np.diff(t)
+    cv = float(rr.std() / rr.mean() * 100.0) if rr.mean() > 0 else float('inf')
+    min_cv = float(getattr(c, 'rhythm_min_cv', 0.0))
+    if cv < min_cv:
+        return bi, {**base, 'rhythm_train': 'regular_enough', 'cv_detected': round(cv, 1)}
+    base['cv_detected'] = round(cv, 1)
+    period = dominant_period(t, frac=float(getattr(c, 'rhythm_period_frac', 0.7)),
+                             tol=float(getattr(c, 'rhythm_period_tol', 0.10)))
+    if not np.isfinite(period):
+        return bi, {**base, 'rhythm_train': 'no_period'}
+    keep = _regular_subsequence(t, period, lam=float(getattr(c, 'rhythm_lambda', 0.3)),
+                                sigma=float(getattr(c, 'rhythm_sigma', 0.15)),
+                                miss_penalty=float(getattr(c, 'rhythm_miss_penalty', 0.6)))
+    diag = {**base, 'period_ms': round(period * 1000.0, 1), 'n_kept': int(len(keep))}
+    if len(keep) < 5:
+        return bi, {**diag, 'rhythm_train': 'too_few_kept'}
+    kept = bi[keep]
+    if len(keep) == len(bi):
+        return bi, {**diag, 'rhythm_train': 'unchanged'}
+    out, _ = _recover_missed_beats(data, fs, kept, cfg=c)
+    logger.info("Rhythm train: %d detections → %d in the rhythm (period %.0f ms) + %d recovered",
+                len(bi), len(kept), period * 1000.0, len(out) - len(kept))
+    return np.asarray(out, dtype=int), {**diag, 'rhythm_train': 'applied', 'n_output': int(len(out)),
+                                        'n_dropped': int(len(bi) - len(kept)),
+                                        'n_recovered': int(len(out) - len(kept))}
+
+
 def estimate_noise_floor(data, fs, window_ms=40.0):
     """Robust noise floor: median peak-to-peak over non-overlapping windows.
 

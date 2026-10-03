@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.9.0
+**Versione**: 3.10.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
@@ -169,6 +169,14 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.10.0 (Ottobre 2026) — treno del ritmo per periodo e CV
+- **Treno del ritmo** (`enable_rhythm_train`, attivo di default). Quando il CV del treno rilevato raggiunge il 25 %, periodo di battito, CV, RR locale della correzione e finestra di ripolarizzazione vengono dalla sequenza più regolare tra i rilevamenti, con le lacune riempite dal recupero guidato dalla periodicità. Segmentazione, QC, FPD e aritmie usano ancora tutti i rilevamenti.
+  - Motivo: sui dati GG (battito lento, rumore a raffiche, artefatti, onde T grandi) il rivelatore trova un terzo di eventi in più rispetto ai battiti dell'analista. Il CV saliva sopra il 25 % e l'inclusione escludeva il tessuto.
+  - Registrazioni con CV ≥ 25 %: da 49 a 3 su 114 negli esperimenti GG di sviluppo (analista: 4), da 30 a 1 su 66 in quelli di verifica (analista: 2).
+  - Periodo entro ±10 % dall'analista: da 74 a 86 su 114 (sviluppo), da 43 a 47 su 66 (verifica).
+  - Decisioni: GG, 10 test item su 13 come l'analista (prima 9); Visone 2023, 8 composti su 12 (prima 7).
+  - Prezzo: entrano registrazioni più rumorose, dove l'FPD è meno affidabile; la differenza mediana di ΔFPDc con l'analista sale di circa un punto.
 
 ### v3.9.0 (Ottobre 2026) — file con due tessuti e mappa dei campioni
 - **File con due tessuti, uno per ingresso** (convenzione GG): il batch `auto` dà una registrazione per ingresso. Tessuto, test item e dose vengono letti dal nome nell'ordine degli ingressi; `na` indica un ingresso senza tessuto. Prima questi file non venivano abbinati: sul dataset GG 81 delle 136 registrazioni con farmaco, e nessun test item riceveva una decisione.
