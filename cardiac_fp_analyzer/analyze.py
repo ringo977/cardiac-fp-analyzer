@@ -66,7 +66,7 @@ _BATCH_SAFE_EXCEPTIONS: tuple = (
 )
 
 
-def _safe_analyze(filepath, channel='auto', verbose=True, config=None):
+def _safe_analyze(filepath, channel='auto', verbose=True, config=None, file_info_update=None):
     """Run :func:`analyze_single_file` with batch-level error handling.
 
     Returns
@@ -81,8 +81,9 @@ def _safe_analyze(filepath, channel='auto', verbose=True, config=None):
     batch loops, so error semantics stay symmetric across the two.
     """
     try:
+        kw = {'file_info_update': file_info_update} if file_info_update else {}
         result = analyze_single_file(
-            filepath, channel=channel, verbose=verbose, config=config
+            filepath, channel=channel, verbose=verbose, config=config, **kw
         )
     except _BATCH_SAFE_EXCEPTIONS as e:
         logger.warning("Batch item failed %s: %s", filepath, e, exc_info=True)
@@ -517,7 +518,7 @@ def recompute_from_beats(result, bi_edited, config=None, verbose=False):
     )
 
 
-def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
+def analyze_single_file(filepath, channel='auto', verbose=True, config=None, file_info_update=None):
     """Analyze a single CSV file through the full pipeline.
 
     Parameters
@@ -526,6 +527,10 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
     channel : 'auto', 'el1', or 'el2'
     verbose : print progress
     config : AnalysisConfig or None — controls all pipeline parameters
+    file_info_update : dict or None — fields that replace those read from
+        the path (tissue, item, dose, role …) when the recording is one input
+        of a two-tissue file or is described in samples.csv
+        (sample_sheet.plan_batch)
     """
     if config is None:
         from .config import AnalysisConfig
@@ -545,6 +550,8 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
         # Experiment, day, chip and chamber from the folder layout; 'tissue'
         # is the key normalisation pairs on (see loader.describe_recording).
         file_info = describe_recording(filepath)
+        if file_info_update:
+            file_info.update(file_info_update)
 
         actual_ch = channel
         if channel == 'auto':
@@ -597,7 +604,9 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
         # to the CSV.  Apply it here so the correction survives re-opens
         # and batch re-runs without the UI having to redo the diff.
         # Overrides are in seconds so they are robust to re-sampling.
-        if config.use_overrides:
+        # The sidecar holds one beat list per file: with two tissues in the
+        # file it cannot say which input it was made on, so it is not used.
+        if config.use_overrides and not file_info.get('two_tissue_file'):
             ov = load_overrides(filepath)
             if ov is not None and not ov.is_empty():
                 bi, ov_info = apply_overrides(bi, ov, fs)
@@ -635,54 +644,69 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None):
         return None
 
 
-def _run_batch_jobs(jobs, config, n_workers, verbose, show_channel, counter):
-    """Analyse (path, channel) jobs; return ({job: result}, [errors]).
+def _run_batch_jobs(jobs, config, n_workers, verbose, show_channel, counter, updates=None):
+    """Analyse jobs; return ({job: result}, [errors]).
+
+    A job is (path, channel) or (path, channel, uid); ``updates`` maps a uid
+    to the file_info fields of that recording (one input of a two-tissue
+    file, or a recording described in samples.csv — sample_sheet.plan_batch).
 
     Serial jobs go through _safe_analyze; parallel ones apply the same
     exception whitelist when awaiting the future, so both branches report
     a malformed CSV as an error entry instead of aborting the batch.
     """
     out, errors = {}, []
+    updates = updates or {}
 
     def tag(ch):
         return f" ({ch})" if show_channel else ""
+
+    def extra(job):
+        upd = updates.get(job[2]) if len(job) > 2 else None
+        return {'file_info_update': upd} if upd else {}
 
     if n_workers > 1 and len(jobs) > 1:
         import multiprocessing as _mp
         from concurrent.futures import ProcessPoolExecutor, as_completed
         n = min(n_workers, len(jobs), _mp.cpu_count() or 4)
         with ProcessPoolExecutor(max_workers=n) as executor:
-            futures = {executor.submit(analyze_single_file, f, channel=ch,
-                                       verbose=False, config=config): (f, ch)
-                       for f, ch in jobs}
+            futures = {executor.submit(analyze_single_file, job[0], channel=job[1],
+                                       verbose=False, config=config, **extra(job)): job
+                       for job in jobs}
             for future in as_completed(futures):
-                f, ch = futures[future]
+                job = futures[future]
+                f, ch = job[0], job[1]
                 counter['done'] += 1
                 if verbose:
                     print(f"\n[{counter['done']}/{counter['total']}] {f.name}{tag(ch)}")
                 try:
                     r = future.result()
                     if r:
-                        out[(f, ch)] = r
+                        out[job] = r
                     else:
                         errors.append(f"{f}{tag(ch)}")
                 except _BATCH_SAFE_EXCEPTIONS as e:
                     logger.warning("Batch item failed %s%s: %s", f, tag(ch), e)
                     errors.append(f"{f}{tag(ch)}: {type(e).__name__}: {e}")
     else:
-        for f, ch in jobs:
+        for job in jobs:
+            f, ch = job[0], job[1]
             counter['done'] += 1
             print(f"\n[{counter['done']}/{counter['total']}] {f.name}{tag(ch)}")
-            r, err = _safe_analyze(f, channel=ch, verbose=verbose, config=config)
+            r, err = _safe_analyze(f, channel=ch, verbose=verbose, config=config, **extra(job))
             if r:
-                out[(f, ch)] = r
+                out[job] = r
             else:
                 errors.append(f"{f}{tag(ch)}: {err}" if err else f"{f}{tag(ch)}")
     return out, errors
 
 
-def _choose_tissue_electrodes(baseline_out, infos, csv_files):
-    """Electrode for each tissue = the one auto-selected on its reference.
+def _choose_tissue_electrodes(baseline_out, unit_info, dose_jobs):
+    """Electrode for each tissue = the one used on its reference.
+
+    ``baseline_out`` maps each reference job (path, channel, uid) to its
+    result, ``unit_info`` every job to the recording's file_info as planned
+    (sample_sheet.plan_batch), ``dose_jobs`` lists the other jobs.
 
     The reference is the last one recorded before the tissue's first dose
     (acquisition time from the file header; Oct 2026), the same rule
@@ -691,7 +715,8 @@ def _choose_tissue_electrodes(baseline_out, infos, csv_files):
     recordings (a 'new baseline' sub-folder or a '_bis' copy loses to the
     baseline recorded with the dose series), then the better QC grade,
     then the file name. References the analysability verdict rejected are
-    used only when the tissue has no other.
+    used only when the tissue has no other. A reference whose input is
+    fixed (two-tissue file, samples.csv) gives its input.
     """
     from .loader import recording_datetime
     from .normalization import (
@@ -704,35 +729,37 @@ def _choose_tissue_electrodes(baseline_out, infos, csv_files):
     grade_rank = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'F': 4}
     others = defaultdict(list)
     first_dose = {}
-    for f in csv_files:
-        info = infos[f]
+    for job in dose_jobs:
+        f, info = job[0], unit_info[job]
         tissue = info.get('tissue')
-        if not tissue or info.get('is_baseline'):
+        if not tissue:
             continue
         others[tissue].append(f.parent)
         drug = canonical_drug_name(info.get('drug'))
         text = f"{info.get('drug') or ''} {f.name}".lower()
-        if drug.startswith('ctr') or 'wash' in text or 'recovery' in text:
+        if drug.startswith('ctr') or 'wash' in text or 'recovery' in text or info.get('role') == 'washout':
             continue
         ts = recording_datetime(f)
         if ts is not None and (tissue not in first_dose or ts < first_dose[tissue]):
             first_dose[tissue] = ts
     by_tissue = defaultdict(list)
-    for (f, _), r in baseline_out.items():
-        by_tissue[infos[f]['tissue']].append((f, r))
+    for job, r in baseline_out.items():
+        by_tissue[unit_info[job]['tissue']].append((job, r))
     chosen = {}
     for tissue, cands in by_tissue.items():
-        def score(fr):
-            f, r = fr
+        def score(jr):
+            job, r = jr
+            f = job[0]
             same_dir = sum(1 for d in others.get(tissue, []) if d == f.parent)
             grade = getattr(r.get('qc_report'), 'grade', 'F')
-            return (reference_kind(r) != 't0', -same_dir, grade_rank.get(grade, 5), f.name)
-        usable = [fr for fr in cands if not (fr[1].get('summary') or {}).get('not_analysable', False)] or cands
-        picked, _ = last_reference_before([(fr, recording_time(fr[1])) for fr in usable],
+            return (reference_kind(r) != 't0', -same_dir, grade_rank.get(grade, 5), f.name, str(job[1]))
+        usable = [jr for jr in cands if not (jr[1].get('summary') or {}).get('not_analysable', False)] or cands
+        picked, _ = last_reference_before([(jr, recording_time(jr[1])) for jr in usable],
                                           first_dose.get(tissue), score)
-        f, r = picked if picked is not None else min(usable, key=score)
-        chosen[tissue] = {'electrode': r['file_info'].get('analyzed_channel', 'el1'),
-                          'baseline_file': f.name}
+        job, r = picked if picked is not None else min(usable, key=score)
+        el = r['file_info'].get('analyzed_channel', 'el1')
+        name = job[0].name + (f' [{el}]' if unit_info[job].get('two_tissue_file') else '')
+        chosen[tissue] = {'electrode': el, 'baseline_file': name}
     return chosen
 
 
@@ -740,7 +767,8 @@ def _warn_tissue_collisions(infos, data_dir, verbose):
     """Warn when one tissue key spans several top-level folders and no
     experiment folder was recognised: experiments may be mixed."""
     tops = defaultdict(set)
-    for f, info in infos.items():
+    for key, info in infos.items():
+        f = key[0] if isinstance(key, tuple) else key
         t = info.get('tissue')
         if t and t.startswith('-/'):
             try:
@@ -799,7 +827,8 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    csv_files = sorted(data_dir.rglob('*.csv'))
+    from .sample_sheet import describe_plan, is_sheet_file, plan_batch
+    csv_files = sorted(p for p in data_dir.rglob('*.csv') if not is_sheet_file(p))
     print(f"\n{'#'*60}\n  CARDIAC FP ANALYZER\n  Files: {len(csv_files)} | Channel: {channel}\n{'#'*60}")
 
     # Save config alongside results
@@ -819,32 +848,65 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
         # file made a dose series mix el1 and el2 of the same microtissue (39
         # of 75 recordings on the Visone 2023 data). Baselines are analysed
         # first; each tissue then keeps its baseline's electrode.
+        # A file holding two tissues (one per input) gives one recording per
+        # input, and a samples.csv in the folder overrides the names for the
+        # files it lists (sample_sheet.plan_batch).
         infos = {f: describe_recording(f) for f in csv_files}
-        _warn_tissue_collisions(infos, data_dir, verbose)
-        bl_files = [f for f in csv_files if infos[f].get('is_baseline') and infos[f].get('tissue')]
-        out, errors = _run_batch_jobs([(f, 'auto') for f in bl_files], config, n_workers, verbose, False, counter)
-        tissue_el = _choose_tissue_electrodes(out, infos, csv_files)
-        redo = [(f, tissue_el[infos[f]['tissue']]['electrode']) for (f, _), r in out.items()
-                if infos[f]['tissue'] in tissue_el
-                and r['file_info'].get('analyzed_channel') != tissue_el[infos[f]['tissue']]['electrode']]
+        units, plan = plan_batch(csv_files, data_dir, infos)
+        for line in describe_plan(plan):
+            logger.info(line)
+            if verbose:
+                print(f"  {line}")
+        job_of, unit_info, updates = {}, {}, {}
+        for u in units:
+            job = (u['file'], u['electrode'], u['uid'])
+            job_of[u['uid']] = job
+            unit_info[job] = {**infos[u['file']], **(u['update'] or {})}
+            if u['update']:
+                updates[u['uid']] = u['update']
+        _warn_tissue_collisions(unit_info, data_dir, verbose)
+        counter['total'] = len(units)
+        bl_jobs = [j for j, info in unit_info.items() if info.get('is_baseline') and info.get('tissue')]
+        out, errors = _run_batch_jobs(bl_jobs, config, n_workers, verbose, False, counter, updates)
+        bl_set = set(bl_jobs)
+        dose_jobs = [j for j in unit_info if j not in bl_set]
+        tissue_el = _choose_tissue_electrodes(out, unit_info, dose_jobs)
+        redo = [(j[0], tissue_el[unit_info[j]['tissue']]['electrode'], j[2]) for j, r in out.items()
+                if j[1] == 'auto' and unit_info[j]['tissue'] in tissue_el
+                and r['file_info'].get('analyzed_channel') != tissue_el[unit_info[j]['tissue']]['electrode']]
         if redo:
             counter['total'] += len(redo)
-            out_redo, err_redo = _run_batch_jobs(redo, config, n_workers, verbose, True, counter)
+            out_redo, err_redo = _run_batch_jobs(redo, config, n_workers, verbose, True, counter, updates)
             errors += err_redo
-            for (f, ch), r in out_redo.items():
-                out[(f, 'auto')] = r
-        rest = [f for f in csv_files if f not in set(bl_files)]
-        jobs = [(f, tissue_el.get(infos[f].get('tissue'), {}).get('electrode', 'auto')) for f in rest]
-        out2, err2 = _run_batch_jobs(jobs, config, n_workers, verbose, False, counter)
+            for job, r in out_redo.items():
+                out[job_of[job[2]]] = r
+        rest = [(j[0], j[1] if j[1] != 'auto'
+                 else tissue_el.get(unit_info[j].get('tissue'), {}).get('electrode', 'auto'), j[2])
+                for j in dose_jobs]
+        out2, err2 = _run_batch_jobs(rest, config, n_workers, verbose, False, counter, updates)
         errors += err2
-        out.update(out2)
-        for (f, ch), r in out.items():
-            t = tissue_el.get(infos[f].get('tissue'))
-            if t is not None:
-                r['file_info']['tissue_electrode'] = t['electrode']
-                r['file_info']['tissue_electrode_from'] = t['baseline_file']
-        by_file = {f: r for (f, _), r in out.items()}   # one result per file in auto mode
-        results = [by_file[f] for f in csv_files if f in by_file]
+        for job, r in out2.items():
+            out[job_of[job[2]]] = r
+        results = []
+        for u in units:
+            r = out.get(job_of[u['uid']])
+            if r is None:
+                continue
+            fi = r['file_info']
+            if u['electrode'] != 'auto':
+                fi['tissue_electrode'] = fi.get('analyzed_channel')
+                fi['tissue_electrode_from'] = u['source']
+            elif fi.get('tissue') in tissue_el:
+                t = tissue_el[fi['tissue']]
+                fi['tissue_electrode'] = t['electrode']
+                fi['tissue_electrode_from'] = t['baseline_file']
+            # one electrode (or one given input) per tissue: the tissue is
+            # one normalisation group whatever input its files used
+            fi['group_electrode'] = ''
+            if u['multi']:
+                r['metadata']['filename'] = f"{r['metadata'].get('filename', '')} [{fi.get('analyzed_channel')}]"
+            r['batch_plan'] = plan
+            results.append(r)
     else:
         jobs = [(f, ch) for f in csv_files for ch in channels_to_run]
         out, errors = _run_batch_jobs(jobs, config, n_workers, verbose, channel == 'both', counter)
@@ -954,7 +1016,7 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
         print(f"  Baseline normalization: {n_with_bl}/{len(results)} recordings paired")
 
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    print(f"\n  Generating reports... ({len(results)}/{len(csv_files)} OK)")
+    print(f"\n  Generating reports... ({len(results)} recordings from {len(csv_files)} files)")
     generate_excel_report(results, output_dir / f'cardiac_fp_analysis_{ts}.xlsx')
     generate_pdf_report(results, output_dir / f'cardiac_fp_analysis_{ts}.pdf', str(data_dir))
     print(f"\n  DONE! Results in: {output_dir}\n")

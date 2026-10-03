@@ -16,6 +16,14 @@ import streamlit as st
 from cardiac_fp_analyzer.analyze import batch_analyze
 from cardiac_fp_analyzer.config import AnalysisConfig
 from cardiac_fp_analyzer.normalization import is_baseline
+from cardiac_fp_analyzer.sample_sheet import (
+    DRAFT_NAME,
+    SHEET_NAME,
+    describe_plan,
+    draft_sample_sheet,
+    find_sample_sheets,
+    is_sheet_file,
+)
 from ui.display import plot_beats, plot_signal, show_arrhythmia, show_params_table
 from ui.helpers import amplitude_scale
 from ui.i18n import T
@@ -61,7 +69,7 @@ def page_batch_analysis(config: AnalysisConfig):
             tmp_dir = tempfile.mkdtemp()
             with zipfile.ZipFile(io.BytesIO(uploaded_zip.read())) as zf:
                 zf.extractall(tmp_dir)
-            csv_files = sorted(Path(tmp_dir).rglob('*.csv'))
+            csv_files = sorted(p for p in Path(tmp_dir).rglob('*.csv') if not is_sheet_file(p))
             st.info(f"Estratti **{len(csv_files)}** file CSV dall'archivio")
 
     elif upload_mode == "Seleziona cartella":
@@ -117,11 +125,12 @@ def page_batch_analysis(config: AnalysisConfig):
         # Show selected path and scan
         if 'batch_local_path' in st.session_state:
             data_path = st.session_state['batch_local_path']
-            csv_files = sorted(Path(data_path).rglob('*.csv'))
+            csv_files = sorted(p for p in Path(data_path).rglob('*.csv') if not is_sheet_file(p))
             st.info(f"📁 `{data_path}` — **{len(csv_files)}** file CSV trovati")
             if st.button("❌ Cambia cartella", use_container_width=False):
                 st.session_state.pop('batch_local_path', None)
                 st.rerun()
+            _sample_sheet_panel(data_path)
 
     if not csv_files:
         return
@@ -183,6 +192,9 @@ def page_batch_analysis(config: AnalysisConfig):
         _show_risk_map(results, config, ground_truth)
 
     with tab_summary:
+        plan = next((r.get('batch_plan') for r in results if r.get('batch_plan')), None)
+        for line in describe_plan(plan or {}):
+            st.caption(line)
         _show_batch_summary(results)
 
     with tab_details:
@@ -191,6 +203,27 @@ def page_batch_analysis(config: AnalysisConfig):
     # ── Download reports ──
     st.divider()
     download_reports(results, config, data_path if upload_mode == "Seleziona cartella" else "uploaded_data")
+
+
+def _sample_sheet_panel(data_path):
+    """samples.csv: say whether one is used; write a draft to review."""
+    sheets = find_sample_sheets(data_path)
+    with st.expander("🧾 Mappa campioni (samples.csv)", expanded=False):
+        if sheets:
+            st.success("Mappa usata: " + ", ".join(f"`{p.relative_to(data_path)}`" for p in sheets)
+                       + " — per i file elencati ha la precedenza sui nomi.")
+        else:
+            st.caption(f"Nessun `{SHEET_NAME}`: tessuto, test item e dose vengono letti dai nomi dei file; "
+                       "i file con due tessuti (uno per ingresso) danno una registrazione per ingresso.")
+        st.caption(f"La bozza `{DRAFT_NAME}` elenca file e ingressi come li legge il software, con una nota "
+                   f"sulle righe da controllare. Dopo la revisione salvala come `{SHEET_NAME}` nella stessa cartella.")
+        if st.button("📝 Crea bozza della mappa", key='draft_samples'):
+            try:
+                rows, path = draft_sample_sheet(data_path)
+                flagged = sum(1 for r in rows if r['note'])
+                st.success(f"Scritta `{path}`: {len(rows)} righe, {flagged} con una nota da controllare.")
+            except OSError as e:
+                st.error(f"{T('error')}: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -357,6 +390,7 @@ def _show_batch_summary(results):
 
         rows.append({
             'File': r.get('metadata', {}).get('filename', ''),
+            'Tessuto': fi.get('tissue', ''),
             'Chip': fi.get('chip', ''),
             T('channel'): fi.get('analyzed_channel', ''),
             'Farmaco': fi.get('drug', ''),
@@ -383,7 +417,7 @@ def _show_batch_details(results):
     for i, r in enumerate(results):
         fname = r.get('metadata', {}).get('filename', f'file_{i}')
         ch = r.get('file_info', {}).get('analyzed_channel', '')
-        labels.append(f"{fname} [{ch}]" if ch else fname)
+        labels.append(f"{fname} [{ch}]" if ch and not fname.endswith(f"[{ch}]") else fname)
     selected = st.selectbox(T('select_recording'), labels)
 
     idx = labels.index(selected)

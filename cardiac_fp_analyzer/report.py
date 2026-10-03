@@ -52,6 +52,7 @@ def generate_excel_report(results_list, output_path):
             nrm = r.get('normalization', {})
             row = {
                 'File': m.get('filename',''), 'Experiment': fi.get('experiment',''),
+                'Tissue': fi.get('tissue',''),
                 'Chip': fi.get('chip',''), 'Electrode': fi.get('analyzed_channel',''),
                 'Drug': fi.get('drug',''), 'Concentration': fi.get('concentration',''),
                 'QC Grade': qc.grade if qc else '',

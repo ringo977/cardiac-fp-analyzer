@@ -349,12 +349,119 @@ def describe_recording(filepath):
     if chamber is not None:
         info['channel'] = chamber
     if chip is not None and chamber is not None and not info.get('dual_tissue'):
-        if exp is None:
-            ek = '-'
-        elif _EXP_DIR.match(exp):
-            ek = f"exp{int(_EXP_DIR.match(exp).group(1))}"
-        else:
-            ek = re.sub(r'\W+', '', exp.lower()) or '-'
-        dk = f"day{int(_DAY_DIR.match(day).group(1))}" if day else '-'
-        info['tissue'] = f"{ek}/{dk}/chip{str(chip).upper()}_ch{chamber}"
+        info['tissue'] = tissue_key(exp, day, chip, chamber)
     return info
+
+
+def tissue_key(experiment, day, chip, chamber):
+    """Normalisation key of one tissue: 'exp5/day7/chipB_ch1'.
+
+    ``experiment`` and ``day`` are folder names ('Exp 5', 'Day7', None);
+    the key reads 'exp<N>' and 'day<N>' from them, '-' when absent.
+    """
+    if experiment is None or not str(experiment).strip():
+        ek = '-'
+    elif _EXP_DIR.match(str(experiment).strip()):
+        ek = f"exp{int(_EXP_DIR.match(str(experiment).strip()).group(1))}"
+    else:
+        ek = re.sub(r'\W+', '', str(experiment).lower()) or '-'
+    dm = _DAY_DIR.match(str(day).strip()) if day else None
+    dk = f"day{int(dm.group(1))}" if dm else '-'
+    return f"{ek}/{dk}/chip{str(chip).upper()}_ch{int(chamber)}"
+
+
+# ── Two tissues in one file ───────────────────────────────────────────
+# GG layout (2026): each oscilloscope input records a different tissue and
+# the name lists the tissues in input order, each followed by its test item:
+# 'Exp1_ChipP_ch1_K01_ChipQ_ch2_K02_A' = input 1 chip P chamber 1 (K01),
+# input 2 chip Q chamber 2 (K02), dose A. An input without a tissue is
+# written 'na' after the chip, after the chamber at the end of the name, or
+# alone before the first tissue: 'Exp1_ChipP_na_ChipQ_ch2_K02_A', 'Exp1_ChipP_ch1_K01_A_ChipQ_ch1_na',
+# 'Exp1_na_ChipQ_ch2_K02_A'. On the GG recordings the analyst's beat marks
+# match one input clearly for 135 of the 182 named tissues, always the input
+# the name order gives (the other 47: too few beats found to tell).
+_INPUT_TOKEN = re.compile(
+    r'chip[\s_-]*(?P<chip>[A-Za-z0-9]+?)[\s_-]*ch[\s_-]*(?P<ch>\d+)(?P<na>[\s_-]+na$)?'
+    r'|(?P<chipna>chip[\s_-]*(?P<chipna_id>[A-Za-z0-9]+?)[\s_-]+na)(?=$|[\s_-])'
+    r'|(?:(?<=[\s_-])|^)(?P<bare>na)(?=$|[\s_-])',
+    re.IGNORECASE)
+_CODE_WORD = re.compile(r'^([A-Za-z]{1,3}\d+)')          # 'K01bis' → 'K01', 'E4031'
+_NOISE_WORD = re.compile(r'^(?:v\d+|\d+|only|bis|sx|dx|baseline|basline|base)$', re.IGNORECASE)
+
+
+def _item_and_conc(tail):
+    """Test item and concentration written after a tissue token."""
+    conc = None
+    m = _CONC.search(tail)
+    if m:
+        conc = f"{_conc_value(m.group(1))} {m.group(2)}"
+        before = tail[:m.start()]
+        tail = before if re.search(r'[A-Za-z]', before) else tail[m.end():]
+    words = [w for w in re.split(r'[\s_-]+', tail) if w]
+    item = None
+    for j, w in enumerate(words):
+        split_code = (re.fullmatch(r'[A-Za-z]{1,3}', w) and j + 1 < len(words)
+                      and words[j + 1].isdigit())
+        if re.fullmatch(r'[A-Z]', w) and not split_code:   # dose condition letter (A, B, C)
+            conc = conc or w
+            continue
+        if item is not None or _NOISE_WORD.match(w):
+            continue
+        if split_code:
+            item = w + words[j + 1]               # 'K_03' → 'K03'
+            continue
+        code = _CODE_WORD.match(w)
+        item = code.group(1) if code else w
+    return item, conc
+
+
+def parse_inputs(name):
+    """Tissues named in a file name, in input order.
+
+    Returns one dict per input: {'chip', 'chamber', 'item', 'concentration'}
+    for a tissue, {'empty': True} for an input marked 'na' (chip and chamber
+    added when the name gives them). 'item' is the word after the tissue
+    ('K07', 'vehicle', 'terfe'); 'concentration' a unit concentration next
+    to it ('300 nM') or a dose letter ('A'), else None. A bare 'na' counts
+    only before the first tissue; after it, it is part of the item text.
+    """
+    stem = Path(str(name)).stem if str(name).lower().endswith('.csv') else str(name)
+    ms = [m for m in _INPUT_TOKEN.finditer(stem)]
+    out = []
+    for i, m in enumerate(ms):
+        if m.group('bare') is not None:
+            if out:
+                continue
+            out.append({'empty': True})
+        elif m.group('chipna') is not None:
+            out.append({'empty': True, 'chip': m.group('chipna_id').upper()})
+        elif m.group('na'):
+            out.append({'empty': True, 'chip': m.group('chip').upper(), 'chamber': int(m.group('ch'))})
+        else:
+            nxt = next((n.start() for n in ms[i + 1:] if n.group('bare') is None), len(stem))
+            item, conc = _item_and_conc(stem[m.end():nxt])
+            out.append({'chip': m.group('chip').upper(), 'chamber': int(m.group('ch')),
+                        'item': item, 'concentration': conc})
+    return out
+
+
+def input_columns(filepath):
+    """Oscilloscope inputs recorded in a file, from its column header:
+    ['1', '2'], ['1'] or ['2'] ('Channel N' columns; without names, the
+    number of data columns). [] when the header cannot be read. Reads only
+    the header lines."""
+    try:
+        with open(filepath, errors='replace') as f:
+            for k, line in enumerate(f):
+                if k > 400:
+                    break
+                if line.startswith('#') or not line.strip():
+                    continue
+                named = re.findall(r'channel\s*(\d)', line, re.IGNORECASE)
+                if named:
+                    return named
+                n = len(line.split(',')) - 1
+                return [str(c) for c in range(1, n + 1)][:2] if n > 0 else []
+    except OSError:
+        return []
+    return []

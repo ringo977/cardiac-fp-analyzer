@@ -64,6 +64,8 @@ def canonical_drug_name(raw):
 def is_washout(result):
     """Washout / recovery recordings are not a concentration of the drug."""
     fi = result.get('file_info', {}) or {}
+    if fi.get('role') in ('washout', 'baseline', 'dose'):
+        return fi['role'] == 'washout'      # set by samples.csv or a two-tissue name
     text = f"{fi.get('drug', '') or ''} {(result.get('metadata', {}) or {}).get('filename', '')}".lower()
     return 'wash' in text or 'recovery' in text
 
@@ -199,7 +201,12 @@ def get_group_key(result):
     analyses of the same file are kept in separate normalization groups.
     """
     base = _get_base_key(result)
-    electrode = result.get('file_info', {}).get('analyzed_channel', '')
+    fi = result.get('file_info', {}) or {}
+    # The batch in 'auto' mode analyses a tissue on one electrode only (or on
+    # the input samples.csv / a two-tissue name gives); it sets
+    # 'group_electrode' to '' so that a tissue is one group even when its
+    # files put it on different oscilloscope inputs.
+    electrode = fi['group_electrode'] if 'group_electrode' in fi else fi.get('analyzed_channel', '')
     if electrode:
         return f"{base}/{electrode}"
     return base
@@ -211,6 +218,8 @@ _get_group_key = get_group_key
 def is_baseline(result):
     """Check if a result is a baseline recording."""
     fi = result.get('file_info', {})
+    if fi.get('role') in ('baseline', 'dose', 'washout'):
+        return fi['role'] == 'baseline'     # set by samples.csv or a two-tissue name
     drug = str(fi.get('drug', '') or '').lower()
     fname = str(result.get('metadata', {}).get('filename', '')).lower()
 
@@ -268,7 +277,9 @@ def pair_with_baselines(results_list, details=None):
     analysed on the same electrode, so this does not arise.
 
     Files whose name carries two tissues ('…chipC_ch1_chipA_ch1…') are not
-    paired: each electrode is a different microtissue.
+    paired when analysed as one recording (explicit el1 / el2 / both runs):
+    each electrode is a different microtissue. The 'auto' batch analyses
+    each input as a recording of its own tissue (sample_sheet.plan_batch).
 
     Returns a dict: recording_key(result) → baseline_result (or None).
     When ``details`` is a dict it is filled with recording_key →

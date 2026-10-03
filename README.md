@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.8.3
+**Versione**: 3.9.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
@@ -169,6 +169,12 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.9.0 (Ottobre 2026) — file con due tessuti e mappa dei campioni
+- **File con due tessuti, uno per ingresso** (convenzione GG): il batch `auto` dà una registrazione per ingresso. Tessuto, test item e dose vengono letti dal nome nell'ordine degli ingressi; `na` indica un ingresso senza tessuto. Prima questi file non venivano abbinati: sul dataset GG 81 delle 136 registrazioni con farmaco, e nessun test item riceveva una decisione.
+- **`samples.csv`**: per ogni file e ingresso indica esperimento, chip, camera, test item, dose ed eventuale esclusione, e per i file elencati ha la precedenza sui nomi. La bozza `samples_draft.csv` si crea con `python -m cardiac_fp_analyzer.sample_sheet <cartella>` o dalla pagina batch, e segnala le righe da controllare: camera fuori numero, test item che cambia in una camera, ripetizioni, camere senza riferimento.
+- In modalità `auto` un tessuto è un solo gruppo di inclusione e di abbinamento, qualunque ingresso usino i suoi file.
+- Colonna del tessuto nel report Excel e nella pagina batch.
 
 ### v3.8.3 (Ottobre 2026) — indice della risk map: solo il cambio spettrale
 - **Asse Y della risk map = cambio spettrale della forma d'onda rispetto al baseline**, aggregato per concentrazione come nella v3.8.2. Prima i pesi erano 70 % spettrale, 25 % instabilità morfologica, 5 % EAD.

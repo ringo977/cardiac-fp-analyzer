@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.8.3
+**Versione**: 3.9.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -214,7 +214,7 @@ Legge i file CSV prodotti dal sistema Digilent WaveForms (Analog Discovery 2). I
 | Accelera: chip come numero, camera in una cartella | `Day8/529/Ch1_…`, `Chip 569/Ch2 Bepridil/Ch2_…` | `…/chip529_ch1`, `…/chip569_ch2` |
 | due elettrodi nel nome, prima del 2020 (dalla v3.8) | `exp1/day6/chipB_sotalol/Ch2_Sotalol_7,5_channel1_sx_channel2_dx.csv` | `exp1/day6/chipB_ch2` |
 | chip come cartella sotto l'esperimento (dalla v3.8) | `Exp2/inj1/ch3_1000Terfe_channel1_sx_channel2_dx.csv` | `exp2/-/chipINJ1_ch3` |
-| due tessuti nello stesso file (uno per elettrodo) | `Exp5_chipC_ch1_chipA_ch1_baseline.csv` | nessuno: `dual_tissue`, non abbinato |
+| due tessuti nello stesso file, uno per ingresso (dalla v3.9) | `Exp1/Exp1_ChipP_ch1_K01_ChipQ_ch2_K02_A.csv` | una registrazione per ingresso: `exp1/-/chipP_ch1` (ingresso 1), `exp1/-/chipQ_ch2` (ingresso 2) |
 
 Le regole sono queste:
 
@@ -229,6 +229,42 @@ Le regole sono queste:
 **Esempio**: `chipA_ch1_terfe_300nM.csv` → `{chip: 'A', channel: 1, drug: 'terfe', concentration: '300 nM', is_baseline: False}`. Il nome canonico del farmaco (`terfenadine`) viene assegnato in fase di classificazione (`normalization.canonical_drug_name`).
 
 **Perché (ottobre 2026)**: fino alla v3.6 l'esperimento veniva letto solo da cartelle che iniziano con `EXP` maiuscolo, e il giorno veniva ignorato. Con cartelle `Exp5`, `exp1` o `Exp 5`, ogni lettera di chip era condivisa tra esperimenti e giorni. Sul dataset Visone 2023, 29 gruppi su 31 mescolavano esperimenti diversi: le dosi venivano normalizzate sul baseline di un altro esperimento (per esempio −27 % invece di +10 %).
+
+#### File con due tessuti e mappa dei campioni `samples.csv` (dalla v3.9)
+
+**Modulo**: `sample_sheet.py`; in `loader.py` `parse_inputs`, `input_columns`, `tissue_key`.
+
+Nella convenzione GG ogni ingresso dell'oscilloscopio registra un tessuto diverso. Il nome elenca i tessuti nell'ordine degli ingressi, ciascuno seguito dal suo test item: `Exp1_ChipP_ch1_K01_ChipQ_ch2_K02_A` è chip P camera 1 (K01) sull'ingresso 1, chip Q camera 2 (K02) sull'ingresso 2, dose A. Un ingresso senza tessuto si scrive `na`: dopo il chip (`ChipP_na`), dopo la camera alla fine del nome (`…_ChipQ_ch1_na`) o da solo prima del primo tessuto (`Exp1_na_ChipQ_ch2_…`). Sui dati GG, dove i battiti marcati dall'analista indicano chiaramente un ingresso (135 tessuti su 182), è sempre quello dato dall'ordine del nome.
+
+- **Batch (`channel='auto'`)**: un file con due tessuti diversi su due ingressi dà due registrazioni, una per ingresso. Ognuna ha tessuto, test item e dose propri, elettrodo fisso e nome `… [el1]` / `… [el2]`, e viene abbinata al riferimento dello stesso tessuto, cioè all'ingresso giusto del file di baseline. Un ingresso `na` non viene analizzato. I file con un solo tessuto restano come prima: il software sceglie l'elettrodo sul riferimento del tessuto.
+- **Gruppo = tessuto**: in modalità `auto` il batch mette `file_info['group_electrode'] = ''`, così un tessuto è un solo gruppo di inclusione e di abbinamento anche quando i suoi file lo registrano su ingressi diversi.
+- **Prima della v3.9** questi file non venivano abbinati: sul dataset GG 81 delle 136 registrazioni con farmaco e nessun test item riceveva una decisione.
+
+**Mappa dei campioni.** Un file `samples.csv` nella cartella analizzata, o in una sua sottocartella, dice che cosa registra ogni ingresso. Per i file che elenca ha la precedenza sui nomi; gli altri file vengono letti dal nome e il batch li segnala.
+
+| Colonna | Contenuto |
+|---|---|
+| `file` | percorso relativo alla cartella del foglio, o solo il nome se è unico |
+| `electrode` | `el1` / `el2` (ingresso 1 / 2); vuoto o `auto`: sceglie il software |
+| `experiment` | facoltativa: sostituisce la cartella dell'esperimento (un chip registrato nella cartella di un altro esperimento) |
+| `chip`, `chamber` | chip e camera del tessuto |
+| `item` | test item o farmaco |
+| `dose` | `baseline` (o `t0`) per i riferimenti, `washout`, altrimenti la concentrazione o la condizione (`A`, `300 nM`) |
+| `exclude` | qualunque testo esclude l'ingresso; il testo è il motivo |
+| `note` | libera; la bozza ci scrive i controlli |
+
+Le intestazioni possono essere in italiano (`elettrodo`, `esperimento`, `camera`, `farmaco`, `escludi`) e il separatore la virgola o il punto e virgola.
+
+**Bozza.** `python -m cardiac_fp_analyzer.sample_sheet <cartella>`, oppure il pulsante "Crea bozza della mappa" nella pagina batch, scrive `samples_draft.csv`: una riga per file, o per ingresso, come il software legge i nomi. Nella colonna `note` segnala:
+
+- camera oltre il numero di camere del chip (3);
+- test item che cambia tra le dosi di una camera;
+- più registrazioni della stessa camera alla stessa dose: in mancanza di esclusioni le dosi vengono mediate, e per i riferimenti si usa l'ultimo prima della prima dose;
+- camere senza riferimento, o senza una dose che altre camere dello stesso test item hanno;
+- file con due ingressi e un solo tessuto nel nome: quale ingresso lo registra il nome non lo dice;
+- un secondo tessuto che il nome sembra contenere ma non è stato riconosciuto.
+
+Dopo la revisione la bozza va salvata come `samples.csv`. Sui 6 esperimenti GG la bozza ha segnalato tutti gli errori trovati a mano nei nomi: camera sbagliata, chip con la stessa lettera, ripetizioni, tessuto su un ingresso non indicato.
 
 #### Selezione automatica dell'elettrodo
 
@@ -707,7 +743,7 @@ Ogni registrazione di farmaco viene abbinata a un baseline **dello stesso tessut
 - **Baseline esclusi:** quelli che il verdetto di analizzabilità rifiuta non vengono mai usati. Se il baseline scelto non supera i criteri di inclusione, la registrazione resta senza abbinamento.
 - **Motivazione registrata:** la scelta e il motivo finiscono in `normalization['pairing']` (`baseline_file`, `reason`, `candidates`).
 - **Chiave di abbinamento:** l'abbinamento è indicizzato per percorso completo più elettrodo (`recording_key`), non più per nome del file. Così due file omonimi in cartelle diverse, o le analisi el1 ed el2 dello stesso file in modalità `both`, non si sovrascrivono.
-- **File con due tessuti** (un tessuto per elettrodo, convenzione GG): non vengono abbinati automaticamente, e il motivo resta registrato.
+- **File con due tessuti** (un tessuto per ingresso, convenzione GG): dalla v3.9 il batch `auto` li analizza come una registrazione per ingresso, ognuna abbinata al proprio tessuto (vedi 4.1). Analizzati come un'unica registrazione (`el1`, `el2` o `both` espliciti) non vengono abbinati, e il motivo resta registrato.
 
 **Un elettrodo per tessuto** (`batch_analyze`, `channel='auto'`, dalla v3.7): i baseline vengono analizzati per primi con la scelta automatica. Ogni tessuto adotta l'elettrodo scelto per il suo riferimento, con la stessa regola dell'abbinamento (dalla v3.8: l'ultimo prima della prima dose; senza orari t0, poi la cartella che contiene la maggior parte delle sue registrazioni). Su quell'elettrodo vengono poi analizzate dosi e controlli. Gli eventuali altri baseline del tessuto vengono rianalizzati sullo stesso elettrodo. `file_info['tissue_electrode']` e `['tissue_electrode_from']` riportano la scelta.
 
@@ -1226,6 +1262,13 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.9.0 (Ottobre 2026) — file con due tessuti e mappa dei campioni
+
+1. **Due tessuti nello stesso file** (convenzione GG, uno per ingresso): il batch `auto` dà una registrazione per ingresso, con tessuto, test item e dose letti dal nome nell'ordine degli ingressi; `na` indica un ingresso vuoto (§4.1).
+2. **`samples.csv`**: mappa file × ingresso → esperimento, chip, camera, test item, dose, esclusione; per i file elencati ha la precedenza sui nomi. `samples_draft.csv` ne scrive una bozza con i controlli da fare (riga di comando e pagina batch).
+3. **Un gruppo per tessuto** in modalità `auto` (`group_electrode`): inclusione e abbinamento non dipendono più dall'ingresso usato da ciascun file.
+4. Report Excel e tabella della pagina batch con la colonna del tessuto; il file `.overrides.json` non si applica ai file con due tessuti, perché non dice su quale ingresso è stato fatto.
 
 ### v3.8.3 (Ottobre 2026) — indice della risk map: solo il cambio spettrale
 
