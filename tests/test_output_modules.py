@@ -252,10 +252,14 @@ class TestRiskMap:
             _make_result(drug='TestDrug'),
         ]
         metrics = aggregate_drug_metrics(results)
-        if metrics:
-            drug, m = next(iter(metrics.items()))
-            score = compute_proarrhythmic_index(m)
-            assert 0 <= score <= 100
+        drug, m = next(iter(metrics.items()))
+        # no paired recording: too few tissues per concentration (v3.8.2)
+        assert np.isnan(compute_proarrhythmic_index(m))
+        # metrics built by hand keep the earlier formula, bounded 0-100
+        from cardiac_fp_analyzer.risk_map import DrugRiskMetrics
+        hand = DrugRiskMetrics(name='x', max_spectral_change=0.9, max_morph_inst_bl=0.8,
+                               has_bl_morph=True, max_ead_incidence_pct=50.0)
+        assert 0 <= compute_proarrhythmic_index(hand) <= 100
 
     def test_generate_risk_map_basic(self):
         import matplotlib

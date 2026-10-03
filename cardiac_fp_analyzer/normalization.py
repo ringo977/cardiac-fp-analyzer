@@ -631,8 +631,9 @@ def classify_drug(results_list, cfg=None, include_vehicle=False):
     below ``cessation_override_max_fpd_confidence``) is reported as
     ``cessation_flag`` and changes the call only when
     ``enable_cessation_override`` is on (off by default since Oct 2026: on
-    the same data it would have made 10 of 12 compounds positive, four
-    negatives included; the paper reports cessation separately).
+    the same data the condition holds for ranolazine, mexiletine and
+    aspirin, and the only call it changes is aspirin, a negative, to
+    positive; the paper reports cessation separately).
 
     Returns dict: drug_name → {
         'positive': bool,

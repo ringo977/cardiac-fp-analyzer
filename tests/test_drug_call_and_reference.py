@@ -6,8 +6,8 @@ Evaluating the decision rules on all experiments of Visone et al. 2023
      the vehicle included (5/12 correct with the authors' values, 6/12 with
      the software's) → per-concentration tissue mean, ≥ 2 tissues, two
      consecutive concentrations (11/12 and 8/12);
-  2. the cessation override would have made 10 of 12 compounds positive
-     → reported, opt-in;
+  2. the cessation override turned aspirin (negative) positive and no
+     positive compound → reported, opt-in;
   3. the protocols before 2020 normalise to 't0', recorded right before the
      first dose, not to the earlier file named 'baseline' → t0 recognised,
      reference = last one recorded before the first dose;
@@ -382,4 +382,62 @@ def test_risk_map_puts_drugs_without_a_decision_in_their_own_strip():
     ax = fig.axes[0]
     assert ax.get_xlim()[0] < -15 - 15                       # strip added left of the axis range
     assert 'adjacent concentrations' in ax.get_xlabel()
+    plt.close(fig)
+
+
+# ── 7. risk map Y axis: proarrhythmic index per concentration ───────────
+
+
+def _indexed(tissue_path, drug, conc, spec, morph=0.0, ead=0.0, cess_conf=None):
+    from types import SimpleNamespace
+    r = _dose(tissue_path, drug, conc, 5.0)
+    r['normalization']['spectral_change_score'] = spec
+    r['arrhythmia_report'] = SimpleNamespace(risk_score=0, flags=[],
+                                             details={'morphology_instability': morph, 'ead_incidence_pct': ead},
+                                             residual_details={'baseline_relative': True})
+    if cess_conf is not None:
+        r['cessation_report'] = SimpleNamespace(has_cessation=True, cessation_confidence=cess_conf,
+                                                cessation_type='complete')
+    return r
+
+
+def test_proarrhythmic_index_is_aggregated_per_concentration():
+    from cardiac_fp_analyzer.risk_map import aggregate_drug_metrics, compute_proarrhythmic_index
+    rs = [_indexed('D/Exp5/Day7/chipA_ch1', 'quinid', '1uM', 0.40, 0.20),
+          _indexed('D/Exp5/Day7/chipA_ch1', 'quinid', '3uM', 0.50, 0.40),
+          _indexed('D/Exp5/Day7/chipB_ch2', 'quinid', '1uM', 0.20, 0.20),
+          _indexed('D/Exp5/Day7/chipB_ch2', 'quinid', '3uM', 0.30, 0.00),
+          _indexed('D/Exp5/Day7/chipC_ch3', 'quinid', '10uM', 0.95, 0.99)]   # one tissue: not used
+    m = aggregate_drug_metrics(rs)['quinidine']
+    per_rec = {('A', 1): 70 * .40 + 25 * .20, ('A', 3): 70 * .50 + 25 * .40,
+               ('B', 1): 70 * .20 + 25 * .20, ('B', 3): 70 * .30}
+    c1 = (per_rec[('A', 1)] + per_rec[('B', 1)]) / 2
+    c3 = (per_rec[('A', 3)] + per_rec[('B', 3)]) / 2
+    assert compute_proarrhythmic_index(m) == pytest.approx(min(c1, c3))
+    assert m.max_spectral_change == pytest.approx(0.95)                      # still reported
+
+
+def test_cessation_marker_needs_the_confidence_the_drug_call_uses():
+    from cardiac_fp_analyzer.risk_map import aggregate_drug_metrics
+    rs = [_indexed('D/Exp5/Day7/chipA_ch1', 'mexi', '1uM', 0.2, cess_conf=0.3),
+          _indexed('D/Exp5/Day7/chipB_ch2', 'mexi', '1uM', 0.2)]
+    assert aggregate_drug_metrics(rs)['mexiletine'].has_cessation is False
+    rs[1] = _indexed('D/Exp5/Day7/chipB_ch2', 'mexi', '1uM', 0.2, cess_conf=0.9)
+    assert aggregate_drug_metrics(rs)['mexiletine'].has_cessation is True
+
+
+def test_drug_without_an_index_is_drawn_at_the_bottom():
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    from cardiac_fp_analyzer.risk_map import (
+        aggregate_drug_metrics,
+        compute_proarrhythmic_index,
+        generate_risk_map,
+    )
+    rs = [_indexed('D/Exp5/Day7/chipA_ch1', 'nife', c, 0.3) for c in ('1nM', '5nM')]
+    assert np.isnan(compute_proarrhythmic_index(aggregate_drug_metrics(rs)['nifedipine']))
+    fig = generate_risk_map(rs)
+    assert fig.axes[0].get_ylim()[0] < 0
     plt.close(fig)

@@ -221,7 +221,9 @@ def _show_risk_map(results, config, ground_truth):
         y = compute_proarrhythmic_index(m)
         gt = ground_truth.get(drug)
         label = "hERG+" if gt is True else ("hERG−" if gt is False else "?")
-        if y >= zone_cfg.proarrh_mid_high:
+        if np.isnan(y):
+            zone = "—"
+        elif y >= zone_cfg.proarrh_mid_high:
             zone = "HIGH"
         elif y >= zone_cfg.proarrh_low_mid:
             zone = "INTERMEDIATE"
@@ -242,17 +244,18 @@ def _show_risk_map(results, config, ground_truth):
         })
 
     df = pd.DataFrame(rows)
-    df['undecided'] = df['x'].isna()
+    df['undecided'] = df['x'].isna() | df['y'].isna()
 
     fig = go.Figure()
 
     # Zone backgrounds
-    placed = df.loc[~df['undecided'], 'x']
+    placed = df['x'].dropna()
     x_min = min(placed.min() - 10 if len(placed) else 0.0, -15)
     x_max = max(placed.max() + 10 if len(placed) else 0.0, 35)
-    y_max = max(df['y'].max() + 10, 55)
-    x_lo = x_min - 16 if df['undecided'].any() else x_min
-    df['x_plot'] = df['x'].where(~df['undecided'], x_min - 8)
+    y_max = max((df['y'].max() if df['y'].notna().any() else 0.0) + 10, 55)
+    x_lo = x_min - 16 if df['x'].isna().any() else x_min
+    df['x_plot'] = df['x'].fillna(x_min - 8)
+    df['y_plot'] = df['y'].fillna(0.0)
 
     fig.add_shape(type="rect", x0=x_min, x1=x_max, y0=0, y1=zone_cfg.proarrh_low_mid,
                   fillcolor="rgba(40,167,69,0.12)", line_width=0)
@@ -267,7 +270,7 @@ def _show_risk_map(results, config, ground_truth):
     thresholds = {m.threshold_pct for m in metrics.values() if not np.isnan(m.threshold_pct)}
     if len(thresholds) == 1:
         fig.add_vline(x=thresholds.pop(), line_color="#495057", opacity=0.8)
-    if df['undecided'].any():
+    if df['x'].isna().any():
         fig.add_shape(type="rect", x0=x_lo, x1=x_min, y0=-2, y1=y_max,
                       fillcolor="rgba(233,236,239,0.9)", line_width=0)
         fig.add_annotation(x=(x_lo + x_min) / 2, y=0, text="nessuna decisione",
@@ -284,7 +287,7 @@ def _show_risk_map(results, config, ground_truth):
         if sub.empty:
             continue
         fig.add_trace(go.Scatter(
-            x=sub['x_plot'], y=sub['y'],
+            x=sub['x_plot'], y=sub['y_plot'],
             mode='markers+text',
             name=gt_label,
             marker=dict(
@@ -294,14 +297,14 @@ def _show_risk_map(results, config, ground_truth):
                 line=dict(color=[(color_map[gt_label] if u else 'white') for u in sub['undecided']], width=1.5)
             ),
             text=sub['drug'],
-            customdata=sub[['x', 'decision']].to_numpy(),
+            customdata=sub[['x', 'decision', 'y']].to_numpy(),
             textposition='top right',
             textfont=dict(size=11, color='#333'),
             hovertemplate=(
                 "<b>%{text}</b><br>"
                 "ΔFPDcF: %{customdata[0]:.1f}%<br>"
                 "Decisione: %{customdata[1]}<br>"
-                "Proarrhythmic Index: %{y:.1f}<br>"
+                "Proarrhythmic Index: %{customdata[2]:.1f}<br>"
                 "<extra></extra>"
             )
         ))

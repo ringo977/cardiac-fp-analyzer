@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.8.1
+**Versione**: 3.8.2
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
@@ -170,6 +170,17 @@ Il modulo QC valida ogni battito rilevato:
 
 ## Changelog
 
+### v3.8.2 (Ottobre 2026) — indice proaritmico della risk map per concentrazione
+- **Asse Y della risk map aggregato come la decisione per farmaco.**
+  - L'indice (cambio spettrale 70 %, instabilità morfologica 25 %, EAD 5 %) si calcola su ogni registrazione utilizzabile.
+  - Poi si fa la media tra tessuti a ogni concentrazione (almeno 2 tessuti) e si prende il livello mantenuto su 2 concentrazioni adiacenti.
+  - Prima ogni componente era il massimo su tutte le registrazioni: sul dataset Visone 2023 tutti i 12 composti, veicolo compreso, finivano nella zona ad alto rischio.
+  - Ora in zona alta ci sono chinidina, dofetilide e cisapride, in zona bassa l'aspirina, tutti gli altri in zona intermedia (veicolo a 30).
+  - La separazione resta debole: pesi e zone non sono stati ritoccati.
+- **⚡ cessazione** solo con confidenza > 0,5, la soglia della decisione per farmaco: prima compariva su tutti i composti.
+- **Correzione delle note della v3.8.0.** L'override di cessazione non avrebbe reso positivi 10 composti su 12: con la soglia di confidenza scatta per tre composti e cambia una sola decisione, l'aspirina da negativa a positiva. Il default spento resta corretto.
+- **Verifica**: risk map sui 10 esperimenti del paper. Aggiunti 3 test
+
 ### v3.8.1 (Ottobre 2026) — risk map allineata alla decisione per farmaco
 - **Asse X della risk map = statistica della decisione per farmaco** (`decision_value` di `classify_drug`).
   - Con il metodo predefinito è il livello che la media tra tessuti mantiene su 2 concentrazioni adiacenti.
@@ -187,7 +198,7 @@ Correzioni emerse confrontando le regole di decisione sui 12 composti del paper 
   - Sui 12 composti: 11/12 con le variazioni degli autori (solo la cisapride sbagliata, come nel paper), 8/12 con quelle del software e 7/12 col batch sui file così come sono.
   - Con `max`, il default precedente: 5/12, 6/12 e 6/12, con tutti i negativi chiamati positivi, veicolo compreso.
   - `classification_min_tissues=1` e `classification_consecutive=1` danno la regola del paper; `max`, `mean` e `n_above` restano disponibili.
-- **Override di cessazione spento per default** (`enable_cessation_override=False`). Avrebbe reso positivi 10 composti su 12, compresi quattro negativi. Ora la condizione è riportata in `cessation_flag`.
+- **Override di cessazione spento per default** (`enable_cessation_override=False`). Sul dataset del paper scatta per tre composti e cambia una sola decisione, l'aspirina da negativa a positiva (corretto nella v3.8.2: la prima versione di questa nota diceva 10 composti su 12). Ora la condizione è riportata in `cessation_flag`.
 - **Riferimento pre-dose.** `t0`/`T0` è riconosciuto come riferimento. Per ogni tessuto si usa l'ultimo riferimento registrato prima della prima dose, letto dall'orario nell'intestazione; senza orari si preferisce t0.
   - Gli autori normalizzavano su t0 in 13 tessuti su 15, non sul file chiamato baseline registrato prima.
   - L'elettrodo del tessuto si sceglie sullo stesso riferimento.

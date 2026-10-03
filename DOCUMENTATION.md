@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.8.1
+**Versione**: 3.8.2
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -745,7 +745,9 @@ Valore 0 = identico al baseline, 1 = completamente diverso. I farmaci hERG+ most
 
 #### Smart cessation override
 
-Se un farmaco mostra cessazione con bassa confidenza FPD (< 0.60), la condizione viene riportata in `cessation_flag` della classificazione. Dalla v3.8 rende positivo il farmaco solo con `enable_cessation_override = True`; il default è spento. Sul dataset Visone 2023 avrebbe reso positivi 10 composti su 12, compresi quattro negativi (alfuzosina, mexiletina, nifedipina, verapamil). Il rilevatore di cessazione scatta anche su registrazioni del veicolo. Il paper riporta la cessazione a parte, nella colonna "Stop".
+Se un farmaco mostra cessazione con bassa confidenza FPD (< 0.60), la condizione viene riportata in `cessation_flag` della classificazione. Dalla v3.8 rende positivo il farmaco solo con `enable_cessation_override = True`; il default è spento. Sul dataset Visone 2023 la condizione vale per tre composti (ranolazina, mexiletina, aspirina) e cambia una sola decisione: l'aspirina, negativa, diventerebbe positiva. Nessun composto positivo viene recuperato. Il paper riporta la cessazione a parte, nella colonna "Stop".
+
+> **Correzione (v3.8.2)**: le note della v3.8.0 riportavano "10 composti su 12, compresi quattro negativi". Quel conto usava `has_cessation` senza la soglia di confidenza (> 0,5) che la decisione applica; con la soglia i composti sono tre.
 
 #### Filtri QC sulla normalizzazione
 
@@ -850,6 +852,23 @@ Genera una mappa di rischio 2D nello stile CiPA, posizionando ogni farmaco su du
 | Spectral change | 70% | Miglior discriminatore (3× ratio pos/neg). Cattura le alterazioni morfologiche della ripolarizzazione nel dominio della frequenza. |
 | Morphology instability (baseline-relative) | 25% | Discriminatorio con template baseline (2.2× ratio). Solo i valori da analisi baseline-relative entrano nell'indice; quelli intra-recording sono esclusi perché anti-discriminatori. |
 | EAD incidence | 5% | Contributo modesto, principalmente per bloccanti hERG puri ad alta concentrazione. |
+
+**Aggregazione (dalla v3.8.2).** L'indice si calcola su ogni registrazione utilizzabile (abbinata, inclusa, analizzabile) e si aggrega come la decisione per farmaco:
+- media tra tessuti a ogni concentrazione, con almeno 2 tessuti;
+- livello mantenuto su 2 concentrazioni adiacenti;
+- con meno tessuti l'indice non viene calcolato e il farmaco compare vuoto in basso.
+
+Fino alla v3.8.1 ogni componente era il massimo su tutte le registrazioni: sul dataset Visone 2023 tutti i 12 composti, veicolo compreso, stavano sopra 40 (rischio alto). Ora:
+- rischio alto: chinidina, dofetilide e cisapride, tutti con rischio TdP in etichetta;
+- rischio basso: aspirina;
+- tutti gli altri nella zona intermedia, veicolo compreso (30).
+
+Limiti noti:
+- La separazione è debole e instabile ricampionando i tessuti: le tre assegnazioni al rischio alto tengono in circa il 60 % dei ricampionamenti.
+- Sul dataset completo l'instabilità morfologica non distingue positivi e negativi, il cambio spettrale sì.
+- Pesi e soglie delle zone restano quelli della v3.3.
+
+Il simbolo ⚡ segnala una cessazione con confidenza > 0,5, la stessa soglia della decisione per farmaco. Prima compariva su tutti i composti.
 
 **Tre zone di rischio**:
 
@@ -1205,6 +1224,10 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.8.2 (Ottobre 2026) — indice proaritmico della risk map per concentrazione
+
+L'indice proaritmico (asse Y, §4.11) si calcola per registrazione e si aggrega come la decisione per farmaco (media tra tessuti per concentrazione, almeno 2 tessuti, 2 concentrazioni adiacenti), invece di prendere il massimo di ogni componente. Il simbolo di cessazione richiede confidenza > 0,5. Corretta la cifra sull'override di cessazione riportata nella v3.8.0 (§4.10).
 
 ### v3.8.1 (Ottobre 2026) — risk map allineata alla decisione per farmaco
 

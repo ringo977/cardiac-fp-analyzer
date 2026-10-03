@@ -910,10 +910,10 @@ class NormalizationConfig:
     # When a drug causes cessation AND waveform destruction (low FPD confidence),
     # elevate the drug to positive even if FPDcF measurement failed.
     # Only triggers when min FPD confidence across concentrations < threshold.
-    # Off by default since Oct 2026: on the Visone 2023 data it would have
-    # made 10 of 12 compounds positive, four negatives included (cessation
-    # detections on vehicle recordings too). The condition is always reported
-    # as 'cessation_flag' in the drug classification.
+    # Off by default since Oct 2026: on the Visone 2023 data the condition
+    # holds for three compounds (ranolazine, mexiletine, aspirin) and the only
+    # call it changes is aspirin, a negative, to positive. The condition is
+    # always reported as 'cessation_flag' in the drug classification.
     enable_cessation_override: bool = False
     cessation_override_max_fpd_confidence: float = 0.60
 

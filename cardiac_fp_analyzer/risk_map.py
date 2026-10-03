@@ -8,8 +8,13 @@ Generates a scatter plot placing each drug on two axes:
            two adjacent concentrations; until v3.8.0 it was the largest
            single recording, which put every negative compound of the
            Visone 2023 data above the threshold.
-  Y-axis : proarrhythmic index (0-100) — composite of beat irregularity,
-           cessation, and spectral morphology change
+  Y-axis : proarrhythmic index (0-100) — spectral morphology change,
+           baseline-relative morphology instability and EAD incidence of each
+           recording, aggregated like the drug call: tissue mean at each
+           concentration (>= 2 tissues), level held over 2 adjacent
+           concentrations. Until v3.8.1 each component was the maximum over
+           all recordings, which put all 12 compounds of the Visone 2023 data
+           in the high-risk zone, the vehicle included.
 
 The plot is divided into three risk zones (Low / Intermediate / High)
 following the CiPA framework philosophy (Blinova et al. 2017, Strauss
@@ -29,7 +34,7 @@ Usage
 """
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import matplotlib
@@ -86,6 +91,13 @@ class DrugRiskMetrics:
     decision: str = ''                       # 'positive' | 'negative' | 'insufficient data' | ''
     decision_method: str = ''
     threshold_pct: float = np.nan
+    # Proarrhythmic index per concentration (v3.8.2): one record per usable
+    # recording — (tissue, concentration value, spectral change 0-1,
+    # baseline-relative morphology instability 0-1 or NaN, EAD incidence %)
+    index_records: list = field(default_factory=list)
+    index_min_tissues: int = 2
+    index_consecutive: int = 2
+    index_from_concentrations: bool = False
 
 
 def aggregate_drug_metrics(results_list, cfg=None) -> dict[str, DrugRiskMetrics]:
@@ -95,15 +107,25 @@ def aggregate_drug_metrics(results_list, cfg=None) -> dict[str, DrugRiskMetrics]
 
     The drug call is recomputed on ``results_list`` with ``cfg``
     (NormalizationConfig, default settings when None), so a map built from
-    several batches combined places each drug on all of its tissues.
+    several batches combined places each drug on all of its tissues. The
+    recordings the drug call can use (paired, inclusion passed, analysable)
+    also feed the proarrhythmic index, per concentration, with the same
+    minimum number of tissues and adjacent concentrations.
     """
-    from .normalization import _is_baseline, _is_control, is_washout
+    from .normalization import (
+        _default_unit,
+        _get_base_key,
+        _is_baseline,
+        _is_control,
+        concentration_value,
+        is_washout,
+    )
 
     buckets = defaultdict(lambda: {
         'pct': [], 'bp_cv': [], 'cess_conf': [], 'spec': [], 'fpd_conf': [],
         'has_cess': False,
         'morph_inst': [], 'morph_inst_bl': [],  # bl = baseline-relative only
-        'ead_pct': [], 'stv_fpdc': [], 'risk_scores': [],
+        'ead_pct': [], 'stv_fpdc': [], 'risk_scores': [], 'records': [],
     })
 
     for r in results_list:
@@ -133,10 +155,11 @@ def aggregate_drug_metrics(results_list, cfg=None) -> dict[str, DrugRiskMetrics]
         if not np.isnan(bp_cv):
             b['bp_cv'].append(bp_cv)
 
-        # Cessation
+        # Cessation, with the confidence classify_drug requires: without it the
+        # detector flagged every compound of the Visone 2023 data, vehicle included
         if cess is not None:
             b['cess_conf'].append(cess.cessation_confidence)
-            if cess.has_cessation:
+            if cess.has_cessation and cess.cessation_confidence > 0.5:
                 b['has_cess'] = True
 
         # Spectral change
@@ -167,10 +190,30 @@ def aggregate_drug_metrics(results_list, cfg=None) -> dict[str, DrugRiskMetrics]
             if not np.isnan(sv):
                 b['stv_fpdc'].append(sv)
 
+        # Per-concentration index: only the recordings the drug call can use
+        usable = (norm.get('has_baseline') and (r.get('inclusion', {}) or {}).get('passed', True)
+                  and not s.get('not_analysable', False))
+        spec_r = norm.get('spectral_change_score', np.nan)
+        if usable and spec_r is not None and not np.isnan(spec_r):
+            det = (getattr(ar, 'details', {}) or {}) if ar is not None else {}
+            rd = (getattr(ar, 'residual_details', {}) or {}) if ar is not None else {}
+            morph_r = det.get('morphology_instability', np.nan) if rd.get('baseline_relative', False) else np.nan
+            b['records'].append((_get_base_key(r), fi.get('concentration', ''), float(spec_r),
+                                 float(morph_r) if morph_r is not None else np.nan,
+                                 float(det.get('ead_incidence_pct', 0) or 0)))
+
+    min_tissues = max(1, int(getattr(cfg, 'classification_min_tissues', 2))) if cfg is not None else 2
+    consecutive = max(1, int(getattr(cfg, 'classification_consecutive', 2))) if cfg is not None else 2
+
     # Build DrugRiskMetrics
     out = {}
     for drug, b in buckets.items():
         m = DrugRiskMetrics(name=drug)
+        unit = _default_unit([rec[1] for rec in b['records']])
+        m.index_records = [(t, concentration_value(c, default_unit=unit), sp, mo, ea)
+                           for t, c, sp, mo, ea in b['records']]
+        m.index_min_tissues, m.index_consecutive = min_tissues, consecutive
+        m.index_from_concentrations = True
         if b['pct']:
             m.max_pct_fpdc_change = max(b['pct'])
             m.mean_pct_fpdc_change = float(np.mean(b['pct']))
@@ -230,12 +273,49 @@ def x_axis_label(metrics, consecutive=2):
 
 # ── Proarrhythmic index ────────────────────────────────────────────────
 
+def _recording_index(spec, morph, ead, w_spec, w_morph, w_ead):
+    """Index of one recording: spectral change and morphology instability
+    0-1 → 0-100 (morphology 0 without a baseline-relative value), EAD
+    incidence capped at 30 % → 0-100."""
+    mo = 0.0 if morph is None or np.isnan(morph) else morph * 100.0
+    ea = min(0.0 if ead is None or np.isnan(ead) else ead, 30.0) * (100.0 / 30.0)
+    return min(w_spec * spec * 100.0 + w_morph * mo + w_ead * ea, 100.0)
+
+
+def _index_per_concentration(m, w_spec, w_morph, w_ead):
+    """Tissue mean of the recording index at each concentration (tissues with
+    several recordings averaged first), concentrations with at least
+    ``index_min_tissues`` tissues, highest level held over
+    ``index_consecutive`` adjacent ones; NaN when there are not enough."""
+    by = defaultdict(lambda: defaultdict(list))
+    for tissue, cval, spec, morph, ead in m.index_records:
+        if cval is None:
+            continue
+        by[cval][tissue].append(_recording_index(spec, morph, ead, w_spec, w_morph, w_ead))
+    kept = [float(np.mean([np.mean(v) for v in by[c].values()]))
+            for c in sorted(by) if len(by[c]) >= m.index_min_tissues]
+    k = m.index_consecutive
+    if len(kept) < k:
+        return np.nan
+    return max(min(kept[i:i + k]) for i in range(len(kept) - k + 1))
+
+
 def compute_proarrhythmic_index(m: DrugRiskMetrics,
                                  w_spec: float = 0.70,
                                  w_morph: float = 0.25,
                                  w_ead: float = 0.05) -> float:
     """
     Composite proarrhythmic index (0-100).
+
+    For metrics built by aggregate_drug_metrics (v3.8.2) the weighted index
+    of each usable recording is aggregated like the drug call: tissue mean
+    at each concentration (>= 2 tissues), level held over 2 adjacent
+    concentrations; NaN with insufficient data. Until v3.8.1 each component
+    was the maximum over all recordings of the drug — kept below for metrics
+    built by hand. On the 12 compounds of the Visone 2023 data the maxima put
+    every compound, the vehicle included, above 40 (high risk); per
+    concentration the vehicle sits at 30, aspirin at 15 and quinidine,
+    dofetilide and cisapride above 40.
 
     Three-component index (v3.3), weighted by **specificity** for
     hERG-related proarrhythmic risk:
@@ -265,6 +345,9 @@ def compute_proarrhythmic_index(m: DrugRiskMetrics,
       - Waveform degradation : nifedipine(−) FPDc=0 ≈ dofetilide(+) 0.
       - Repol. STV : nifedipine(−) 72ms ≈ dofetilide(+) 65ms.
     """
+    if getattr(m, 'index_from_concentrations', False):
+        return _index_per_concentration(m, w_spec, w_morph, w_ead)
+
     # Spectral morphology change (0-1 → 0-100)
     spec = m.max_spectral_change * 100.0
 
@@ -354,6 +437,7 @@ def generate_risk_map(
     xs = np.array(xs, dtype=float)
     ys = np.array(ys, dtype=float)
     undecided = np.isnan(xs)
+    no_index = np.isnan(ys)     # too few tissues per concentration for the index
 
     if len(xs) == 0:
         fig, ax = plt.subplots(figsize=figsize)
@@ -373,7 +457,8 @@ def generate_risk_map(
     x_lo = x_min - 16 if undecided.any() else x_min
     xs = np.where(undecided, x_min - 8, xs)
     y_min = -2
-    y_max = max(ys.max() + 10, zone_cfg.proarrh_mid_high + 15)
+    y_max = max((np.nanmax(ys) if (~no_index).any() else 0.0) + 10, zone_cfg.proarrh_mid_high + 15)
+    ys = np.where(no_index, y_min + 1.5, ys)
 
     # Low risk (green)
     ax.axhspan(y_min, zone_cfg.proarrh_low_mid, xmin=0, xmax=1,
@@ -394,12 +479,12 @@ def generate_risk_map(
     ax.axhline(zone_cfg.proarrh_low_mid, color='#888', ls='--', lw=0.8, alpha=0.7)
     ax.axhline(zone_cfg.proarrh_mid_high, color='#888', ls='--', lw=0.8, alpha=0.7)
 
-    # Zone labels
-    ax.text(x_min + 2, zone_cfg.proarrh_low_mid / 2, 'LOW RISK',
+    # Zone labels, at the top of each band (clear of most points)
+    ax.text(x_min + 2, zone_cfg.proarrh_low_mid - 1.5, 'LOW RISK', va='top',
             fontsize=9, color='#155724', alpha=0.6, fontweight='bold')
-    ax.text(x_min + 2, (zone_cfg.proarrh_low_mid + zone_cfg.proarrh_mid_high) / 2,
-            'INTERMEDIATE', fontsize=9, color='#856404', alpha=0.6, fontweight='bold')
-    ax.text(x_min + 2, zone_cfg.proarrh_mid_high + 5, 'HIGH RISK',
+    ax.text(x_min + 2, zone_cfg.proarrh_mid_high - 1.5, 'INTERMEDIATE', va='top',
+            fontsize=9, color='#856404', alpha=0.6, fontweight='bold')
+    ax.text(x_min + 2, y_max - 1.5, 'HIGH RISK', va='top',
             fontsize=9, color='#721c24', alpha=0.6, fontweight='bold')
 
     # ── Scatter points ──
@@ -428,7 +513,7 @@ def generate_risk_map(
         # Larger point if cessation detected
         size = 180 if m_obj.has_cessation else 120
 
-        if undecided[i]:
+        if undecided[i] or no_index[i]:
             ax.scatter(x, y, facecolors='none', edgecolors='#6c757d', marker=marker,
                        s=size, linewidths=1.5, zorder=5)
         else:
@@ -475,13 +560,12 @@ def generate_risk_map(
                                markerfacecolor='#0d6efd', markersize=10,
                                label='hERG− (negative)'))
     from matplotlib.lines import Line2D
-    legend_elements.append(Line2D([0], [0], marker='$⚡$', color='w',
-                           markerfacecolor='#212529', markersize=12,
-                           label='Cessation detected'))
-    if undecided.any():
+    legend_elements.append(Line2D([0], [0], linestyle='none', marker='',
+                           label='⚡ cessation detected'))
+    if undecided.any() or no_index.any():
         legend_elements.append(Line2D([0], [0], marker='o', color='w', markerfacecolor='none',
                                markeredgecolor='#6c757d', markersize=10,
-                               label='No decision (grey strip)'))
+                               label='Too few tissues (strip / bottom edge)'))
 
     ax.legend(handles=legend_elements, loc='upper left', fontsize=9,
               framealpha=0.9, edgecolor='#dee2e6')
@@ -489,7 +573,7 @@ def generate_risk_map(
     # ── Annotation: axis explanation ──
     ax.text(0.98, 0.02,
             'X = statistic of the drug call (solid line: its threshold)\n'
-            'Y = composite: spectral (70%) + morph. instability (25%) + EAD (5%)',
+            'Y = spectral (70%) + morph. instability (25%) + EAD (5%), per concentration',
             transform=ax.transAxes, fontsize=7.5, color='#6c757d',
             ha='right', va='bottom')
 
