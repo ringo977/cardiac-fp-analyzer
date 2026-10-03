@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.8.2
+**Versione**: 3.8.3
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
@@ -169,6 +169,15 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.8.3 (Ottobre 2026) — indice della risk map: solo il cambio spettrale
+- **Asse Y della risk map = cambio spettrale della forma d'onda rispetto al baseline**, aggregato per concentrazione come nella v3.8.2. Prima i pesi erano 70 % spettrale, 25 % instabilità morfologica, 5 % EAD.
+  - Instabilità morfologica e incidenza EAD sono punteggi definiti in questo software, non nel paper: il paper usava il residuo solo per cercare picchi irregolari.
+  - Sui 12 composti l'instabilità morfologica non distingue positivi e negativi (AUC 0,47) e l'EAD abbassa l'ordinamento.
+  - Il cambio spettrale da solo ordina meglio (AUC 0,86 contro 0,78). Le due componenti restano calcolate e riportate e si possono ripesare.
+  - Zona alta: cisapride, dofetilide, chinidina, ranolazina e verapamil; zona bassa: aspirina; veicolo a 32. La separazione resta debole: il verapamil, negativo, è in zona alta.
+- **Attribuzioni corrette** nel codice e nella documentazione: le metriche sul residuo (instabilità morfologica, incidenza EAD, CV d'ampiezza) erano indicate come metodo del paper.
+- Asse Y rinominato "Waveform change vs baseline"; etichette delle zone spostate a destra per non finire sotto la legenda.
 
 ### v3.8.2 (Ottobre 2026) — indice proaritmico della risk map per concentrazione
 - **Asse Y della risk map aggregato come la decisione per farmaco.**

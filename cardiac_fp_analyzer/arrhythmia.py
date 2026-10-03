@@ -6,9 +6,11 @@ Two complementary approaches:
   1. **Statistical** (original): beat-period variability, STV, premature/
      delayed beat detection, amplitude instability, FPD outlier EADs.
 
-  2. **Residual-based** (paper approach — Visone et al. 2023): delegated to
-     ``residual_analysis.py`` — template construction, residual RMS,
-     EAD detection, Poincaré STV of FPD values.
+  2. **Residual-based**: delegated to ``residual_analysis.py`` — template
+     construction, residual RMS, EAD detection, Poincaré STV of FPD values.
+     The residual idea comes from Visone et al. 2023, who used it only to
+     look for irregular peaks (candidate arrhythmic events); the scores
+     computed from it are defined in this software.
 
 Both approaches contribute to a single ArrhythmiaReport with a 0–100
 risk score.
@@ -78,10 +80,11 @@ class ArrhythmiaReport:
 
         Literature basis:
           - CV of beat period (Thomsen 2004): beat-to-beat variability
-          - EAD incidence % (Visone 2023): fraction of beats with EADs
-          - Morphology instability (Visone 2023): 0-1, normalised by
-            template amplitude
-          - Amplitude instability (Visone 2023): CV of spike amplitude
+          - EAD incidence %: fraction of beats with an EAD in the residual
+            (criteria defined here; the residual comes from Visone 2023)
+          - Morphology instability: 0-1, residual RMS normalised by the
+            template amplitude (defined here)
+          - Amplitude instability: CV of spike amplitude (defined here)
             — captures drug-induced depolarisation changes (hERG block,
             Ca²⁺ block, progressive tissue degradation)
           - Poincaré STV (Hondeghem 2001): ms, inherently per-beat
@@ -108,9 +111,9 @@ class ArrhythmiaReport:
         Component weights (sum=100):
           CV beat period:          18  (Thomsen 2004)
           Premature/delayed:        8  (Hondeghem 2001)
-          Morphology:              18  (Visone 2023)
-          EAD incidence:           18  (Visone 2023)
-          Amplitude CV:             8  (Visone 2023)
+          Morphology:              18  (residual, defined here)
+          EAD incidence:           18  (residual, defined here)
+          Amplitude CV:             8  (defined here)
           Poincaré STV:            10  (Hondeghem 2001)
           Cessation:               10  (binary)
           Repol not detectable:    10  (flat T-wave / drug effect)
@@ -355,9 +358,9 @@ def analyze_arrhythmia(beat_indices, beat_periods, all_params, summary, fs,
                 report.add_event(i + 1, 'ead_suspect_stat',
                                  f'FPD={fpd:.0f}ms')
 
-    # Amplitude instability (Visone et al. 2023: amplitude variation
-    # signals altered depolarization — hERG blockers, Ca²⁺ channel
-    # blockers, or progressive tissue degradation)
+    # Amplitude instability (defined here: variation of the spike
+    # amplitude signals altered depolarization — hERG blockers, Ca²⁺
+    # channel blockers, or progressive tissue degradation)
     amps = [p['spike_amplitude_mV'] for p in all_params
             if not np.isnan(p.get('spike_amplitude_mV', np.nan))]
     amp_cv = 0.0

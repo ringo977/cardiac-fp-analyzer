@@ -1,5 +1,9 @@
 """
-residual_analysis.py — Residual-based arrhythmia analysis (Visone et al. 2023).
+residual_analysis.py — Residual-based arrhythmia analysis.
+
+The residual (recorded signal minus the average beat pattern) comes from Visone et
+al. 2023, who used it to look for irregular peaks; the scores below are
+defined in this software and were not part of the paper.
 
 For each beat, compute residual = beat − template and analyse for:
   - Morphological instability (RMS of residuals)
@@ -202,7 +206,8 @@ def poincare_stv(values):
 
 def analyze_residual(beats_data, fs, all_params, cfg=None,
                      baseline_template=None):
-    """Residual-based arrhythmia analysis (Visone et al. 2023 approach).
+    """Residual-based arrhythmia analysis (residual as in Visone et al. 2023;
+    the scores are this software's).
 
     Parameters
     ----------

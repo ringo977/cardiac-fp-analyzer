@@ -304,7 +304,7 @@ def _show_risk_map(results, config, ground_truth):
                 "<b>%{text}</b><br>"
                 "ΔFPDcF: %{customdata[0]:.1f}%<br>"
                 "Decisione: %{customdata[1]}<br>"
-                "Proarrhythmic Index: %{customdata[2]:.1f}<br>"
+                "Cambio spettrale: %{customdata[2]:.1f}<br>"
                 "<extra></extra>"
             )
         ))
@@ -316,7 +316,7 @@ def _show_risk_map(results, config, ground_truth):
                'mean': "ΔFPDcF medio (%) di tutte le registrazioni"}.get(method, "ΔFPDcF max (%)")
     fig.update_layout(
         xaxis_title=x_title,
-        yaxis_title="Indice Proaritmico (0–100)",
+        yaxis_title="Cambio della forma d'onda vs baseline (spettrale, 0–100)",
         xaxis=dict(range=[x_lo, x_max]),
         yaxis=dict(range=[-2, y_max]),
         height=550,

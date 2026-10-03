@@ -1008,7 +1008,8 @@ class ArrhythmiaConfig:
     ead_mad_factor: float = 3.0             # 3× median absolute deviation
     ead_critical_count: int = 3             # ≥ 3 EADs → critical severity
 
-    # EAD detection (residual — paper approach, Visone et al. 2023)
+    # EAD detection (residual; Visone et al. 2023 looked for irregular peaks
+    # in the residual, the five criteria below are this software's)
     # Five criteria — ALL must be met for a residual peak to be EAD:
     #   1. Statistical:  peak > prominence × σ  of residual noise
     #   2. Absolute:     peak > min_amp_frac × template peak-to-peak

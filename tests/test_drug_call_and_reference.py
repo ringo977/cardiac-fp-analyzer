@@ -409,11 +409,14 @@ def test_proarrhythmic_index_is_aggregated_per_concentration():
           _indexed('D/Exp5/Day7/chipB_ch2', 'quinid', '3uM', 0.30, 0.00),
           _indexed('D/Exp5/Day7/chipC_ch3', 'quinid', '10uM', 0.95, 0.99)]   # one tissue: not used
     m = aggregate_drug_metrics(rs)['quinidine']
+    # default since v3.8.3: spectral change only
+    assert compute_proarrhythmic_index(m) == pytest.approx(min((40 + 20) / 2, (50 + 30) / 2))
+    # the v3.8.2 weights are still available
     per_rec = {('A', 1): 70 * .40 + 25 * .20, ('A', 3): 70 * .50 + 25 * .40,
                ('B', 1): 70 * .20 + 25 * .20, ('B', 3): 70 * .30}
     c1 = (per_rec[('A', 1)] + per_rec[('B', 1)]) / 2
     c3 = (per_rec[('A', 3)] + per_rec[('B', 3)]) / 2
-    assert compute_proarrhythmic_index(m) == pytest.approx(min(c1, c3))
+    assert compute_proarrhythmic_index(m, 0.70, 0.25, 0.05) == pytest.approx(min(c1, c3))
     assert m.max_spectral_change == pytest.approx(0.95)                      # still reported
 
 

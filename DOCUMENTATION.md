@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.8.2
+**Versione**: 3.8.3
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -459,7 +459,7 @@ L'SNR globale è calcolato come rapporto tra ampiezza media dei picchi e deviazi
 
 **Modulo**: `arrhythmia.py`
 
-L'analisi delle aritmie è il cuore del sistema. Combina due approcci complementari: analisi statistica dei parametri e analisi residual-based (approccio del paper di riferimento).
+L'analisi delle aritmie è il cuore del sistema. Combina due approcci complementari: analisi statistica dei parametri e analisi residual-based. Il residuo viene dal paper di riferimento, che lo usava solo per individuare picchi irregolari (eventi aritmici candidati); i punteggi calcolati qui sono del software.
 
 #### Approccio statistico
 
@@ -472,7 +472,7 @@ Valuta le proprietà globali del ritmo e dei parametri:
 - **Prolungamento FPD**: FPD > 130% del baseline o > 500 ms assoluti
 - **Instabilità d'ampiezza**: CV dell'ampiezza > 30%
 
-#### Approccio residual-based (Visone et al. 2023)
+#### Approccio residual-based (residuo come in Visone et al. 2023)
 
 Questo approccio calcola il residuo tra ogni battito e un template di riferimento:
 
@@ -481,6 +481,8 @@ residuo = battito − template
 ```
 
 Il residuo contiene solo le deviazioni dalla morfologia normale. In condizioni fisiologiche i residui sono piccoli (jitter termico); con farmaci proaritmici i residui crescono (cambio morfologico, EAD, instabilità).
+
+Nel paper il residuo (segnale registrato meno il segnale ricostruito dai pattern medi) serviva a individuare picchi inattesi e irregolari, poi riportati come eventi aritmici presenti o assenti per microtessuto. Instabilità morfologica, incidenza EAD, CV d'ampiezza e indice proaritmico non sono nel paper: sono definiti in questo software.
 
 #### Baseline-relative residual analysis (v3.3)
 
@@ -493,7 +495,7 @@ L'implementazione è a due passaggi: nella prima pass si analizzano tutti i file
 
 #### Metriche dal residuo
 
-**Morphology instability** (0–1): RMS del residuo normalizzato. Con baseline-relative analysis, è discriminatoria: farmaci positivi 0.566, negativi 0.257 (ratio 2.2×).
+**Morphology instability** (0–1): RMS medio del residuo diviso per l'ampiezza picco-picco del template, mappato su 0–1 (5 % → 0,12; 15 % → 0,5; 30 % → 0,88). Rispetto al template del baseline misura quanto è cambiata la forma del battito, per qualunque motivo (FPD diverso, spike più piccolo, rumore), non l'instabilità battito per battito. Il rapporto 2,2× tra positivi e negativi citato nella v3.3 veniva dal massimo su 7 composti. Sui 12 composti del paper, per concentrazione, non li distingue (AUC 0,47).
 
 **EAD detection** (Early Afterdepolarization): Rileva depolarizzazioni secondarie nella fase di ripolarizzazione (150–500 ms post-spike). Cinque criteri simultanei:
 
@@ -503,7 +505,7 @@ L'implementazione è a due passaggi: nella prima pass si analizzano tutti i file
 4. **Polarità**: solo picchi positivi (le EAD sono depolarizzazioni secondarie)
 5. **Localizzazione**: nella finestra di ripolarizzazione (150–500 ms post-spike)
 
-**Razionale dei 5 criteri**: Il criterio statistico da solo (come nel paper) genera troppi falsi positivi perché il rumore di fondo ha una distribuzione non-gaussiana. I criteri di ampiezza, larghezza e localizzazione aggiungono specificità biofisica.
+**Razionale dei 5 criteri**: Un criterio statistico da solo genera troppi falsi positivi perché il rumore di fondo ha una distribuzione non-gaussiana. I criteri di ampiezza, larghezza e localizzazione aggiungono specificità biofisica.
 
 **Poincaré STV**: Variabilità a breve termine di FPD e FPDcF, calcolata dal diagramma di Poincaré.
 
@@ -521,7 +523,7 @@ Le 7 componenti del risk score:
 
 4. **EAD incidence** (0–20 punti): percentuale di battiti con eventi EAD-like. 10% di battiti con EAD = 20 punti (massimo). Non dipende dal numero assoluto di EAD ma dalla loro frequenza relativa.
 
-5. **Amplitude instability** (0–10 punti): CV dell'ampiezza dello spike (Visone et al. 2023). CV < 10% = 0 punti. CV = 40% = 10 punti. Cattura alterazioni della depolarizzazione indotte dal farmaco: blocco hERG (triangolazione del potenziale d'azione), blocco canali Ca²⁺ L-type (riduzione d'ampiezza, come con nifedipina), degradazione progressiva del tessuto. È una metrica statistica (CV), intrinsecamente indipendente dalla durata.
+5. **Amplitude instability** (0–10 punti): CV dell'ampiezza dello spike, definito in questo software (il paper riporta la variazione dell'ampiezza tra concentrazioni, non la sua variabilità). CV < 10% = 0 punti. CV = 40% = 10 punti. Cattura alterazioni della depolarizzazione indotte dal farmaco: blocco hERG (triangolazione del potenziale d'azione), blocco canali Ca²⁺ L-type (riduzione d'ampiezza, come con nifedipina), degradazione progressiva del tessuto. È una metrica statistica (CV), intrinsecamente indipendente dalla durata.
 
 6. **Poincaré STV** (0–10 punti): variabilità a breve termine di FPDcF in ms. STV ≤ 5 ms = 0 punti. STV = 20 ms = 10 punti. La STV è per definizione una metrica beat-to-beat (mean|x_{i+1} - x_i| / √2), indipendente dalla durata.
 
@@ -845,28 +847,28 @@ Genera una mappa di rischio 2D nello stile CiPA, posizionando ogni farmaco su du
 - I farmaci senza decisione (meno di 2 tessuti per concentrazione) compaiono vuoti in una fascia a sinistra, "no decision".
 - Fino alla v3.8.0 l'asse era la variazione massima di una singola registrazione: sul dataset Visone 2023 metteva oltre la soglia tutti i composti negativi.
 
-**Asse Y — Indice proaritmico (0–100)**: Composito a tre componenti:
+**Asse Y — Indice proaritmico (0–100)**: dalla v3.8.3, per default, è il cambio spettrale della forma d'onda rispetto al baseline (0–1 × 100). Le altre due componenti restano calcolate e riportate nelle tabelle e nell'export CDISC, e si possono ripesare con `compute_proarrhythmic_index(m, w_spec, w_morph, w_ead)`:
 
-| Componente | Peso | Razionale |
-|------------|------|-----------|
-| Spectral change | 70% | Miglior discriminatore (3× ratio pos/neg). Cattura le alterazioni morfologiche della ripolarizzazione nel dominio della frequenza. |
-| Morphology instability (baseline-relative) | 25% | Discriminatorio con template baseline (2.2× ratio). Solo i valori da analisi baseline-relative entrano nell'indice; quelli intra-recording sono esclusi perché anti-discriminatori. |
-| EAD incidence | 5% | Contributo modesto, principalmente per bloccanti hERG puri ad alta concentrazione. |
+| Componente | Peso dalla v3.8.3 | Peso fino alla v3.8.2 | Note |
+|------------|------|------|------|
+| Spectral change | 100% | 70% | Cambio della forma d'onda nel dominio della frequenza rispetto al baseline. Sui 12 composti è l'unica componente che ordina positivi sopra negativi (AUC 0,86 da sola). |
+| Morphology instability (baseline-relative) | 0% | 25% | Punteggio del software, non del paper (§4.6): misura quanto il battito differisce dal battito medio del baseline. Sui 12 composti non distingue positivi e negativi (AUC 0,47). |
+| EAD incidence | 0% | 5% | Criteri del software sul residuo (§4.6). Sui 12 composti abbassa l'ordinamento (AUC 0,83 invece di 0,86) e toglie la cisapride dalla zona alta. |
 
 **Aggregazione (dalla v3.8.2).** L'indice si calcola su ogni registrazione utilizzabile (abbinata, inclusa, analizzabile) e si aggrega come la decisione per farmaco:
 - media tra tessuti a ogni concentrazione, con almeno 2 tessuti;
 - livello mantenuto su 2 concentrazioni adiacenti;
 - con meno tessuti l'indice non viene calcolato e il farmaco compare vuoto in basso.
 
-Fino alla v3.8.1 ogni componente era il massimo su tutte le registrazioni: sul dataset Visone 2023 tutti i 12 composti, veicolo compreso, stavano sopra 40 (rischio alto). Ora:
-- rischio alto: chinidina, dofetilide e cisapride, tutti con rischio TdP in etichetta;
+Fino alla v3.8.1 ogni componente era il massimo su tutte le registrazioni: sul dataset Visone 2023 tutti i 12 composti, veicolo compreso, stavano sopra 40 (rischio alto). Con il cambio spettrale per concentrazione:
+- rischio alto: cisapride, dofetilide, chinidina, ranolazina e verapamil;
 - rischio basso: aspirina;
-- tutti gli altri nella zona intermedia, veicolo compreso (30).
+- tutti gli altri nella zona intermedia, veicolo compreso (32).
 
 Limiti noti:
-- La separazione è debole e instabile ricampionando i tessuti: le tre assegnazioni al rischio alto tengono in circa il 60 % dei ricampionamenti.
-- Sul dataset completo l'instabilità morfologica non distingue positivi e negativi, il cambio spettrale sì.
-- Pesi e soglie delle zone restano quelli della v3.3.
+- La separazione resta debole: il verapamil, negativo, è in zona alta.
+- Ricampionando i tessuti, le assegnazioni alla zona alta tengono nel 50–96 % dei casi: la cisapride nel 96 %, il verapamil nel 50 %.
+- Le soglie delle zone (20 e 40) restano quelle della v3.2.
 
 Il simbolo ⚡ segnala una cessazione con confidenza > 0,5, la stessa soglia della decisione per farmaco. Prima compariva su tutti i composti.
 
@@ -1224,6 +1226,10 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.8.3 (Ottobre 2026) — indice della risk map: solo il cambio spettrale
+
+L'asse Y della risk map (§4.11) è per default il cambio spettrale rispetto al baseline, aggregato per concentrazione; instabilità morfologica ed EAD restano calcolate e ripesabili. Corrette le attribuzioni al paper delle metriche sul residuo (§4.6).
 
 ### v3.8.2 (Ottobre 2026) — indice proaritmico della risk map per concentrazione
 

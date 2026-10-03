@@ -8,13 +8,14 @@ Generates a scatter plot placing each drug on two axes:
            two adjacent concentrations; until v3.8.0 it was the largest
            single recording, which put every negative compound of the
            Visone 2023 data above the threshold.
-  Y-axis : proarrhythmic index (0-100) — spectral morphology change,
-           baseline-relative morphology instability and EAD incidence of each
-           recording, aggregated like the drug call: tissue mean at each
-           concentration (>= 2 tissues), level held over 2 adjacent
-           concentrations. Until v3.8.1 each component was the maximum over
-           all recordings, which put all 12 compounds of the Visone 2023 data
-           in the high-risk zone, the vehicle included.
+  Y-axis : proarrhythmic index (0-100) — by default the spectral change of
+           the waveform against the baseline (v3.8.3; the residual scores can
+           be weighted in, see compute_proarrhythmic_index), aggregated like
+           the drug call: tissue mean at each concentration (>= 2 tissues),
+           level held over 2 adjacent concentrations. Until v3.8.1 each
+           component was the maximum over all recordings, which put all 12
+           compounds of the Visone 2023 data in the high-risk zone, the
+           vehicle included.
 
 The plot is divided into three risk zones (Low / Intermediate / High)
 following the CiPA framework philosophy (Blinova et al. 2017, Strauss
@@ -301,49 +302,33 @@ def _index_per_concentration(m, w_spec, w_morph, w_ead):
 
 
 def compute_proarrhythmic_index(m: DrugRiskMetrics,
-                                 w_spec: float = 0.70,
-                                 w_morph: float = 0.25,
-                                 w_ead: float = 0.05) -> float:
+                                 w_spec: float = 1.0,
+                                 w_morph: float = 0.0,
+                                 w_ead: float = 0.0) -> float:
     """
-    Composite proarrhythmic index (0-100).
+    Proarrhythmic index of the risk map (0-100), the Y axis.
+
+    Default since v3.8.3: the spectral change of the waveform against the
+    baseline (0-1, normalization 'spectral_change_score') x 100. The other
+    two components are still computed and reported (DrugRiskMetrics,
+    tables, CDISC export) and can be weighted in again: w_morph for the
+    baseline-relative morphology instability, w_ead for the EAD incidence
+    (capped at 30 %). Until v3.8.2 the weights were 0.70 / 0.25 / 0.05.
+
+    Why: both residual scores are defined in this software, not in Visone et
+    al. 2023 (the paper used the residual only to look for irregular peaks).
+    On the 12 compounds of that paper, aggregated per concentration, the
+    morphology instability does not separate positives from negatives (AUC
+    0.47) and the EAD incidence lowers the ranking; the spectral change
+    alone gives AUC 0.86 against 0.78 for 0.70 / 0.25 / 0.05. Still a weak
+    separation: the vehicle sits at 32 and verapamil, a negative, above 40.
 
     For metrics built by aggregate_drug_metrics (v3.8.2) the weighted index
     of each usable recording is aggregated like the drug call: tissue mean
     at each concentration (>= 2 tissues), level held over 2 adjacent
-    concentrations; NaN with insufficient data. Until v3.8.1 each component
-    was the maximum over all recordings of the drug — kept below for metrics
-    built by hand. On the 12 compounds of the Visone 2023 data the maxima put
-    every compound, the vehicle included, above 40 (high risk); per
-    concentration the vehicle sits at 30, aspirin at 15 and quinidine,
-    dofetilide and cisapride above 40.
-
-    Three-component index (v3.3), weighted by **specificity** for
-    hERG-related proarrhythmic risk:
-
-      - **Spectral change** (70%) : frequency-domain morphology score —
-        the single best discriminator between positive and negative drugs
-        on the 7-drug validation set.  hERG blockers alter the
-        repolarisation waveform shape (T-wave broadening, secondary
-        humps, U-waves), which manifests as spectral differences vs
-        baseline.  Validation: pos mean=0.654, neg mean=0.214 — 3× ratio.
-
-      - **Morphology instability** (25%) : residual-based morphological
-        instability (0-1) from the baseline-relative residual analysis.
-        With baseline templates (v3.3), this metric is now discriminatory:
-        pos mean=0.581, neg mean=0.296 — 2.0× ratio.  hERG blockers
-        cause progressive beat-to-beat morphology shifts (AP prolongation,
-        EAD-like bumps) that differ from the baseline template, while
-        non-proarrhythmic drugs produce smaller deviations.
-
-      - **EAD incidence** (5%) : % beats with residual-based EAD
-        detection.  Small weight; primarily contributes for pure hERG
-        blockers (dofetilide, quinidine) at high concentrations.
-
-    Components still excluded (anti-discriminatory even with baseline-
-    relative analysis):
-      - Cessation : ranolazine(−) 0.77 > dofetilide(+) 0.36.
-      - Waveform degradation : nifedipine(−) FPDc=0 ≈ dofetilide(+) 0.
-      - Repol. STV : nifedipine(−) 72ms ≈ dofetilide(+) 65ms.
+    concentrations; NaN with insufficient data. Metrics built by hand keep
+    the maximum of each component over all recordings (the rule until
+    v3.8.1, which put every compound of that data set above 40).
     """
     if getattr(m, 'index_from_concentrations', False):
         return _index_per_concentration(m, w_spec, w_morph, w_ead)
@@ -373,11 +358,11 @@ def compute_proarrhythmic_index(m: DrugRiskMetrics,
 class RiskZoneConfig:
     """Thresholds for risk zone boundaries.
 
-    The Y-axis boundaries are calibrated for the spectral-dominant
-    proarrhythmic index (v3.2).  Spectral change 0-1 maps to 0-100,
-    with positive drugs typically showing scores 49-73 and negative
-    drugs 0-51.  The 40/20 split creates three zones that achieve
-    6/7 accuracy on the CiPA validation set (7 drugs).
+    The Y boundaries (20 / 40) date from v3.2, set on 7 compounds with the
+    index taken as the maximum over recordings. They are unchanged: with the
+    per-concentration spectral index (v3.8.3) on the 12 compounds of Visone
+    et al. 2023, cisapride, dofetilide, quinidine, ranolazine and verapamil
+    are above 40, aspirin below 20, the vehicle at 32.
     """
     # X-axis: ΔFPDcF (%)
     fpdc_low_mid: float = 10.0      # < 10% → low prolongation risk
@@ -479,12 +464,12 @@ def generate_risk_map(
     ax.axhline(zone_cfg.proarrh_low_mid, color='#888', ls='--', lw=0.8, alpha=0.7)
     ax.axhline(zone_cfg.proarrh_mid_high, color='#888', ls='--', lw=0.8, alpha=0.7)
 
-    # Zone labels, at the top of each band (clear of most points)
-    ax.text(x_min + 2, zone_cfg.proarrh_low_mid - 1.5, 'LOW RISK', va='top',
+    # Zone labels, top right of each band (the legend sits top left)
+    ax.text(x_max - 1, zone_cfg.proarrh_low_mid - 1.5, 'LOW RISK', va='top', ha='right',
             fontsize=9, color='#155724', alpha=0.6, fontweight='bold')
-    ax.text(x_min + 2, zone_cfg.proarrh_mid_high - 1.5, 'INTERMEDIATE', va='top',
+    ax.text(x_max - 1, zone_cfg.proarrh_mid_high - 1.5, 'INTERMEDIATE', va='top', ha='right',
             fontsize=9, color='#856404', alpha=0.6, fontweight='bold')
-    ax.text(x_min + 2, y_max - 1.5, 'HIGH RISK', va='top',
+    ax.text(x_max - 1, y_max - 1.5, 'HIGH RISK', va='top', ha='right',
             fontsize=9, color='#721c24', alpha=0.6, fontweight='bold')
 
     # ── Scatter points ──
@@ -536,7 +521,7 @@ def generate_risk_map(
     # ── Axes ──
     consecutive = getattr(norm_cfg, 'classification_consecutive', 2) if norm_cfg is not None else 2
     ax.set_xlabel(x_axis_label(metrics, consecutive), fontsize=12, fontweight='bold')
-    ax.set_ylabel('Proarrhythmic Index (0–100)', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Waveform change vs baseline (spectral, 0–100)', fontsize=12, fontweight='bold')
     ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
 
     ax.set_xlim(x_lo, x_max)
@@ -573,7 +558,7 @@ def generate_risk_map(
     # ── Annotation: axis explanation ──
     ax.text(0.98, 0.02,
             'X = statistic of the drug call (solid line: its threshold)\n'
-            'Y = spectral (70%) + morph. instability (25%) + EAD (5%), per concentration',
+            'Y = spectral change of the waveform vs baseline, per concentration',
             transform=ax.transAxes, fontsize=7.5, color='#6c757d',
             ha='right', va='bottom')
 
