@@ -56,6 +56,7 @@ from cardiac_fp_analyzer.template_quality import (
     template_representativity,
 )
 from pyside_app import theme
+from pyside_app.chip_map import ChipMapWidget
 from pyside_app.signal_viewer import SignalViewer
 from pyside_app.study_panel import StudyPanel
 
@@ -88,7 +89,9 @@ def _channel_label(value: str) -> str:
     electrode IDs are rendered uppercase so they stand out against the
     rest of the toolbar.
     """
-    return "Auto" if value == CHANNEL_AUTO else value.upper()
+    if value == CHANNEL_AUTO:
+        return "Auto"
+    return value if value[:1] == 'E' and value[1:].isdigit() else value.upper()
 
 
 def _make_metric_tile(caption: str) -> dict:
@@ -229,11 +232,16 @@ class _SignalTab(QWidget):
     # ``_CHANNEL_VALUES`` — MainWindow re-runs ``analyze_single_file``
     # with ``channel=<payload>``.
     channel_changed = Signal(str)
+    # Fired when the user picks another chamber of a multi-chamber chip
+    # (payload: chamber name, 'A'); MainWindow re-runs the analysis on
+    # that chamber with the electrode choice set to Auto.
+    chamber_changed = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
+        self._channel_values: tuple[str, ...] = _CHANNEL_VALUES
 
         # Viewer (reads the current radio state on every click). Created
         # BEFORE the toolbar so the zoom-mode buttons can wire directly
@@ -259,6 +267,21 @@ class _SignalTab(QWidget):
         # (``set_channel`` below): without the guard, reflecting the
         # post-analysis "auto → el1" choice would fire a spurious
         # channel_changed and cause a second analyze_single_file call.
+        # ── Chamber selector (multi-chamber chips, v3.13) ─────────────
+        # Hidden for two-input CSV files; for a µHeart file it lists the
+        # chambers of the layout and the channel combo lists the
+        # electrodes of the chosen chamber.
+        self._lbl_chamber = QLabel(self.tr("Camera:"))
+        self._combo_chamber = QComboBox()
+        self._combo_chamber.setToolTip(self.tr(
+            "Camera del chip (un microtessuto per camera). L'analisi usa solo gli elettrodi della camera."
+        ))
+        self._combo_chamber.currentIndexChanged.connect(self._on_chamber_combo_changed)
+        bar.addWidget(self._lbl_chamber)
+        bar.addWidget(self._combo_chamber)
+        self._lbl_chamber.setVisible(False)
+        self._combo_chamber.setVisible(False)
+
         bar.addWidget(QLabel(self.tr("Canale:")))
         self._combo_channel = QComboBox()
         for v in _CHANNEL_VALUES:
@@ -352,6 +375,11 @@ class _SignalTab(QWidget):
 
         layout.addLayout(bar)
 
+        # Chip map (multi-chamber chips): one row per chamber, one cell per
+        # electrode coloured by the quick electrode score; hidden for CSV.
+        self.chip_map = ChipMapWidget()
+        layout.addWidget(self.chip_map)
+
         layout.addWidget(self.viewer, stretch=1)
 
         # Wire the raw-overlay checkbox to the viewer.  toggled(bool) is
@@ -441,6 +469,69 @@ class _SignalTab(QWidget):
         if isinstance(value, str):
             self.channel_changed.emit(value)
 
+    def _on_chamber_combo_changed(self, _index: int) -> None:
+        value = self._combo_chamber.currentData()
+        if isinstance(value, str):
+            self.chamber_changed.emit(value)
+
+    def chamber_choice(self) -> str | None:
+        """Chamber currently selected, or None for single-tissue files."""
+        if self._combo_chamber.isHidden():          # explicit hide, independent of the parent being shown
+            return None
+        v = self._combo_chamber.currentData()
+        return v if isinstance(v, str) else None
+
+    def set_chip(self, layout, chamber: str | None, scores: dict, summary: dict | None = None) -> None:
+        """Show the chamber selector and the chip map for a multi-chamber
+        file (``layout`` None hides them and restores the el1/el2 list).
+        The channel combo then lists Auto plus the electrodes of
+        ``chamber`` (stimulation electrodes marked)."""
+        if layout is None:
+            self._lbl_chamber.setVisible(False)
+            self._combo_chamber.setVisible(False)
+            self.chip_map.clear()
+            self.set_channel_values(_CHANNEL_VALUES)
+            return
+        block = self._combo_chamber.blockSignals(True)
+        try:
+            self._combo_chamber.clear()
+            for c in layout.chambers:
+                txt = self.tr("{0}").format(c.name)
+                if summary and summary.get(c.name):
+                    txt += f"  ({summary[c.name]})"
+                self._combo_chamber.addItem(txt, userData=c.name)
+            names = [c.name for c in layout.chambers]
+            if chamber in names:
+                self._combo_chamber.setCurrentIndex(names.index(chamber))
+        finally:
+            self._combo_chamber.blockSignals(block)
+        self._lbl_chamber.setVisible(True)
+        self._combo_chamber.setVisible(True)
+        self.chip_map.set_chip(layout, scores, summary)
+        ch = layout[chamber] if chamber in layout.names else layout.chambers[0]
+        labels = {}
+        for e in ch.electrodes:
+            sc = scores.get(e, {})
+            if e in ch.stimulation:
+                labels[e] = f"{e} (stim)"
+            elif sc.get('score') is not None and np.isfinite(sc['score']):
+                labels[e] = f"{e}  ·  {sc['score']:.0f}"
+            else:
+                labels[e] = f"{e}  ·  —"
+        self.set_channel_values((CHANNEL_AUTO,) + tuple(ch.electrodes), labels)
+
+    def set_channel_values(self, values: tuple[str, ...], labels: dict | None = None) -> None:
+        """Replace the entries of the channel combo (signal blocked)."""
+        block = self._combo_channel.blockSignals(True)
+        try:
+            self._combo_channel.clear()
+            for v in values:
+                self._combo_channel.addItem((labels or {}).get(v) or _channel_label(v), userData=v)
+            self._combo_channel.setCurrentIndex(0)
+        finally:
+            self._combo_channel.blockSignals(block)
+        self._channel_values = tuple(values)
+
     def channel_choice(self) -> str:
         """Return the current combo value ('auto', 'el1', 'el2'…).
 
@@ -459,11 +550,11 @@ class _SignalTab(QWidget):
         saved preference without triggering an analyze_single_file.
         Falls back to ``Auto`` if ``value`` is not in the allowed list.
         """
-        if value not in _CHANNEL_VALUES:
+        if value not in self._channel_values:
             value = CHANNEL_AUTO
         block = self._combo_channel.blockSignals(True)
         try:
-            idx = _CHANNEL_VALUES.index(value)
+            idx = self._channel_values.index(value)
             self._combo_channel.setCurrentIndex(idx)
         finally:
             self._combo_channel.blockSignals(block)
@@ -1779,6 +1870,12 @@ class MainWindow(QMainWindow):
         # Channel dropdown (task #82): re-runs analyze_single_file on the
         # currently-open CSV with the newly-selected channel.
         self._signal_tab.channel_changed.connect(self._on_channel_changed)
+        self._signal_tab.chamber_changed.connect(self._on_chamber_changed)
+        self._signal_tab.chip_map.electrode_clicked.connect(self._on_electrode_clicked)
+        # Multi-electrode file kept in memory: (path, metadata, df, layout,
+        # scores, summary). Chamber and electrode changes re-run the
+        # analysis without reading the file again (v3.13).
+        self._chip: dict | None = None
 
         # ─── Menu ──────────────────────────────────────────────────
         m_file = self.menuBar().addMenu(self.tr("&File"))
@@ -2165,6 +2262,55 @@ class MainWindow(QMainWindow):
             )
         self._run_analysis(str(self._current_csv_path), channel=choice)
 
+    def _on_chamber_changed(self, chamber: str) -> None:
+        """Another chamber of the chip: electrode back to Auto, re-run."""
+        if self._chip is None or self._current_csv_path is None:
+            return
+        self._signal_tab.set_chip(self._chip['layout'], chamber, self._chip['scores'], self._chip['summary'])
+        self._run_analysis(str(self._current_csv_path), channel=CHANNEL_AUTO)
+
+    def _on_electrode_clicked(self, electrode: str) -> None:
+        """A click on the chip map: analyse that electrode (and its chamber)."""
+        if self._chip is None or self._current_csv_path is None:
+            return
+        lay = self._chip['layout']
+        ch = lay.chamber_of(electrode)
+        if ch is None:
+            return
+        if ch.name != self._signal_tab.chamber_choice():
+            self._signal_tab.set_chip(lay, ch.name, self._chip['scores'], self._chip['summary'])
+        self._signal_tab.set_channel(electrode)
+        self._run_analysis(str(self._current_csv_path), channel=electrode)
+
+    def _load_chip(self, path: str) -> dict | None:
+        """Load a multi-electrode recording once and score every electrode.
+
+        Returns None for CSV files (two inputs) or files without a known
+        layout, in which case the ordinary path is used."""
+        from cardiac_fp_analyzer.chambers import layout_for
+        from cardiac_fp_analyzer.channel_selection import quick_electrode_scores
+        from cardiac_fp_analyzer.loader import electrode_columns, is_recording_file, load_recording
+        if Path(path).suffix.lower() == '.csv' or not is_recording_file(path):
+            return None
+        self.statusBar().showMessage(self.tr("Lettura di {0}...").format(Path(path).name))
+        QApplication.processEvents()
+        metadata, df = load_recording(path)
+        cols = electrode_columns(df)
+        layout = layout_for(cols, getattr(self._config, 'chamber_layout', 'auto'))
+        if layout is None:
+            return None
+        self.statusBar().showMessage(self.tr("Valutazione dei {0} elettrodi...").format(len(cols)))
+        QApplication.processEvents()
+        stim = [e for c in layout.chambers for e in c.stimulation]
+        scores = quick_electrode_scores(df, metadata['sample_rate'], cols, cfg=self._config, exclude=stim)
+        summary = {}
+        for c in layout.chambers:
+            per = [scores[e]['period_ms'] for e in c.recording
+                   if e in scores and np.isfinite(scores[e].get('score', np.nan))]
+            summary[c.name] = (self.tr("{0} ms").format(f"{np.median(per):.0f}") if per
+                               else self.tr("nessun battito"))
+        return {'path': path, 'metadata': metadata, 'df': df, 'layout': layout, 'scores': scores, 'summary': summary}
+
     def _on_theme_menu_triggered(self, action: QAction) -> None:
         """Persist the selected theme and notify subscribers.
 
@@ -2231,6 +2377,30 @@ class MainWindow(QMainWindow):
         # if something in the scientific core is broken — easier to diagnose.
         try:
             from cardiac_fp_analyzer.analyze import analyze_single_file
+            # Multi-electrode chip: the file is read once and kept in
+            # memory; the analysis is restricted to the chosen chamber.
+            if self._chip is None or self._chip['path'] != path:
+                self._chip = self._load_chip(path)
+                if self._chip is not None:
+                    lay = self._chip['layout']
+                    # start from the chamber holding the best electrode
+                    best = max((v['score'], e) for e, v in self._chip['scores'].items()
+                               if np.isfinite(v.get('score', np.nan))) if any(
+                        np.isfinite(v.get('score', np.nan)) for v in self._chip['scores'].values()) else None
+                    ch0 = lay.chamber_of(best[1]).name if best else lay.chambers[0].name
+                    self._signal_tab.set_chip(lay, ch0, self._chip['scores'], self._chip['summary'])
+                    if channel not in self._signal_tab._channel_values:
+                        channel = CHANNEL_AUTO
+                else:
+                    self._signal_tab.set_chip(None, None, {})
+            update, preloaded = None, None
+            if self._chip is not None:
+                lay = self._chip['layout']
+                ch = lay[self._signal_tab.chamber_choice() or lay.chambers[0].name]
+                update = {'chamber': ch.name, 'channel': ch.name, 'electrodes': list(ch.electrodes),
+                          'stimulation_electrodes': list(ch.stimulation), 'chamber_layout': lay.name,
+                          'two_tissue_file': True}
+                preloaded = (self._chip['metadata'], self._chip['df'])
             # We pass ``self._config`` — the window-scope AnalysisConfig
             # that the Impostazioni dialog (task #74) mutates in place.
             # Ricalcola reads this same instance (via ``_current_config``),
@@ -2238,6 +2408,7 @@ class MainWindow(QMainWindow):
             # "Apri" and "Ricalcola" paths without extra plumbing.
             result = analyze_single_file(
                 path, channel=channel, verbose=False, config=self._config,
+                file_info_update=update, preloaded=preloaded,
             )
         except Exception as e:   # noqa: BLE001 — we want to show *any* error
             QMessageBox.critical(
@@ -2298,7 +2469,11 @@ class MainWindow(QMainWindow):
         # was picked by ``select_best_channel``.
         analyzed = result.get("file_info", {}).get("analyzed_channel", "")
         self._signal_tab.set_analyzed_channel(analyzed)
-        self._update_window_title(Path(path).name, analyzed)
+        chamber = result.get("file_info", {}).get("chamber")
+        self._signal_tab.chip_map.set_selected(analyzed or None)
+        self._update_window_title(
+            Path(path).name, f"{self.tr('camera')} {chamber} · {analyzed}" if chamber and analyzed else analyzed,
+        )
 
         # Make sure the Segnale tab is visible after a successful load
         # (the user expects to see the plot right away, even if they had
@@ -2459,7 +2634,7 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(base)
             return
         if channel:
-            self.setWindowTitle(f"{filename} — {channel.upper()} · {base}")
+            self.setWindowTitle(f"{filename} — {channel if channel.startswith(('camera', 'E')) else channel.upper()} · {base}")
         else:
             self.setWindowTitle(f"{filename} · {base}")
 

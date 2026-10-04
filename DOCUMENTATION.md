@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.12.1
+**Versione**: 3.13.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1121,9 +1121,11 @@ Dalla primavera 2026 l'interfaccia primaria è un'applicazione **desktop PySide6
 ### 8.1 GUI desktop (PySide6) — primaria
 
 ```bash
-pip install ".[gui,reports]"
+pip install ".[gui,reports,mcs]"
 cardiac-fp-gui                 # oppure: python -m pyside_app.main
 ```
+
+**File a più camere (dalla v3.13).** `File ▶ Apri registrazione…` accetta CSV, MCS HDF5 e `.npz` compatti. Per un chip con layout noto (µHeart MVP) la scheda Segnale mostra la mappa del chip sotto la barra degli strumenti (`pyside_app/chip_map.py`): una riga per camera, un riquadro per elettrodo in ordine fisico, colore dal punteggio rapido dell'elettrodo, cornice bianca sull'elettrodo analizzato, periodo di battito della camera a sinistra; il passaggio del mouse mostra spike, periodo, CV, SNR e ripolarizzazione dell'elettrodo. Il menu **Camera** sceglie il tessuto, il menu **Canale** l'elettrodo (Auto = il migliore della camera, stimolazione esclusa), e un clic sulla mappa fa entrambe le cose. Il file resta in memoria dopo la prima lettura.
 
 ```
 pyside_app/
@@ -1310,6 +1312,10 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.13.0 (Ottobre 2026) — il chip nella GUI
+
+Aprendo un file a più camere (MCS `.h5` o `.npz` compatto) la scheda Segnale mostra la **mappa del chip**: una riga per camera con i 16 elettrodi in ordine fisico (le coppie di stimolazione tratteggiate alle estremità, i 12 di registrazione colorati dal punteggio rapido: scuro = nessun battito, giallo = spike netti, ritmo regolare, ripolarizzazione visibile), il periodo di battito di ogni camera accanto al nome e l'elettrodo analizzato con la cornice bianca. Un clic su un elettrodo lo analizza; il menu **Camera** cambia tessuto (elettrodo di nuovo su Auto) e il menu **Canale** elenca gli elettrodi della camera con il punteggio. Il file viene letto una volta sola (`analyze_single_file(..., preloaded=…)`): cambiare camera o elettrodo richiede solo l'analisi (qualche secondo), non la rilettura (30 s). Il titolo della finestra e la barra di stato riportano camera ed elettrodo (§8.1).
 
 ### v3.12.1 (Ottobre 2026) — copie compatte `.npz` degli export MCS
 

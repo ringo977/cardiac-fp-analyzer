@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.12.1
+**Versione**: 3.13.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali) o con sistemi **Multi Channel Systems** (file HDF5 del protocollo MCS RawData, fino a 64 elettrodi).
@@ -169,6 +169,11 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.13.0 (Ottobre 2026) — il chip nella GUI
+- **Mappa del chip** nella scheda Segnale per i file a più camere: una riga per camera, un riquadro per elettrodo in ordine fisico (stimolazione tratteggiata), colore dal punteggio rapido, cornice sull'elettrodo analizzato, periodo di battito per camera; clic su un elettrodo per analizzarlo.
+- Menu **Camera** e **Canale** con gli elettrodi della camera (al posto di EL1/EL2) per i file MCS; il file è letto una volta e tenuto in memoria, cambiare camera o elettrodo costa solo l'analisi.
+- `analyze_single_file(..., preloaded=(metadata, df))` per analizzare senza rileggere il file.
 
 ### v3.12.1 (Ottobre 2026) — copie compatte `.npz` degli export MCS
 - I file `.npz` del formato `mcs_compact` (copia senza perdita dell'export CSV di DataManager) si aprono come i file HDF5, in GUI (`File ▶ Apri registrazione…`), batch e riga di comando, con una registrazione per camera.

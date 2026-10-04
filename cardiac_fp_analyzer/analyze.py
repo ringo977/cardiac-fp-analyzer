@@ -557,7 +557,7 @@ def find_recordings(data_dir, exclude=None):
     return out
 
 
-def analyze_single_file(filepath, channel='auto', verbose=True, config=None, file_info_update=None):
+def analyze_single_file(filepath, channel='auto', verbose=True, config=None, file_info_update=None, preloaded=None):
     """Analyze a single recording (CSV or MCS HDF5) through the full pipeline.
 
     Parameters
@@ -572,6 +572,9 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
         the path (tissue, item, dose, role …) when the recording is one input
         of a two-tissue file or is described in samples.csv
         (sample_sheet.plan_batch)
+    preloaded : (metadata, df) from load_recording, or None — lets a GUI that
+        keeps a 64-electrode file in memory analyse another chamber or
+        electrode without reading the file again
     """
     if config is None:
         from .config import AnalysisConfig
@@ -581,7 +584,11 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
     if verbose:
         print(f"\n{'='*60}\n  Analyzing: {filepath.name}\n{'='*60}")
     try:
-        metadata, df = load_recording(filepath)
+        if preloaded is not None:
+            metadata, df = preloaded
+            df = df.copy(deep=False)
+        else:
+            metadata, df = load_recording(filepath)
         fs = metadata['sample_rate']
         cols = electrode_columns(df)
         # Normalize time to start at 0 (hardware may use pre-trigger negative times)
