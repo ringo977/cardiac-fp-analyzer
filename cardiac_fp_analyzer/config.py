@@ -37,14 +37,6 @@ class FilterConfig:
     bandpass_high_hz: float = 500.0
     bandpass_order: int = 4
 
-    # Baseline drift removal (highpass)
-    highpass_cutoff_hz: float = 0.5
-    highpass_order: int = 4
-
-    # Anti-alias / smoothing (lowpass)
-    lowpass_cutoff_hz: float = 200.0
-    lowpass_order: int = 4
-
     # Final smoothing (Savitzky-Golay)
     savgol_window: int = 7
     savgol_polyorder: int = 3
@@ -320,7 +312,6 @@ class BeatDetectionConfig:
     topology_gap_ratio: float = 2.5           # absolute-floor ratio to always split
     topology_secondary_gap_ratio: float = 1.3 # min ratio for statistical gap
     topology_gap_zscore: float = 3.0          # z-score on log-ratio for significance
-    topology_noise_gap_ratio: float = 5.0     # stronger gap → noise cluster candidate
     topology_regular_cv_max: float = 0.15     # CV(RR) below → regular
     topology_chaotic_cv_min: float = 0.25     # CV(RR) above → chaotic
     topology_alternans_phase_band: float = 0.1  # |phase_low - 0.5| must be ≤ this
@@ -524,10 +515,11 @@ class RepolarizationConfig:
 
     # --- Minimum signal amplitude for FPD analysis ---
     # If the median spike amplitude across all beats is below this threshold,
-    # the signal is considered too weak for reliable repolarization detection
-    # and FPD is set to NaN for all beats (repol_confidence = 0).
-    # This prevents the pipeline from producing meaningless FPD values on
-    # signals that are essentially noise (e.g. chipC_ch3_MEXIL_1uM).
+    # the signal is considered too weak for a template-guided search: the
+    # template FPD is skipped (template confidence 0) and the per-beat
+    # search runs unguided, where the per-beat gate rejects what is noise.
+    # This keeps meaningless template FPDs off signals that are essentially
+    # noise (e.g. chipC_ch3_MEXIL_1uM).
     # Unit: µV (microvolts).  0 = disabled.
     min_signal_amplitude_uV: float = 10.0
 
@@ -658,7 +650,8 @@ class QualityConfig:
 
     # Morphology correlation
     morphology_threshold: float = 0.40    # min corr for acceptance
-    morphology_marginal: float = 0.20     # below this → forced rejection
+    morphology_marginal: float = 0.20     # floor of the adaptive threshold; below it only the
+                                          # strict-rhythm readmission can keep a beat
     use_morphology: bool = True
 
     # ── Analysability verdict (Oct 2026, calibrated on GG DEV set) ──
@@ -1035,7 +1028,6 @@ class ArrhythmiaConfig:
 
     # EAD detection (statistical — FPD outlier)
     ead_mad_factor: float = 3.0             # 3× median absolute deviation
-    ead_critical_count: int = 3             # ≥ 3 EADs → critical severity
 
     # EAD detection (residual; Visone et al. 2023 looked for irregular peaks
     # in the residual, the five criteria below are this software's)
@@ -1053,12 +1045,9 @@ class ArrhythmiaConfig:
     # Amplitude instability
     amplitude_instability_cv: float = 30.0  # %
 
-    # Premature beat classification threshold
-    premature_count_threshold: int = 5
-
-    # TdP scoring — restrict to severe events only
-    # (EADs with critical severity + positive FPDcF trend, or cessation)
-    tdp_require_severe_only: bool = True
+    # (v3.14.1: the fields ead_critical_count, premature_count_threshold and
+    # tdp_require_severe_only were removed — nothing read them; severity
+    # is decided on incidence, 10 % of beats, see analyze_arrhythmia.)
 
     # ── Risk score mode ──
     # 'manual'      : expert-assigned weights (default — physiological rationale)
@@ -1088,8 +1077,6 @@ class ChannelSelectionConfig:
     # were dead code AND a semantic trap because BeatDetectionConfig has
     # fields with identical names but in FRACTION units. Removed.
     rate_range_per_s: tuple[float, float] = (0.3, 3.5)
-    snr_good: float = 5.0        # +20
-    snr_fair: float = 3.0        # +10
 
     # Scoring weights (points awarded per criterion)
     w_bp_range: float = 15.0         # beat period in ideal range
@@ -1143,8 +1130,11 @@ class AnalysisConfig:
     # ``spike_amplitude_mV`` came out 10 000× too large and the absolute
     # ``min_signal_amplitude_uV`` gate could never fire. Set to 1.0 only for
     # data already in physical volts (e.g. synthetic tests).
-    # Applied once, in analyze_single_file, before filtering; channel
-    # selection runs on raw units (its amplitude reference is in raw mV).
+    # Applied once, in analyze_single_file, before filtering, and in the
+    # el1/el2 channel selection (whose amplitude term, referenced to raw
+    # mV, is therefore ≈0 with the default gain: the choice rests on the
+    # template correlation, rhythm regularity and rate terms). Not applied
+    # to MCS files, which are already in volts.
     amplifier_gain: float = 1e4
 
     # Advanced analysis modules (enabled by default)
@@ -1267,10 +1257,11 @@ class AnalysisConfig:
         Named presets for common use cases.
 
         Available presets:
-          - 'default'       : standard parameters (tangent method, paper criteria)
+          - 'default'       : standard parameters (peak method, Fridericia, paper criteria)
           - 'conservative'  : stricter inclusion, higher confidence thresholds
           - 'sensitive'     : looser thresholds, catches more but more FP risk
-          - 'peak_method'   : use peak instead of tangent (backwards compatibility)
+          - 'peak_method'   : fpd_method='peak' — identical to 'default' since
+                              peak became the default (kept for old configs)
           - 'no_filters'    : disable all inclusion criteria
         """
         cfg = cls()

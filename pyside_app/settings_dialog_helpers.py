@@ -133,30 +133,6 @@ SPEC: tuple[FieldSpec, ...] = (
         tooltip="Ordine del filtro Butterworth (1–8).",
         minimum=1, maximum=8, step=1,
     ),
-    FieldSpec(
-        attr="highpass_cutoff_hz", section="filtering", kind="float",
-        page=PAGE_SIGNAL, label="Passa-alto (drift) — cutoff",
-        tooltip="Rimozione drift di baseline: cutoff del passa-alto.",
-        minimum=0.0, maximum=100.0, step=0.1, decimals=2, suffix=" Hz",
-    ),
-    FieldSpec(
-        attr="highpass_order", section="filtering", kind="int",
-        page=PAGE_SIGNAL, label="Passa-alto — ordine",
-        tooltip="Ordine del passa-alto drift (1–8).",
-        minimum=1, maximum=8, step=1,
-    ),
-    FieldSpec(
-        attr="lowpass_cutoff_hz", section="filtering", kind="float",
-        page=PAGE_SIGNAL, label="Passa-basso (anti-alias) — cutoff",
-        tooltip="Smoothing anti-alias: cutoff del passa-basso.",
-        minimum=1.0, maximum=5000.0, step=10.0, decimals=1, suffix=" Hz",
-    ),
-    FieldSpec(
-        attr="lowpass_order", section="filtering", kind="int",
-        page=PAGE_SIGNAL, label="Passa-basso — ordine",
-        tooltip="Ordine del passa-basso (1–8).",
-        minimum=1, maximum=8, step=1,
-    ),
 
     # ── Detection ───────────────────────────────────────────────────
     FieldSpec(

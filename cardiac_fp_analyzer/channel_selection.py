@@ -53,7 +53,8 @@ def select_best_channel(df, fs, cfg=None, channels=None):
             if gain != 1.0:
                 raw_ch = raw_ch / gain
             filt = full_filter_pipeline(raw_ch, fs, cfg=fc)
-            bi, bt, info = detect_beats(filt, fs, method='auto', min_distance_ms=400)
+            bi, bt, info = detect_beats(filt, fs, cfg=cfg.beat_detection if cfg is not None else None,
+                                        method='auto', min_distance_ms=400)
             bp = compute_beat_periods(bi, fs)
             score = 0
             if len(bp) > 2:

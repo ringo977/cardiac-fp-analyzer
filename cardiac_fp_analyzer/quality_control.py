@@ -232,30 +232,30 @@ def morphology_correlation(beat_data, template, max_samples=0, jitter_max=0):
     if max_samples > 0:
         n = min(n, max_samples)
 
-    # Pre-compute centred template
-    t = template[:n]
-    if np.any(np.isnan(t)):
-        return 0.0
-    t_c = t - np.mean(t)
-    t_c_ss = np.sum(t_c**2)
-    if t_c_ss == 0:
+    if np.any(np.isnan(template[:n])):
         return 0.0
 
     best_corr = -1.0
     jitter_range = range(-jitter_max, jitter_max + 1) if jitter_max > 0 else [0]
 
     for lag in jitter_range:
-        start = max(0, lag)
-        end = start + n
-        if end > len(beat_data):
-            continue
-        b = beat_data[start:end]
-        if len(b) < n:
-            continue
+        # Shift the beat by ``lag`` samples against the template in both
+        # directions (before v3.14.1 negative lags collapsed onto 0, so
+        # only forward shifts were tried). Both arrays are longer than the
+        # compared region, so the window keeps its length when it fits.
+        bs, ts = max(0, lag), max(0, -lag)
+        m = n
+        if bs + m > len(beat_data) or ts + m > len(template):
+            m = min(len(beat_data) - bs, len(template) - ts)
+            if m < max(8, n // 2):
+                continue
+        b = beat_data[bs:bs + m]
+        t = template[ts:ts + m]
         if np.any(np.isnan(b)):
             continue
         b_c = b - np.mean(b)
-        denom = np.sqrt(np.sum(b_c**2) * t_c_ss)
+        t_c = t - np.mean(t)
+        denom = np.sqrt(np.sum(b_c**2) * np.sum(t_c**2))
         if denom == 0:
             continue
         corr = np.sum(b_c * t_c) / denom

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.14.0
+**Versione**: 3.14.1
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali) o con sistemi **Multi Channel Systems** (file HDF5 del protocollo MCS RawData, fino a 64 elettrodi).
@@ -174,6 +174,10 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.14.1 (Ottobre 2026) — correzioni dalla verifica della scheda dei parametri
+
+Scrivendo la scheda dei parametri (`DOCUMENTATION.md` §11) il codice è stato verificato riga per riga. Corretti: filtro di ritmo con gruppi abbinati per indice di campione (poteva tenere battiti sbagliati dopo validazione e recupero), correlazione del QC in entrambe le direzioni, secondo tentativo di rilevamento e scelta el1/el2 con la configurazione dell'utente, pass 2 delle aritmie nel batch che conserva "Not analysable" e le bandiere di camera, abbinamento dose–riferimento che rispetta l'inclusione anche con gli orari, `consensus` per battito, commenti allineati al codice, campi di configurazione mai letti rimossi. Valori di camera invariati sulla piastra PHOENIX PM01001. Manuale utente riscritto (`docs/`).
 
 ### v3.14.0 (Ottobre 2026) — misure di camera: consenso per l'FPD e stato del ritmo
 - **`chamber.py`** (`chamber_consensus`, attivo di default): su una camera di un chip a più elettrodi il periodo viene dai battiti visti da almeno 3 elettrodi; il ritmo è `regular`, `irregular` (CV robusto > 15 %), `conduction_lost` (sincronia tra elettrodi < 0,5) o `silent`; l'FPD è il consenso degli elettrodi al baseline e la **stessa onda del baseline** seguita su ogni elettrodo alle dosi (correlazione ≥ 0,8, gruppo più numeroso entro il 15 %), FPDc di Fridericia con il periodo della camera.

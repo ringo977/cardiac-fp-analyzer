@@ -1,6 +1,6 @@
 ---
 title: "Cardiac FP Analyzer — Manuale utente"
-subtitle: "Versione 3.14.0 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
+subtitle: "Versione 3.14.1 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
 author: "Marco Rasponi · github.com/ringo977/cardiac-fp-analyzer"
 date: "4 ottobre 2026"
 lang: it
@@ -323,7 +323,7 @@ Insiemi di battiti: **tutte le rilevazioni** (verdetto, aritmie, cessazione); **
 
 ## 8.2 Battiti
 
-Tre rivelatori sul segnale filtrato (prominenza, derivata, picco), distanza minima 400 ms (`min_distance_ms`), soglia 4 × rumore robusto (`threshold_factor`). Ciascuno riceve un punteggio (periodo medio in 0,4–3 s: 30; CV < 15/30/50 %: 30/20/10; numero di battiti plausibile: 20; bonus 15 al rivelatore a derivata) e vince il più alto. Seguono, in ordine: correzione del periodo bimodale, soglia di rumore, scarto della popolazione minore, gruppi di ampiezza, classificazione della topologia (regolare, caotico, alternanza, ectopici, rumore, trimodale), validazione morfologica (correlazione ≥ 0,7 con il template, ampiezza ≥ 25 %), recupero dei battiti mancanti nei buchi, seconda soglia di rumore, filtro adattato a basso SNR. Se restano meno di 5 battiti su più di 10 s, secondo tentativo con distanza 300 ms e soglia 3.
+Tre rivelatori sul segnale filtrato (prominenza, derivata, picco), distanza minima 400 ms (`min_distance_ms`), soglia 4 × rumore robusto (`threshold_factor`). Ciascuno riceve un punteggio (periodo medio in 0,4–3 s: 30; CV < 15/30/50 %: 30/20/10; numero di battiti plausibile: 20; bonus 15 al rivelatore a derivata) e vince il più alto. Seguono, in ordine: correzione del periodo bimodale, soglia di rumore, scarto della popolazione minore, gruppi di ampiezza, classificazione della topologia (regolare, caotico, alternanza, ectopici, rumore, trimodale), validazione morfologica (correlazione ≥ 0,7 con il template, ampiezza ≥ 25 %), recupero dei battiti mancanti nei buchi, seconda soglia di rumore, filtro adattato a basso SNR. Se restano meno di 5 battiti su più di 10 s, secondo tentativo con distanza 300 ms e soglia 3 (stessa configurazione per il resto).
 
 ## 8.3 Periodo, frequenza, CV
 
@@ -359,7 +359,7 @@ Su tutte le rilevazioni: tachicardia (BP < 300 ms), bradicardia (> 2500 ms), irr
 
 **Inclusione** (solo baseline, primo criterio che fallisce): CV del periodo ≥ 25 % o NaN; FPDc fuori 100–1200 ms; confidenza < 0,66; FPD/RR > 0,80. Un tessuto è escluso solo se **tutti** i suoi baseline falliscono.
 
-**Riferimento** di una dose: l'ultimo baseline/t0 analizzabile del tessuto prima della prima dose (con gli orari di acquisizione); senza orari, stessa cartella, poi t0, poi voto QC.
+**Riferimento** di una dose: l'ultimo baseline/t0 analizzabile, e che ha passato l'inclusione, del tessuto prima della prima dose (con gli orari di acquisizione); senza orari, stessa cartella, poi t0, poi voto QC. Se nessun baseline del tessuto ha passato l'inclusione la dose resta senza riferimento, con il motivo.
 
 **Variazioni**: ΔBP da `beat_period_ms_mean`, ΔFPDc da `fpdc_ms_mean`, Δampiezza da `spike_amplitude_mV_mean`. TdP score per registrazione: 3 (cessazione, ΔFPDc ≥ 20 %, o EAD critico con ≥ 10 %), 2 (≥ 15 %), 1 (≥ 10 %), −1 (≤ −10 %), 0.
 
@@ -383,7 +383,7 @@ Esempio di JSON minimale:
 }
 ```
 
-I campi `filtering.highpass_*`, `filtering.lowpass_*`, `beat_detection.topology_noise_gap_ratio`, `arrhythmia.ead_critical_count`, `arrhythmia.premature_count_threshold`, `arrhythmia.tdp_require_severe_only` e `channel_selection.snr_good/snr_fair` esistono ma non sono letti dalla pipeline; i parametri di cessazione e spettro non sono modificabili da `AnalysisConfig`.
+I parametri di cessazione e spettro non sono modificabili da `AnalysisConfig`. Alcuni campi che esistevano ma non venivano letti (`filtering.highpass_*`, `filtering.lowpass_*`, `topology_noise_gap_ratio`, `ead_critical_count`, `premature_count_threshold`, `tdp_require_severe_only`, `snr_good/snr_fair` della scelta del canale) sono stati rimossi nella v3.14.1; i file JSON che li contengono si leggono comunque.
 
 # 10. Export CDISC SEND
 
@@ -400,7 +400,7 @@ Domini TS, DM, EX, EG, TX, DS, SUPPEG + `define.xml` (SENDIG 3.1.1); formato `.x
 - **GUI**: la mappa dei campioni, il flusso per camera del batch e la decisione per composto sono solo da riga di comando/Python; il pannello Studi lavora per file. I punteggi degli elettrodi sono compositi (SNR + ripolarizzazione − CV); nella mappa del chip il colore è relativo al file.
 - **Vincoli di versione**: `numpy < 2` e `pyqtgraph < 0.14` finché non saranno provati; da qui l'ambiente virtuale.
 - **Validazione**: CiPA (Visone 2023) 6/7 composti; gold standard manuale GG; PHOENIX D10.1 cinque piastre (§7.3). Il consenso di camera è validato contro l'analisi di riferimento del report PHOENIX, non ancora contro misure manuali indipendenti del laboratorio.
-- **Discordanze note tra commenti e codice** (nessuna cambia i numeri di default) e un difetto da correggere nel filtro di ritmo con indici di gruppo non aggiornati: elencati in `DOCUMENTATION.md` §11.12.
+- **Verifica della v3.14.0**: le discordanze tra commenti e codice e il difetto del filtro di ritmo (indici di gruppo non aggiornati) trovati scrivendo la scheda dei parametri sono stati corretti nella v3.14.1 (`DOCUMENTATION.md` §11.12); i valori di camera sulla piastra PHOENIX PM01001 sono invariati.
 
 # 12. Risoluzione dei problemi
 

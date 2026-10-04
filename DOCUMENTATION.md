@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.14.0
+**Versione**: 3.14.1
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1329,7 +1329,7 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 
 ## 11. Scheda dei parametri
 
-Questa scheda dice, per ogni grandezza che il programma riporta, **su quali campioni è calcolata, con quale regola, con quali parametri di `AnalysisConfig` (e i loro valori di default) e quale alternativa è attiva quando il codice ne prevede più di una**. È stata verificata riga per riga sul codice della v3.14.0; dove un commento o una docstring dice altro, vale quanto scritto qui (§11.12 elenca le discordanze trovate). I nomi tra parentesi sono i campi di `AnalysisConfig` (`config.py`), nella forma `sezione.campo = default`.
+Questa scheda dice, per ogni grandezza che il programma riporta, **su quali campioni è calcolata, con quale regola, con quali parametri di `AnalysisConfig` (e i loro valori di default) e quale alternativa è attiva quando il codice ne prevede più di una**. È stata verificata riga per riga sul codice della v3.14.0 e aggiornata alla v3.14.1, che ha corretto le discordanze trovate (§11.12). I nomi tra parentesi sono i campi di `AnalysisConfig` (`config.py`), nella forma `sezione.campo = default`.
 
 ### 11.1 Ordine delle operazioni su una registrazione
 
@@ -1395,7 +1395,7 @@ Vince il punteggio più alto; `det['method']` nel risultato dice quale.
 8. *Soglia di rumore, passata 2*: come la 1.
 9. *Filtro adattato* (`mf_*`): solo con ≥ `mf_min_seeds = 10` battiti e SNR mediano < `mf_low_snr_regime = 3.0`; template ± `mf_half_ms = 25` dal `mf_seed_top_frac = 50 %` dei battiti più ripidi; picchi dell'uscita sopra mediana + `mf_threshold_k = 3.5` × 1,4826·MAD, refrattarietà max(250 ms, 0,5 RR). **Sostituisce** i battiti solo se il conteggio resta entro `mf_count_ratio = (0.3, 2.0)` volte.
 
-**Secondo tentativo** (`analyze.py`): se dopo tutto questo i battiti sono < 5 e la registrazione dura > 10 s, il rilevamento è rifatto con `retry_min_distance_ms = 300` e `retry_threshold_factor = 3.0`; il risultato sostituisce il primo in ogni caso. Nel secondo tentativo gli altri campi di `beat_detection` tornano ai default (non viene passata la configurazione).
+**Secondo tentativo** (`analyze.py`): se dopo tutto questo i battiti sono < 5 e la registrazione dura > 10 s, il rilevamento è rifatto con `retry_min_distance_ms = 300` e `retry_threshold_factor = 3.0` e per il resto la stessa configurazione (dalla v3.14.1; prima gli altri campi tornavano ai default); il risultato sostituisce il primo in ogni caso e `det['retry']` lo segnala.
 
 **Cosa riporta il risultato:** `det['method']`, `det['n_beats']`, `det['polarity']`, `det['rhythm_topology']`, `det['rhythm_train']`, e nel sommario `n_beats`, `beat_period_ms_*`.
 
@@ -1419,7 +1419,7 @@ Dentro `_analyze_from_beats`, nell'ordine.
 
 - *SNR globale*: picco-picco medio in ± 30 ms attorno agli spike / deviazione standard dei campioni fuori da quelle finestre (IQR/1,349 se sono pochi).
 - *Ampiezza*: picco-picco in ± `morphology_window_ms = 20`; scartato se < `amplitude_reject_fraction = 0.25` × mediana della metà alta.
-- *Morfologia*: template = mediana campione per campione dei `morphology_max_beats = 30` battiti più ampi; correlazione di Pearson sui primi `morphology_corr_region_ms = 150` ms del segmento (−50/+100 ms), cercando spostamenti fino a metà semilarghezza del template (valori fissi, indipendenti dal jitter del rilevatore). Soglia `morphology_threshold = 0.40`; **soglia adattiva**: se meno del 60 % dei battiti la raggiunge, la soglia scende al 5°/15°/30° percentile delle correlazioni (CV degli intervalli < 0,20 / < 0,35 / oltre), mai sotto `morphology_marginal = 0.20`.
+- *Morfologia*: template = mediana campione per campione dei `morphology_max_beats = 30` battiti più ampi; correlazione di Pearson sui primi `morphology_corr_region_ms = 150` ms del segmento (−50/+100 ms), cercando spostamenti in entrambe le direzioni fino a metà semilarghezza del template (valori fissi, indipendenti dal jitter del rilevatore; fino alla v3.14.0 si provavano solo gli spostamenti in avanti). Soglia `morphology_threshold = 0.40`; **soglia adattiva**: se meno del 60 % dei battiti la raggiunge, la soglia scende al 5°/15°/30° percentile delle correlazioni (CV degli intervalli < 0,20 / < 0,35 / oltre), mai sotto `morphology_marginal = 0.20`.
 - *Riammissione*: con ≥ 4 accettati, un battito scartato per morfologia ma con ampiezza buona, sul ritmo (residuo < 0,3 RR) e con r ≥ 0,20 è riammesso; con residuo < `strict_rhythm_residual_ratio = 0.10` RR e ampiezza ≥ `strict_rhythm_amp_ratio = 0.50` è riammesso qualunque sia r.
 
 **Voto A–F** (`quality_control.grade`, prima condizione che vale):
@@ -1461,7 +1461,7 @@ Effetto: `not_analysable = True`, `not_analysable_reason`, voto F, tutti i campi
 5. *Candidati*: picchi positivi e negativi con prominenza ≥ `peak_prominence_factor = 0.15` × std della finestra e distanza ≥ `peak_min_distance_ms = 50`.
 6. *Scelta tra i candidati* — `repol_candidate_rule = 'prefer_positive'` (attiva): tra i candidati, il picco **positivo** più prominente la cui prominenza è ≥ `repol_positive_min_rel_prom = 0.5` della prominenza massima e che sta entro `repol_positive_max_offset_ms = 400` dal candidato più prominente; se non esiste, il candidato più prominente qualunque sia il segno. Alternativa `'max_prominence'`: sempre il più prominente. Motivazione: l'onda T del field potential è di norma positiva; il negativo più grande è spesso il ritorno della depolarizzazione.
 7. *Soglia di qualità*: prominenza / std del segnale (escludendo ± 30 ms attorno al picco) < `repol_gate_min_snr = 2.0` → nessun FPD sul template.
-8. *Punto misurato* — `repolarization.fpd_method = 'peak'` (attivo): la latenza del picco dell'onda sul segnale filtrato a 20 Hz e detrendato. Alternative: `'tangent'` (dal picco cerca la massima pendenza di discesa entro `tangent_max_slope_window_ms = 300`, e prende l'intersezione della tangente con lo zero se cade entro `tangent_max_extension_ms = 400`, altrimenti il punto di massima pendenza, altrimenti il picco); `'max_slope'`, `'50pct'`, `'baseline_return'`; `'consensus'` (esegue tutti e cinque, gruppo più grande entro ± 50 ms, priorità tangent > max_slope > 50pct > baseline_return > peak — solo sul template). Il picco è il default perché è il punto più ripetibile tra battiti e tra elettrodi, e la validazione D10.1 è stata fatta così; la tangente dipende dalla pendenza di discesa, molto variabile sui tessuti µHeart.
+8. *Punto misurato* — `repolarization.fpd_method = 'peak'` (attivo): la latenza del picco dell'onda sul segnale filtrato a 20 Hz e detrendato. Alternative: `'tangent'` (dal picco cerca la massima pendenza di discesa entro `tangent_max_slope_window_ms = 300`, e prende l'intersezione della tangente con lo zero se cade entro `tangent_max_extension_ms = 400`, altrimenti il punto di massima pendenza, altrimenti il picco); `'max_slope'`, `'50pct'`, `'baseline_return'`; `'consensus'` (esegue tutti e cinque, gruppo più grande entro ± 50 ms, priorità tangent > max_slope > 50pct > baseline_return > peak; dalla v3.14.1 lo stesso voto si applica anche per battito). Il picco è il default perché è il punto più ripetibile tra battiti e tra elettrodi, e la validazione D10.1 è stata fatta così; la tangente dipende dalla pendenza di discesa, molto variabile sui tessuti µHeart.
 9. *Confidenza del template*: `0,6 × min(1, (prominenza/std)/3) + 0,4 × max(0, 1 − dispersione/300 ms)`, dove la dispersione copre picco, fine dell'onda e attraversamento dello zero.
 
 **FPD per battito** (`repolarization.find_repolarization_per_beat`), per ogni battito di `bi_fpd`:
@@ -1520,7 +1520,7 @@ Punteggio di rischio (`risk_score_mode = 'manual'`, su 100): CV del BP fino a 18
 
 Spenti di default: plausibilità, regola combinata, intervallo fisiologico, precisione (rSEM), outlier di popolazione. Un **tessuto è escluso** solo se **tutti** i suoi baseline falliscono; allora le sue dosi hanno `inclusion.passed = False`. In modalità `auto` il gruppo è il tessuto (qualunque elettrodo sia stato analizzato); con `el1`/`el2` espliciti è tessuto + elettrodo.
 
-**Abbinamento dose–baseline** (`normalization.pair_with_baselines`): candidati = baseline analizzabili dello stesso gruppo (in mancanza, dello stesso tessuto su qualunque elettrodo; i CTRL solo se non c'è baseline). Se tutte le registrazioni hanno un orario di acquisizione, il riferimento è **l'ultimo baseline prima della prima dose** (`last_reference_before`; a parità, voto QC migliore poi nome file). Senza orari: stessa cartella, poi `reference_kind` t0, poi voto QC, poi nome.
+**Abbinamento dose–baseline** (`normalization.pair_with_baselines`): candidati = baseline analizzabili **e che hanno passato l'inclusione** dello stesso gruppo (in mancanza, dello stesso tessuto su qualunque elettrodo; i CTRL solo se non c'è baseline); se nessun baseline del tessuto ha passato l'inclusione le dosi restano senza riferimento, con il motivo (dalla v3.14.1 vale per entrambe le regole). Se tutte le registrazioni hanno un orario di acquisizione, il riferimento è **l'ultimo baseline prima della prima dose** (`last_reference_before`; a parità, voto QC migliore poi nome file). Senza orari: stessa cartella, poi `reference_kind` t0, poi voto QC, poi nome.
 
 **Variazioni** (`compute_normalized_parameters`): `pct_bp_change` da `beat_period_ms_mean`, `pct_fpdc_change` da `fpdc_ms_mean`, `pct_amp_change` da `spike_amplitude_mV_mean`, tutte `(dose − baseline) / baseline × 100`. `fpd_reliable` della coppia = baseline **e** dose affidabili; esclude la registrazione solo se `normalization.require_fpd_reliable = True` (spento). ΔFPDc **non calcolato** se il periodo mediano (o medio) di una delle due supera `normalization.max_beat_period_for_fpdc_ms = 6000` (la correzione di Fridericia non ha senso su un tessuto quasi fermo).
 
@@ -1558,28 +1558,27 @@ Alternative: `'n_above'` (positivo se almeno `classification_n_above = 2` regist
 
 ### 11.12 Discordanze tra commenti e codice, e campi non letti
 
-Rilevate nella verifica della v3.14.0; il comportamento documentato sopra è quello del codice.
+Rilevate nella verifica della v3.14.0 e sistemate nella v3.14.1. Nessuna cambiava i numeri con la configurazione di default, salvo le prime due su casi marginali (ritmi con gruppi di ampiezza e battiti scartati dalla validazione; battiti anticipati rispetto al template nel QC).
 
-- `analyze.py` dice che il treno del ritmo è "off by default": è **attivo** (`enable_rhythm_train = True`), ma interviene solo con CV ≥ 25 %.
-- Docstring di `find_repolarization_on_template` e del preset `default` parlano di tangente: il metodo di default è **`'peak'`**; il preset `peak_method` non cambia nulla.
-- `fpd_method = 'consensus'` vale solo sul template; per battito ricade su `'tangent'`.
-- Il commento di `min_signal_amplitude_uV` dice che l'FPD diventa NaN su tutti i battiti: in realtà si salta solo il template, la ricerca per battito prosegue non guidata.
-- Il commento della soglia per battito cita 1,2 e una soglia più severa senza guida: entrambe valgono 1,5 e si applicano al punteggio penalizzato per distanza, non alla prominenza.
-- `_fix_bimodal_bp`: docstring 1,5–2,8×, codice 1,4–3,0×.
-- Il secondo tentativo di rilevamento e `select_best_channel` non ricevono la configurazione: usano i default di `BeatDetectionConfig` per tutto tranne distanza e soglia.
-- La correlazione del QC prova solo spostamenti in avanti (`quality_control.morphology_correlation`, `start = max(0, lag)`).
-- Gli indici dei gruppi della topologia sono calcolati prima della validazione morfologica, del recupero e del filtro adattato: se questi cambiano il numero di battiti, il filtro di ritmo può tenere battiti sbagliati o saltare senza avviso. Da correggere.
-- Nel batch il pass 2 delle aritmie (template dal baseline) sostituisce il report del pass 1, perdendo la classe "Not analysable" e i flag di camera.
-- `fpd_prolongation` nelle aritmie non scatta mai (`baseline_summary` non viene passato).
-- L'abbinamento con orari non esclude un baseline che ha fallito l'inclusione, contrariamente alla docstring.
-- Il commento di `amplifier_gain` dice che la scelta dell'elettrodo lavora in unità grezze: divide invece per il guadagno (il termine di ampiezza del punteggio è quindi ≈ 0 sui CSV).
-- Campi mai letti: `filtering.highpass_*`, `filtering.lowpass_*`, `beat_detection.topology_noise_gap_ratio`, `arrhythmia.ead_critical_count`, `arrhythmia.premature_count_threshold`, `arrhythmia.tdp_require_severe_only`, `channel_selection.snr_good/snr_fair`. `CessationConfig` e `SpectralConfig` non fanno parte di `AnalysisConfig`.
-- Soglie fisse nel codice (non configurabili): finestra ± 30 ms dell'SNR globale, 60 % di scarti per il voto F, limiti di frequenza del punteggio `auto`, refrattarietà 250 ms del filtro adattato, 10 %/5 % di severità delle aritmie, livelli dei sotto-punteggi di cessazione.
+- **Indici dei gruppi della topologia** (`beat_detection._classify_rhythm_topology` → `rhythm_integration.apply_rhythm_filter`): gli indici erano posizionali nell'insieme di battiti al momento della classificazione, che validazione morfologica, recupero e filtro adattato cambiano; il filtro di ritmo poteva tenere battiti sbagliati o saltare senza avviso. Ora ogni gruppo porta gli **indici di campione** (`sample_indices`) e il filtro abbina per campione; una classificazione vecchia con conteggio diverso produce passthrough, non battiti sbagliati.
+- **Correlazione del QC** (`quality_control.morphology_correlation`): provava solo spostamenti in avanti; ora in entrambe le direzioni.
+- **Secondo tentativo di rilevamento** e **scelta el1/el2**: non ricevevano la configurazione; ora la ricevono (nel secondo tentativo cambiano solo distanza e soglia).
+- **Pass 2 delle aritmie nel batch** (template dal baseline): sostituiva il referto perdendo la classe "Not analysable" e le bandiere di camera; ora li conserva. Riceve anche il sommario del baseline, così `fpd_prolongation` (FPD > `fpd_prolongation_threshold = 1.3` × baseline) può scattare.
+- **Abbinamento con orari**: ignorava l'inclusione; ora entrambe le regole scelgono solo tra i baseline inclusi e, se nessuno lo è, la dose resta senza riferimento con il motivo.
+- **`fpd_method = 'consensus'` per battito**: ricadeva su `tangent`; ora vota come sul template.
+- **Commenti e docstring corretti**: treno del ritmo "off by default" (è attivo, con soglia CV 25 %); "default: tangent" (è `peak`); `min_signal_amplitude_uV` (salta solo il template); soglia per battito (1,5 sul punteggio penalizzato, non 1,2 sulla prominenza); `_fix_bimodal_bp` 1,4–3,0×; `amplifier_gain` e la scelta dell'elettrodo; `morphology_marginal`; preset `peak_method` = default.
+- **Campi rimossi perché mai letti**: `filtering.highpass_*`, `filtering.lowpass_*` (anche dalla finestra Impostazioni), `beat_detection.topology_noise_gap_ratio`, `arrhythmia.ead_critical_count`, `arrhythmia.premature_count_threshold`, `arrhythmia.tdp_require_severe_only`, `channel_selection.snr_good/snr_fair`. I JSON vecchi che li contengono si leggono comunque (le chiavi sconosciute sono ignorate).
+
+Restano fissi nel codice (non configurabili): finestra ± 30 ms dell'SNR globale, 60 % di scarti per il voto F, limiti di frequenza del punteggio `auto`, refrattarietà 250 ms del filtro adattato, 10 %/5 % di severità delle aritmie, livelli dei sotto-punteggi di cessazione; `CessationConfig` e `SpectralConfig` non fanno parte di `AnalysisConfig`.
 
 ---
 
 
 ## 12. Changelog
+
+### v3.14.1 (Ottobre 2026) — correzioni dalla verifica della scheda dei parametri
+
+Filtro di ritmo con gruppi abbinati per indice di campione (prima poteva tenere battiti sbagliati dopo validazione e recupero), correlazione del QC in entrambe le direzioni, secondo tentativo di rilevamento e scelta el1/el2 con la configurazione dell'utente, pass 2 delle aritmie che conserva "Not analysable" e le bandiere di camera e riceve il sommario del baseline (`fpd_prolongation`), abbinamento dose–riferimento che rispetta l'inclusione anche con gli orari, `consensus` applicato anche per battito, commenti e docstring allineati al codice, campi di configurazione mai letti rimossi (§11.12). Sulla piastra PHOENIX PM01001 i valori di camera sono invariati.
 
 ### Documentazione (4 ottobre 2026)
 

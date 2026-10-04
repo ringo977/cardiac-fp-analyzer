@@ -109,8 +109,17 @@ def _get_dominant_bi_values(rc: dict[str, Any],
     clusters = rc.get('clusters') or []
     for cl in clusters:
         if cl.get('role') == 'dominant':
+            # Sample indices stored by the classifier (v3.14.1): valid
+            # whatever happened to the beat set after classification.
+            samples = cl.get('sample_indices')
+            if samples is not None:
+                return set(int(v) for v in samples) or None
+            # Older classifications: positional indices into the beat set
+            # at classification time. Only trustworthy if that set is the
+            # one we are given.
             idx = cl.get('indices_in_bi') or []
-            if len(idx) == 0 or len(bi_raw) == 0:
+            n_at = rc.get('n_beats')
+            if len(idx) == 0 or len(bi_raw) == 0 or (n_at is not None and n_at != len(bi_raw)):
                 return None
             try:
                 return set(int(v) for v in bi_raw[np.asarray(idx, dtype=int)])

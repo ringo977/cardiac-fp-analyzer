@@ -266,8 +266,10 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None,
     """
     Find the repolarization wave on a clean averaged template.
 
-    Uses the configured fpd_method (default: tangent) to determine the
-    FPD endpoint after finding the repolarization peak.
+    Uses the configured fpd_method (default: 'peak', the latency of the
+    wave's peak; 'tangent' and the others in apply_fpd_method) after
+    choosing the repolarization wave among the candidates
+    (repol_candidate_rule).
 
     ``guard_after_ms`` : when the caller has lengthened the search window
     beyond what it would otherwise be (see
@@ -678,10 +680,10 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
     # Prominence: use the best_score from find_peaks if it came from
     # find_peaks (actual prominence), otherwise fall back to abs(peak value).
     # Noise is estimated excluding ±50ms around the peak.
-    # When the search is template-guided, use the lenient threshold (1.2)
-    # because the template gives confidence the repol exists. When unguided,
-    # use a stricter threshold (midpoint towards template gate) to avoid
-    # accepting noise peaks on flat signals.
+    # The score tested is the distance-penalised prominence (best_score),
+    # not the raw prominence. Guided and unguided searches have their own
+    # thresholds (repol_gate_min_snr_beat, repol_gate_min_snr_beat_unguided;
+    # both 1.5 by default).
     if rc.enable_repol_gate:
         excl_half = int(0.050 * fs)
         peak_excl_start = max(0, best_idx - excl_half)
@@ -709,8 +711,15 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
     # peak actually selected above.  They differ on beats whose T-wave is
     # inverted relative to the template, which is a real regime here:
     # parameters.py deliberately flips the sign for inverted beats.
-    fpd_idx = apply_fpd_method(seg_det, best_idx, best_sign, fs,
-                               peak_search_start, spike_idx, cfg=cfg)
+    # 'consensus' votes among five methods; before v3.14.1 the per-beat
+    # call fell through to 'tangent' silently, so template and per-beat
+    # values came from different methods. Now the same vote runs per beat.
+    if rc.fpd_method == 'consensus':
+        fpd_idx = consensus_fpd(seg_det, best_idx, best_sign, fs,
+                                peak_search_start, spike_idx, cfg=cfg)[0]
+    else:
+        fpd_idx = apply_fpd_method(seg_det, best_idx, best_sign, fs,
+                                   peak_search_start, spike_idx, cfg=cfg)
     # Convert from "samples from spike" to absolute index (within beat segment ``data``)
     repol_peak_idx = int(peak_search_start + best_idx)
     actual_idx = int(spike_idx + fpd_idx)

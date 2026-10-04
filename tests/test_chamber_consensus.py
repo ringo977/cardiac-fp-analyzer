@@ -131,3 +131,7 @@ def test_summary_override_and_reference_through_batch(tmp_path):
     assert d['chamber']['fpd_method'] == 'same wave' and d['summary']['fpd_source'].startswith('chamber same wave')
     assert d['summary']['fpdc_ms_mean'] < by[('A', '0')]['summary']['fpdc_ms_mean']
     assert by[('A', 'B')]['summary']['not_analysable']
+    # the batch's second arrhythmia pass (baseline template) keeps the verdict and the chamber flag
+    ar = by[('A', 'B')]['arrhythmia_report']
+    assert ar.classification == 'Not analysable' and ar.risk_score == 0
+    assert any(f['type'] == 'chamber_irregular' for f in ar.flags)

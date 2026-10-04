@@ -875,7 +875,7 @@ def _reject_amplitude_cluster(data, fs, bi, cfg=None):
       - "Real" depolarisation spikes at e.g. ~1.4 V
       - "Spurious" T-wave / baseline bumps at e.g. ~0.15 V
     `_fix_bimodal_bp` only catches alternating short/long RR patterns
-    (ratio ≈ 1.5–2.8×). When the false positives are not strictly
+    (ratio ≈ 1.4–3.0×). When the false positives are not strictly
     alternating (e.g. 1 big + 2-3 small + 1 big …), the bimodal RR fix
     fails to remove them. The morphology validator can also fail to
     separate the populations — particularly in mixed-polarity mode where
@@ -1310,6 +1310,13 @@ def _classify_rhythm_topology(data, fs, bi, cfg=None):
         metrics['n_secondary'] = merged_secondary['n']
         metrics['n_noise'] = noise['n']
 
+    # Sample indices of each cluster's beats. The positional indices
+    # ('indices_in_bi') refer to the beat set at classification time, which
+    # later stages (morphology validation, recovery, noise gate, matched
+    # filter) change; the rhythm filter therefore matches beats by sample.
+    for cl in raw_clusters:
+        cl['sample_indices'] = [int(v) for v in bi_arr[np.asarray(cl['indices_in_bi'], dtype=int)]]
+
     return {
         'rhythm_type': rhythm_type,
         'n_beats': n_in,
@@ -1323,7 +1330,7 @@ def _fix_bimodal_bp(data, fs, bi, bt, info, threshold_factor, cfg=None):
     """If beat periods show bimodal short/long pattern, re-detect with larger min_distance.
 
     Uses Otsu-style threshold to find the optimal split that minimises
-    within-group variance.  If the two groups have a ratio ≈ 1.5–2.8×
+    within-group variance.  If the two groups have a ratio ≈ 1.4–3.0×
     (consistent with spike + T-wave double-counting), the short intervals
     are T-wave artefacts and we re-detect with a larger min_distance.
     """
@@ -1361,7 +1368,7 @@ def _fix_bimodal_bp(data, fs, bi, bt, info, threshold_factor, cfg=None):
     gap = mean_long - mean_short
     separation = gap / combined_std if combined_std > 0 else 0
 
-    # Bimodal pattern: long ≈ 1.5–2.8× short, both groups sizeable, well-separated
+    # Bimodal pattern: long ≈ 1.4–3.0× short, both groups sizeable, well-separated
     if (1.4 < ratio < 3.0
             and min(len(short), len(long_)) > 0.15 * len(bp_ms)
             and separation > 2.0):

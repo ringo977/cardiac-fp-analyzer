@@ -752,12 +752,14 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
         if verbose: print(f"  Beats: {det['n_beats']} ({det['method']})")
 
         if det['n_beats'] < 5 and len(df) > fs*10:
-            bi, bt, det = detect_beats(
-                filtered, fs,
-                method=bd_cfg.method,
-                min_distance_ms=bd_cfg.retry_min_distance_ms,
-                threshold_factor=bd_cfg.retry_threshold_factor
-            )
+            # Same configuration, only spacing and threshold relaxed
+            # (before v3.14.1 the retry silently reverted every other
+            # detection setting to its default).
+            import dataclasses
+            retry_cfg = dataclasses.replace(bd_cfg, min_distance_ms=bd_cfg.retry_min_distance_ms,
+                                            threshold_factor=bd_cfg.retry_threshold_factor)
+            bi, bt, det = detect_beats(filtered, fs, cfg=retry_cfg)
+            det['retry'] = True
             if verbose: print(f"  Retry: {det['n_beats']} beats")
 
         # Snapshot the pure (pre-override) detection so the PySide UI can
@@ -795,7 +797,8 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
                           f"-{ov_info['n_removed']}{extras} "
                           f"→ {bi.size} beats")
 
-        # Rhythm train among the detections (off by default); not after a
+        # Rhythm train among the detections (on by default, applied only when
+        # the CV of all detections reaches rhythm_min_cv); not after a
         # manual beat correction, which is the user's own beat set.
         rhythm_bi = None
         if not det.get('overrides_applied'):
@@ -1179,6 +1182,7 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
     from .normalization import get_group_key
 
     baseline_templates = {}
+    baseline_summaries = {}
     for r in results:
         if not is_baseline(r):
             continue
@@ -1193,6 +1197,7 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
         tmpl = compute_template(bd)
         if tmpl is not None:
             baseline_templates[group] = tmpl
+            baseline_summaries[group] = r.get('summary', {})
 
     if baseline_templates:
         n_reanalyzed = 0
@@ -1218,9 +1223,21 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
             fs_val = r.get('metadata', {}).get('sample_rate', 1000.0)
             ar = _analyze_arrhythmia(
                 bi, bp, all_p, summary, fs_val,
+                baseline_summary=baseline_summaries.get(group),
                 cfg=config.arrhythmia, beats_data=bd,
                 baseline_template=bl_tmpl
             )
+            # Keep what the first pass decided about the recording as a
+            # whole: the not-analysable verdict (from the electrode or the
+            # chamber) and the chamber rhythm flags (v3.14.1).
+            prev = r.get('arrhythmia_report')
+            if prev is not None:
+                for fl in prev.flags:
+                    if fl['type'] == 'not_analysable' or fl['type'].startswith('chamber_'):
+                        ar.flags.append(fl)
+                if prev.classification == 'Not analysable' or summary.get('not_analysable'):
+                    ar.classification = 'Not analysable'
+                    ar.risk_score = 0
             r['arrhythmia_report'] = ar
             n_reanalyzed += 1
         if verbose:

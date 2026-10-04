@@ -267,8 +267,9 @@ def pair_with_baselines(results_list, details=None):
     (Oct 2026). Otherwise a recording is paired with the reference in its
     own folder, t0 first; if there are several, or none in its folder,
     with the best QC grade (then the file name). Baselines the
-    analysability verdict rejected are never used. If the chosen baseline
-    failed the inclusion criteria the recording is left unpaired.
+    analysability verdict rejected are never used, nor are baselines that
+    failed the inclusion criteria: when a tissue has no baseline that
+    passed, its recordings are left unpaired.
 
     **Fallback**: when the electrode-specific group has no baseline (e.g.
     an explicit el1/el2 run where the baseline was analysed on the other
@@ -300,6 +301,14 @@ def pair_with_baselines(results_list, details=None):
         return [b for b in baselines
                 if not (b.get('summary') or {}).get('not_analysable', False)]
 
+    def _included(baselines):
+        """Baselines that passed the inclusion criteria (or were not
+        evaluated). A tissue whose only baselines failed inclusion is left
+        unpaired, whichever pairing rule applies (v3.14.1: before, the
+        timed rule ignored inclusion and the untimed one rejected the
+        chosen baseline even when another candidate had passed)."""
+        return [b for b in baselines if (b.get('inclusion', {}) or {}).get('passed', True)]
+
     def _find_baseline(group_results):
         """Find baselines in a group, falling back to controls."""
         baselines = [r for r in group_results if _is_baseline(r)]
@@ -317,6 +326,10 @@ def pair_with_baselines(results_list, details=None):
         if not cands:
             return None, ('no baseline for this tissue' if not candidates
                           else 'baseline not analysable')
+        inc = _included(cands)
+        if not inc:
+            return None, f"baseline failed inclusion ({(cands[0].get('inclusion', {}) or {}).get('reason', '')})"
+        cands = inc
         here = _folder(r)
         same = [b for b in cands if here is not None and _folder(b) == here]
         pool = same or cands
@@ -334,7 +347,10 @@ def pair_with_baselines(results_list, details=None):
                  if not (_is_baseline(x) or _is_control(x) or is_washout(x))]
         times = [t for t in (recording_time(x) for x in doses) if t is not None]
         first = min(times) if times else None
-        cands = [(b, recording_time(b)) for b in _usable(candidates)]
+        usable = _usable(candidates)
+        if usable and not _included(usable):
+            return None, ''          # _choose reports the inclusion failure
+        cands = [(b, recording_time(b)) for b in _included(usable)]
         return last_reference_before(cands, first, lambda b: (_grade(b), _fname(b)))
 
     baseline_map = {}
@@ -359,10 +375,7 @@ def pair_with_baselines(results_list, details=None):
                 bl, why = timed_bl, timed_why
             else:
                 bl, why = _choose(r, candidates)
-                if bl is not None and not (bl.get('inclusion', {}) or {}).get('passed', True):
-                    why = f"baseline failed inclusion ({(bl.get('inclusion', {}) or {}).get('reason', '')})"
-                    bl = None
-                elif bl is not None and other_electrode:
+                if bl is not None and other_electrode:
                     why += ' (baseline analysed on the other electrode)'
             baseline_map[rk] = bl
             if details is not None:
