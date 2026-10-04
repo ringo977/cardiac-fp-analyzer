@@ -1782,7 +1782,7 @@ class MainWindow(QMainWindow):
 
         # ─── Menu ──────────────────────────────────────────────────
         m_file = self.menuBar().addMenu(self.tr("&File"))
-        act_open = QAction(self.tr("&Apri CSV..."), self)
+        act_open = QAction(self.tr("&Apri registrazione..."), self)
         act_open.setShortcut("Ctrl+O")
         act_open.triggered.connect(self._on_open)
         m_file.addAction(act_open)
@@ -1880,7 +1880,7 @@ class MainWindow(QMainWindow):
         # ─── Status bar ────────────────────────────────────────────
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage(
-            self.tr("Pronto — File ▶ Apri CSV per iniziare.")
+            self.tr("Pronto — File ▶ Apri registrazione (CSV, MCS .h5 o .npz) per iniziare.")
         )
 
     # ─── Convenience accessors ────────────────────────────────────
@@ -2110,9 +2110,9 @@ class MainWindow(QMainWindow):
     def _on_open(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            self.tr("Apri registrazione (CSV o MCS HDF5)"),
+            self.tr("Apri registrazione (CSV, MCS HDF5 o .npz compatto)"),
             "",
-            self.tr("Recordings (*.csv *.h5);;CSV files (*.csv);;MCS HDF5 (*.h5);;All files (*)"),
+            self.tr("Recordings (*.csv *.h5 *.npz);;CSV files (*.csv);;MCS HDF5 (*.h5);;MCS compact (*.npz);;All files (*)"),
         )
         if not path:
             return

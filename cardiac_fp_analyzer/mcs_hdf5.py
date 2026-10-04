@@ -34,6 +34,7 @@ file) therefore needs about 20 MB per block plus the decimated output
 h5py is an optional dependency (``pip install cardiac-fp-analyzer[mcs]``).
 """
 
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -467,3 +468,98 @@ def write_mcs_h5(filepath, channel_data, labels, tick_us, conversion_factor, exp
                 ie[0] = (0, 0, str(e.get('label', '')), 'Int', 4, '', '')
                 g.create_dataset('InfoEvent', data=ie)
     return Path(filepath)
+
+
+# ──────────────────────────────────────────────────────────────────────
+#   Compact .npz copies of the MCS CSV export ('mcs_compact v1')
+# ──────────────────────────────────────────────────────────────────────
+# A lossless re-encoding of the DataManager ASCII export made before the
+# HDF5 export was adopted (PHOENIX, Oct 2026): one integer array of ADC codes
+# per electrode ('E1' …) and a JSON 'meta' entry with the ADC step in volts
+# ('adc_step_volt'), the first time stamp and the sample step in µs
+# ('t0_us', 'dt_us'), the channel labels and the original file name.
+
+NPZ_SUFFIXES = ('.npz',)
+
+
+def is_mcs_npz(filepath):
+    """True for a compact .npz copy of an MCS export."""
+    p = Path(filepath)
+    if p.suffix.lower() not in NPZ_SUFFIXES or not p.is_file():
+        return False
+    try:
+        with np.load(p) as z:
+            if 'meta' not in z.files:
+                return False
+            meta = json.loads(str(z['meta']))
+        return str(meta.get('format', '')).startswith('mcs_compact')
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def npz_meta(filepath):
+    with np.load(filepath) as z:
+        return json.loads(str(z['meta']))
+
+
+def npz_channels(filepath):
+    """Electrode labels of a compact .npz file ([] when it is not one)."""
+    try:
+        return list(npz_meta(filepath)['channels'])
+    except (OSError, ValueError, KeyError):
+        return []
+
+
+def npz_datetime(filepath):
+    """Start of the recording from the original file name ('2026-01-27T12-00-41McsRecording_…')."""
+    try:
+        name = npz_meta(filepath).get('source_file', '') or Path(filepath).name
+        return datetime.strptime(name[:19], '%Y-%m-%dT%H-%M-%S')
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def load_mcs_npz(filepath, channels=None, max_sample_rate=MAX_SAMPLE_RATE, block=_BLOCK):
+    """Load a compact .npz copy like ``load_mcs_h5`` does for the HDF5 file:
+    (metadata, DataFrame with 'time' and one float32 column per electrode, in
+    volts), decimated to ~TARGET_SAMPLE_RATE above ``max_sample_rate``.
+    Channels are read one at a time (the arrays are compressed separately)."""
+    filepath = Path(filepath)
+    meta = npz_meta(filepath)
+    labels_all = list(meta['channels'])
+    want = labels_all if channels is None else [str(c) for c in channels]
+    missing = [c for c in want if c not in labels_all]
+    if missing:
+        raise ValueError(f'channels not in the file: {missing}; available: {labels_all}')
+    fs = float(meta.get('sample_rate_hz') or 1e6 / float(meta['dt_us']))
+    step = float(meta['adc_step_volt'])
+    n = int(meta['n_samples'])
+    q = int(round(fs / TARGET_SAMPLE_RATE)) if (max_sample_rate is not None and fs > max_sample_rate) else 1
+    n_out = -(-n // q)
+    X = np.empty((len(want), n_out), dtype=np.float32)
+    with np.load(filepath) as z:
+        for k, c in enumerate(want):
+            x = z[c].astype(np.float64) * step
+            if q > 1:
+                dec = _Decimator(q, fs, 1)
+                parts = [dec.push(x[None, a:a + block]) for a in range(0, n, block)] + [dec.flush()]
+                X[k] = np.concatenate(parts, axis=1)[0, :n_out]
+            else:
+                X[k] = x
+    metadata = {
+        'filepath': str(filepath), 'filename': filepath.stem, 'format': 'mcs_hdf5', 'container': 'mcs_compact_npz',
+        'sample_rate': fs / q, 'n_samples': n_out, 'duration_s': n_out * q / fs, 'channels': want, 'unit': 'V',
+        'stream': 'Electrode Raw Data (compact copy of the CSV export)', 'stream_subtype': 'Electrode',
+        'recording': 'Recording_0', 't0_s': float(meta.get('t0_us', 0)) / 1e6,
+        'conversion': {c: step for c in want}, 'adc_zero': {c: 0 for c in want},
+        'device': None, 'mea_layout': None, 'program': 'Multi Channel DataManager (ASCII export)',
+        'datetime': npz_datetime(filepath), 'events': [], 'spike_timestamps': {}, 'paced': False,
+        'source_file': meta.get('source_file'),
+    }
+    if q > 1:
+        metadata['original_sample_rate'] = fs
+        metadata['decimation_factor'] = q
+    df = pd.DataFrame({'time': (np.arange(n_out) * q / fs).astype(np.float64)})
+    for k, c in enumerate(want):
+        df[c] = X[k]
+    return metadata, df

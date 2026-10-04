@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.12.0
+**Versione**: 3.12.1
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -208,6 +208,8 @@ Legge i file CSV prodotti dal sistema Digilent WaveForms (Analog Discovery 2). I
 `load_recording` sceglie il lettore dal suffisso: `.csv` → `load_csv`; `.h5`/`.hdf5` → `mcs_hdf5.load_mcs_h5`. Il batch, la bozza di `samples.csv` e la GUI accettano entrambi (`analyze.find_recordings`: i CSV che non sono fogli campioni e i file HDF5 nel formato MCS).
 
 **Formato** (modulo `mcs_hdf5.py`): i file prodotti da Multi Channel Experimenter / DataManager nel protocollo "RawData" (definizione MCS versione 3): HDF5 standard, compressione gzip con shuffle, leggibile anche da MATLAB o HDFView. Struttura: `/Data/Recording_<r>/AnalogStream/Stream_<s>` con la matrice `ChannelData` (int32, canali × campioni), `ChannelDataTimeStamps` e la tabella `InfoChannel` (etichetta `E1`…, unità, `Exponent`, `ADZero`, `Tick` in µs, `ConversionFactor`); il valore fisico è `(codice − ADZero) · ConversionFactor · 10^Exponent`. Gli altri stream, `EventStream` (eventi digitali e dello stimolatore), `SegmentStream` (ritagli degli spike, medie) e `TimeStampStream` (tempi degli spike), vengono letti ma non usati dalla pipeline.
+
+**Copie compatte `.npz`** (dalla v3.12.1): i file del formato `mcs_compact` (un array di codici ADC per elettrodo e un `meta` JSON con passo dell'ADC, passo temporale ed etichette; `mcs_hdf5.load_mcs_npz`) si leggono come i file HDF5, con gli stessi metadati e la stessa decimazione; i canali si leggono uno alla volta (circa 30 s per 64 canali × 5 minuti).
 
 **Caricamento**: lo stream scelto è di default quello `Electrode` con "Raw" nell'etichetta (altrimenti il primo `Electrode`); si può indicare per nome (`Stream_1`) o per parte dell'etichetta (`'Filter (1)'`). Il DataFrame ha `time` e una colonna per elettrodo, con l'etichetta MCS (`E1`…`E64`) e i valori in volt (float32). La lettura è a blocchi lungo il tempo e la decimazione (sopra 3 kHz, a circa 2 kHz) avviene blocco per blocco con un FIR a fase lineare senza ritardo: una registrazione di 64 canali × 5 minuti a 20 kHz (650 MB) si carica in circa 20 s con meno di 0,7 GB di memoria. I metadati portano `format = 'mcs_hdf5'`, `channels`, `unit`, `stream`, `conversion`, `datetime` (da `DateInTicks`), `events`, `spike_timestamps` e `paced`: vero quando c'è uno stream di eventi dello stimolatore o della porta digitale (`StgSideband`, `DigitalPort`) con almeno un evento. `inspect(path)` elenca registrazioni e stream; `read_segments(path)` restituisce i ritagli; `write_mcs_h5(...)` scrive un file minimo nello stesso formato (test, conversioni).
 
@@ -1308,6 +1310,10 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.12.1 (Ottobre 2026) — copie compatte `.npz` degli export MCS
+
+I file `.npz` del formato `mcs_compact` (copia senza perdita dell'export CSV di DataManager, PHOENIX 2026) si aprono come i file HDF5: stessi metadati, decimazione a blocchi, una registrazione per camera, da riga di comando, batch e GUI (`File ▶ Apri registrazione…`, filtro dei file e scansione delle cartelle).
 
 ### v3.12.0 (Ottobre 2026) — chip a più camere: una registrazione per camera
 

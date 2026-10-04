@@ -1485,7 +1485,7 @@ class StudyPanel(QWidget):
             self,
             self.tr("Aggiungi registrazioni al gruppo “{0}”").format(group.name),
             self._study.folder,
-            self.tr("Recordings (*.csv *.h5);;CSV files (*.csv);;MCS HDF5 (*.h5);;All files (*)"),
+            self.tr("Recordings (*.csv *.h5 *.npz);;CSV files (*.csv);;MCS HDF5 (*.h5);;MCS compact (*.npz);;All files (*)"),
         )
         if not paths:
             return
@@ -1574,7 +1574,7 @@ class StudyPanel(QWidget):
             QMessageBox.information(
                 self, self.tr("Nessun CSV trovato"),
                 self.tr(
-                    "Nessun file .csv o .h5 (MCS) trovato (ricorsivamente) in “{0}”."
+                    "Nessun file .csv, .h5 o .npz (MCS) trovato (ricorsivamente) in “{0}”."
                 ).format(folder),
             )
             return
@@ -3027,7 +3027,7 @@ def _enumerate_csvs_under(folder: Path) -> list[Path]:
     try:
         from cardiac_fp_analyzer.loader import is_recording_file
         all_csvs = [p for p in Path(folder).rglob('*')
-                    if p.suffix.lower() in ('.csv', '.h5', '.hdf5') and p.is_file() and is_recording_file(p)]
+                    if p.suffix.lower() in ('.csv', '.h5', '.hdf5', '.npz') and p.is_file() and is_recording_file(p)]
     except OSError:
         # Unreadable folder (permissions) — let the caller show an
         # empty-result dialog rather than crashing the UI thread.

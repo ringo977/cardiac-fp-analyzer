@@ -196,3 +196,48 @@ def test_real_mcs_test_file():
     segs = M.read_segments(path)
     assert segs and segs[0]['subtype'] == 'Spike' and segs[0]['waveforms'].shape[1] == 2
     assert recording_datetime(path).year == 2014
+
+
+class TestCompactNpz:
+    """Compact .npz copies of the MCS CSV export ('mcs_compact v1')."""
+
+    @pytest.fixture(scope='class')
+    def npz_file(self, tmp_path_factory):
+        import json
+        rng = np.random.default_rng(2)
+        sig, _t, _m = generate_regular_fp(fs=FS, duration_s=6.0, beat_period_ms=750.0, fpd_ms=280.0,
+                                          depol_amp=60e-6, repol_amp=8e-6, noise_std=2e-6, seed=2)
+        codes = {'E1': _codes(sig).astype(np.int16), 'E2': _codes(rng.normal(0, 3e-6, len(sig))).astype(np.int16)}
+        meta = {'source_file': '2026-01-27T12-00-41McsRecording_PM01001_baseline_Recording-0_(x)_Analog.csv',
+                'channels': ['E1', 'E2'], 'unit': '1e-17 V', 'adc_step': STEP_CODE, 'adc_step_volt': STEP_CODE * 10.0 ** EXP,
+                't0_us': 200000, 'dt_us': 50, 'sample_rate_hz': FS, 'n_samples': len(sig), 'format': 'mcs_compact v1'}
+        path = tmp_path_factory.mktemp('npz') / '2026-01-27T12-00-41McsRecording_PM01001_baseline_Recording-0_(x)_Analog.npz'
+        np.savez_compressed(path, meta=json.dumps(meta), **codes)
+        return path, codes
+
+    def test_detect_and_load(self, npz_file, tmp_path):
+        path, codes = npz_file
+        assert M.is_mcs_npz(path) and is_recording_file(path)
+        other = tmp_path / 'plain.npz'
+        np.savez(other, a=np.arange(3))
+        assert not M.is_mcs_npz(other) and not is_recording_file(other)
+        from cardiac_fp_analyzer.loader import recording_channels
+        assert recording_channels(path) == ['E1', 'E2']
+        assert recording_datetime(path).year == 2026
+        meta, df = load_recording(path)
+        assert meta['format'] == 'mcs_hdf5' and meta['container'] == 'mcs_compact_npz'
+        assert meta['sample_rate'] == pytest.approx(2000.0) and meta['decimation_factor'] == 10
+        assert electrode_columns(df) == ['E1', 'E2'] and len(df) == -(-len(codes['E1']) // 10)
+        meta, df = M.load_mcs_npz(path, channels=['E2'], max_sample_rate=None)
+        assert np.allclose(df['E2'].values, codes['E2'].astype(float) * STEP_CODE * 10.0 ** EXP, rtol=1e-5, atol=1e-12)
+        with pytest.raises(ValueError):
+            M.load_mcs_npz(path, channels=['E9'])
+
+    def test_pipeline(self, npz_file):
+        from cardiac_fp_analyzer.analyze import analyze_single_file
+        from cardiac_fp_analyzer.config import AnalysisConfig
+        path, _ = npz_file
+        r = analyze_single_file(path, channel='auto', verbose=False, config=AnalysisConfig())
+        assert r is not None and r['file_info']['analyzed_channel'] == 'E1'
+        assert r['file_info']['chip'] == 'PM01001' and r['file_info']['is_baseline']
+        assert r['summary']['beat_period_ms_median'] == pytest.approx(750.0, abs=5.0)

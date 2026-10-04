@@ -391,10 +391,10 @@ def plan_batch(csv_files, data_dir, infos=None, layout=None):
             key = r.file.lower()
             while key.startswith('./'):
                 key = key[2:]
-            f = rel_index.get(key) or rel_index.get(key + '.csv') or rel_index.get(key + '.h5')
+            f = rel_index.get(key) or rel_index.get(key + '.csv') or rel_index.get(key + '.h5') or rel_index.get(key + '.npz')
             if f is None:
                 cands = (name_index.get(Path(key).name) or name_index.get(Path(key).name + '.csv')
-                         or name_index.get(Path(key).name + '.h5') or [])
+                         or name_index.get(Path(key).name + '.h5') or name_index.get(Path(key).name + '.npz') or [])
                 if len(cands) > 1:
                     report['issues'].append(f"{rel_s} line {r.line}: '{r.file}' matches {len(cands)} files; "
                                             f"write the path")

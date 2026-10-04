@@ -9,6 +9,8 @@ Two file formats are read (``load_recording`` dispatches on the suffix):
 * Multi Channel Systems HDF5 raw data (``.h5``, MCS RawData protocol — the
   µHeart / MEA2100 recordings, up to 64 electrodes at 20 kHz): columns
   'time' plus one per electrode label ('E1' … 'E64'); see mcs_hdf5.py.
+* Compact ``.npz`` copies of the MCS CSV export (format 'mcs_compact',
+  PHOENIX 2026): read like the HDF5 files.
 
 Recordings sampled above MAX_SAMPLE_RATE are decimated on load.
 """
@@ -65,6 +67,9 @@ def recording_datetime(filepath):
     if Path(filepath).suffix.lower() in ('.h5', '.hdf5', '.hdf'):
         from .mcs_hdf5 import recording_datetime as _h5_datetime
         return _h5_datetime(filepath)
+    if Path(filepath).suffix.lower() == '.npz':
+        from .mcs_hdf5 import npz_datetime
+        return npz_datetime(filepath)
     try:
         with open(filepath, errors='replace') as f:
             for line in f:
@@ -77,7 +82,7 @@ def recording_datetime(filepath):
     return None
 
 
-RECORDING_SUFFIXES = ('.csv', '.h5', '.hdf5', '.hdf')
+RECORDING_SUFFIXES = ('.csv', '.h5', '.hdf5', '.hdf', '.npz')
 
 
 def is_recording_file(filepath):
@@ -89,6 +94,9 @@ def is_recording_file(filepath):
     if suf in ('.h5', '.hdf5', '.hdf'):
         from .mcs_hdf5 import is_mcs_hdf5
         return is_mcs_hdf5(p)
+    if suf == '.npz':
+        from .mcs_hdf5 import is_mcs_npz
+        return is_mcs_npz(p)
     return False
 
 
@@ -106,6 +114,9 @@ def recording_channels(filepath):
             return list((raw or el or rec['analog'])[0]['channels'])
         except (OSError, KeyError, IndexError, ImportError, ValueError):
             return []
+    if p.suffix.lower() == '.npz':
+        from .mcs_hdf5 import npz_channels
+        return npz_channels(p)
     return [f'el{c}' for c in input_columns(p)]
 
 
@@ -126,6 +137,11 @@ def load_recording(filepath, max_sample_rate=MAX_SAMPLE_RATE, **kwargs):
     if p.suffix.lower() in ('.h5', '.hdf5', '.hdf'):
         from .mcs_hdf5 import load_mcs_h5
         return load_mcs_h5(p, max_sample_rate=max_sample_rate, **kwargs)
+    if p.suffix.lower() == '.npz':
+        from .mcs_hdf5 import load_mcs_npz
+        kwargs.pop('stream', None)
+        kwargs.pop('recording', None)
+        return load_mcs_npz(p, max_sample_rate=max_sample_rate, **kwargs)
     metadata, df = load_csv(p, max_sample_rate=max_sample_rate)
     metadata.setdefault('format', 'csv')
     return metadata, df

@@ -546,12 +546,13 @@ def recompute_from_beats(result, bi_edited, config=None, verbose=False):
 
 def find_recordings(data_dir, exclude=None):
     """Recordings under ``data_dir`` (recursive, sorted): every .csv that is
-    not a sample sheet, plus every .h5 in the MCS raw-data layout."""
+    not a sample sheet, every .h5 in the MCS raw-data layout and every
+    compact .npz copy of an MCS export."""
     out = []
     for p in sorted(Path(data_dir).rglob('*')):
         if not p.is_file() or (exclude is not None and exclude(p)):
             continue
-        if p.suffix.lower() == '.csv' or (p.suffix.lower() in ('.h5', '.hdf5', '.hdf') and is_recording_file(p)):
+        if p.suffix.lower() == '.csv' or (p.suffix.lower() in ('.h5', '.hdf5', '.hdf', '.npz') and is_recording_file(p)):
             out.append(p)
     return out
 
