@@ -7,7 +7,7 @@ Root cause (pre-fix):
     which is FIXED and does NOT account for the adaptive
     ``search_end_pct_rr × RR`` window used downstream in
     ``repolarization.find_repolarization_on_template``. For a signal with
-    RR=3.5 s and ``search_end_pct_rr=0.70`` the adaptive search window is
+    RR=3.5 s and ``search_end_pct_rr=0.70`` (0.85 since v3.15) the adaptive search window was
     2450 ms, but the segmented template was only 950-1550 ms long, so
     ``search_end = min(search_end, len(template))`` silently clipped the
     search to the template boundary and the real T-wave (≈2000 ms after
@@ -45,9 +45,8 @@ def _segment_with_config(signal, time, bi, fs, rep_cfg):
     """Replicate analyze.py's post-fix segmentation call."""
     bp = compute_beat_periods(bi, fs)
     median_bp_s = float(np.median(bp)) if len(bp) > 0 else 0.0
-    pct_rr = getattr(rep_cfg, 'search_end_pct_rr', 0.0)
-    adaptive_end_ms = (pct_rr * median_bp_s * 1000.0
-                       if (pct_rr > 0 and median_bp_s > 0) else 0.0)
+    from cardiac_fp_analyzer.repolarization import search_window_end_ms
+    adaptive_end_ms = search_window_end_ms(rep_cfg, median_bp_s or None)
     post_ms = max(850.0,
                   rep_cfg.search_end_ms + 50.0,
                   adaptive_end_ms + 50.0)
@@ -65,7 +64,7 @@ class TestAdaptivePostMs:
     """Unit tests for the adaptive post_ms computation itself."""
 
     def test_adaptive_post_ms_extends_for_slow_rhythm(self):
-        """BP=3.5 s, pct_rr=0.70 → post_ms must be ≥ 2450 + margin."""
+        """BP=3.5 s, pct_rr=0.85 → post_ms must be ≥ 2975 + margin."""
         fs = 2000.0
         signal, time, _expected = generate_regular_fp(
             fs=fs, duration_s=30.0,
@@ -81,15 +80,15 @@ class TestAdaptivePostMs:
         # Use the DEFAULT search_end_ms (900 ms) — the fix must still
         # extend the template via the adaptive path even when the user
         # has not manually increased search_end_ms.
-        assert rep_cfg.search_end_pct_rr == 0.70
+        assert rep_cfg.search_end_pct_rr == 0.85
 
         _bd, _btm, _vi, post_ms, median_bp_s = _segment_with_config(
             signal, time, bi, fs, rep_cfg
         )
 
-        # Adaptive window should be 0.70 × 3500 = 2450 ms
-        expected_adaptive_ms = 0.70 * median_bp_s * 1000.0
-        assert expected_adaptive_ms == pytest.approx(2450.0, abs=200.0)
+        # Adaptive window should be 0.85 × 3500 = 2975 ms (v3.15; 70 % before)
+        expected_adaptive_ms = 0.85 * median_bp_s * 1000.0
+        assert expected_adaptive_ms == pytest.approx(2975.0, abs=250.0)
         # post_ms must cover it (plus margin)
         assert post_ms >= expected_adaptive_ms, (
             f"post_ms={post_ms:.0f} < adaptive_end_ms="
@@ -97,7 +96,7 @@ class TestAdaptivePostMs:
         )
 
     def test_adaptive_post_ms_stays_fixed_for_fast_rhythm(self):
-        """BP=500 ms, pct_rr=0.70 → adaptive=350 ms < fixed 900 ms. Should
+        """BP=500 ms, pct_rr=0.85 → adaptive=425 ms < fixed 900 ms. Should
         use the fixed search_end_ms path (no regression for normal signals)."""
         fs = 2000.0
         signal, time, _expected = generate_regular_fp(

@@ -43,6 +43,27 @@ def linear_detrend_endpoints(segment, margin_frac=0.08):
     return segment - baseline
 
 
+def search_window_end_ms(rc, rr_s=None, rr_low_s=None):
+    """End of the repolarisation search window, in ms after the spike.
+
+    ``max(search_end_ms, safe × RR, min(pct × RR, RR_low − margin))`` with
+    the fractions of ``RepolarizationConfig`` (see ``search_end_pct_rr``);
+    ``rr_s`` is the median beat period and ``rr_low_s`` the low percentile
+    of the beat periods (where the next beat can start). Without a rhythm
+    the fixed ``search_end_ms``.
+    """
+    end = float(rc.search_end_ms)
+    pct = float(getattr(rc, 'search_end_pct_rr', 0.0) or 0.0)
+    if pct <= 0 or rr_s is None or not rr_s > 0:
+        return end
+    safe = float(getattr(rc, 'search_end_pct_rr_safe', pct) or 0.0)
+    ext = pct * rr_s * 1000.0
+    if rr_low_s is not None and rr_low_s > 0:
+        margin = float(getattr(rc, 'search_end_next_beat_margin_ms', 0.0) or 0.0)
+        ext = min(ext, rr_low_s * 1000.0 - margin)
+    return max(end, min(safe, pct) * rr_s * 1000.0, ext)
+
+
 def apply_fpd_method(seg_det, best_pk, best_sign, fs, search_start, spike_idx, cfg=None):
     """
     Apply the configured FPD measurement method after finding the repol peak.
@@ -262,7 +283,7 @@ def _select_candidate(cands, rc, fs):
 
 
 def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None,
-                                    median_bp_s=None, guard_after_ms=None):
+                                    median_bp_s=None, guard_after_ms=None, rr_low_s=None):
     """
     Find the repolarization wave on a clean averaged template.
 
@@ -295,19 +316,15 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None,
 
     # Search for repolarization
     search_start = spike_idx + int(rc.search_start_ms / 1000 * fs)
-    # Adaptive search end: extend window for slow rhythms (e.g. dofetilide)
+    # Adaptive search end: up to 85 % of the cycle on a regular rhythm,
+    # never closer than a margin to where the next beat can start
+    # (search_window_end_ms; ``rr_low_s`` = low percentile of the periods).
     fixed_end_ms = rc.search_end_ms
-    pct_rr_end = getattr(rc, 'search_end_pct_rr', 0.0)
-    if pct_rr_end > 0 and median_bp_s is not None and median_bp_s > 0:
-        adaptive_end_ms = pct_rr_end * median_bp_s * 1000
-        effective_end_ms = max(fixed_end_ms, adaptive_end_ms)
-        if adaptive_end_ms > fixed_end_ms:
-            logger.debug("Template search_end: adaptive %.0f ms > fixed %.0f ms "
-                         "(%.0f%% of RR=%.0f ms)",
-                         adaptive_end_ms, fixed_end_ms,
-                         pct_rr_end * 100, median_bp_s * 1000)
-    else:
-        effective_end_ms = fixed_end_ms
+    effective_end_ms = search_window_end_ms(rc, median_bp_s, rr_low_s)
+    if effective_end_ms > fixed_end_ms:
+        logger.debug("Template search_end: adaptive %.0f ms > fixed %.0f ms (RR=%.0f ms, RR_low=%s)",
+                     effective_end_ms, fixed_end_ms, (median_bp_s or 0) * 1000,
+                     f"{rr_low_s * 1000:.0f} ms" if rr_low_s else "n/a")
     search_end = spike_idx + int(effective_end_ms / 1000 * fs)
 
     if search_end > len(template):
@@ -499,7 +516,8 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
                                  template_peak_samples=None,
                                  template_repol_sign=1,
                                  cfg=None,
-                                 beat_period_s=None):
+                                 beat_period_s=None,
+                                 next_rr_s=None):
     """
     Find repolarization in a single beat, optionally guided by template.
 
@@ -530,15 +548,19 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
         peak_search_end = spike_idx + template_fpd_samples + search_tolerance + int(0.100 * fs)
     else:
         peak_search_start = spike_idx + int(rc.search_start_ms / 1000 * fs)
-        # Adaptive search end for unguided per-beat search
-        fixed_end_ms = rc.search_end_ms
-        pct_rr_end = getattr(rc, 'search_end_pct_rr', 0.0)
-        if pct_rr_end > 0 and beat_period_s is not None and beat_period_s > 0:
-            adaptive_end_ms = pct_rr_end * beat_period_s * 1000
-            effective_end_ms = max(fixed_end_ms, adaptive_end_ms)
-        else:
-            effective_end_ms = fixed_end_ms
+        # Adaptive search end for the unguided per-beat search (the beat's
+        # own next period bounds it, when known)
+        effective_end_ms = search_window_end_ms(rc, beat_period_s, next_rr_s)
         peak_search_end = spike_idx + int(effective_end_ms / 1000 * fs)
+
+    # The beat's own next depolarisation bounds every per-beat window: the
+    # segment is long enough to hold it on short cycles, and a spike is
+    # more prominent than any T-wave (v3.14.2).
+    if next_rr_s is not None and next_rr_s > 0:
+        margin_ms = float(getattr(rc, 'search_end_next_beat_margin_ms', 0.0) or 0.0)
+        cap = spike_idx + int((next_rr_s * 1000.0 - margin_ms) / 1000 * fs)
+        if cap < peak_search_end:
+            peak_search_end = cap
 
     if peak_search_end > len(data):
         peak_search_end = len(data)

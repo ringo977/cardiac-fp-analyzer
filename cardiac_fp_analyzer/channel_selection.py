@@ -79,11 +79,8 @@ def select_best_channel(df, fs, cfg=None, channels=None):
                 # repolarization tail for slow rhythms. `mbp` is already
                 # computed above from this channel's beats.
                 if rep_cfg is not None:
-                    pct_rr = getattr(rep_cfg, 'search_end_pct_rr', 0.0)
-                    adaptive_end_ms = (pct_rr * mbp * 1000.0
-                                       if (pct_rr > 0 and mbp > 0) else 0.0)
-                    post_ms = max(rep_cfg.search_end_ms + 50.0,
-                                  adaptive_end_ms + 50.0)
+                    from .repolarization import search_window_end_ms
+                    post_ms = search_window_end_ms(rep_cfg, mbp if mbp > 0 else None) + 50.0
                 else:
                     post_ms = 900
                 bd, btm, vi = segment_beats(filt, df['time'].values, bi, fs,

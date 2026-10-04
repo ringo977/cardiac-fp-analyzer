@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.14.1
+**Versione**: 3.15.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali) o con sistemi **Multi Channel Systems** (file HDF5 del protocollo MCS RawData, fino a 64 elettrodi).
@@ -174,6 +174,10 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.15.0 (Ottobre 2026) — finestra di ricerca della ripolarizzazione fino all'85 % del ciclo
+
+La finestra in cui si cerca l'onda di ripolarizzazione finiva al 70 % del periodo: un'onda tra il 71 e l'80 % del ciclo (bloccante hERG forte su un tessuto lento; nel gold standard GG 5 elettrodi su 271) era fuori portata. Ora arriva all'85 % del ciclo su un ritmo regolare e si ferma prima di dove può cominciare il battito successivo su uno irregolare (`search_end_pct_rr = 0.85` con `search_end_pct_rr_safe`, `search_end_next_beat_pct`, `search_end_next_beat_margin_ms`); la finestra per battito si ferma prima del battito successivo; in camera i template di riferimento sono centrati sull'onda di consenso. Verifica: GG sviluppo invariato o meglio (errore mediano 4,1 → 2,9 %; sugli elettrodi con periodo corretto entro ±5 % 59 → 61 su 90), GG test invariato (46/63 entro ±10 %), PHOENIX 5 piastre invariate salvo due dosi veloci di PM01001 (±10 %), Visone 2023 8/12 invariato. Dettagli in `DOCUMENTATION.md` §12.
 
 ### v3.14.1 (Ottobre 2026) — correzioni dalla verifica della scheda dei parametri
 

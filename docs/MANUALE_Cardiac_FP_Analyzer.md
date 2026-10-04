@@ -1,6 +1,6 @@
 ---
 title: "Cardiac FP Analyzer — Manuale utente"
-subtitle: "Versione 3.14.1 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
+subtitle: "Versione 3.15.0 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
 author: "Marco Rasponi · github.com/ringo977/cardiac-fp-analyzer"
 date: "4 ottobre 2026"
 lang: it
@@ -299,7 +299,7 @@ Con `chamber_consensus = True` (default) ogni registrazione di camera è misurat
 1. **Elettrodi usabili**: segnale né piatto né saturo, almeno 10 spike, periodo entro il 20 % di quello mediano. Ne servono almeno 3, altrimenti lo stato è `insufficient` e restano i valori del singolo elettrodo.
 2. **Battiti comuni**: visti da almeno 3 elettrodi entro 60 ms. Il **periodo di camera** è la loro mediana; il CV robusto è 1,4826·MAD/mediana; la **sincronia** è la frazione dei battiti di ogni elettrodo che coincide con un battito comune.
 3. **Stato del ritmo**: `silent` (meno di 10 battiti comuni, o molti meno elettrodi attivi che al baseline), `conduction_lost` (sincronia < 0,5: il battito non attraversa più il tessuto), `irregular` (CV robusto > 15 %), altrimenti `regular`.
-4. **FPD di consenso** (riferimento): su ogni elettrodo l'FPD del battito mediano; validi quelli sotto l'80 % del periodo; il gruppo più numeroso di elettrodi concordi entro il 15 % dà l'FPD (mediana) e il numero di elettrodi (`fpd_source = chamber consensus (10 electrodes)`). L'onda di ogni elettrodo diventa il template della camera.
+4. **FPD di consenso** (riferimento): su ogni elettrodo l'FPD del battito mediano; validi quelli sotto l'80 % del periodo; il gruppo più numeroso di elettrodi concordi entro il 15 % dà l'FPD (mediana) e il numero di elettrodi (`fpd_source = chamber consensus (10 electrodes)`). L'onda di consenso, letta su ogni elettrodo attorno alla stessa latenza, diventa il template della camera.
 5. **Stessa onda** (dosi): il template del riferimento è cercato per correlazione (≥ 0,8) sul battito mediano della dose di ogni elettrodo; stessa regola di concordanza (`chamber same wave (7 electrodes)`). Così la dose misura l'onda che il riferimento misurava, non un'altra deflessione resa più prominente dal composto.
 6. **FPDc** = FPD / periodo di camera^(1/3).
 
@@ -337,7 +337,7 @@ Per battito: ampiezza ≥ 25 % della mediana (`amplitude_reject_fraction`), corr
 
 ## 8.5 FPD
 
-Prima **sul template** (battito mediano di fino a 60 battiti allineati): finestra da 150 ms dopo lo spike a max(900 ms, 70 % del RR), tagliata prima dello spike successivo; passa-basso 20 Hz e detrend; FPD minimo max(120 ms, 20 % RR, ≤ 600 ms); candidati = picchi positivi e negativi con prominenza ≥ 15 % della deviazione; **scelta dell'onda** `prefer_positive` (attiva): il picco positivo più prominente, purché abbia almeno metà della prominenza massima e stia entro 400 ms dal candidato più prominente, altrimenti il più prominente (alternativa `max_prominence`); soglia di qualità prominenza/rumore ≥ 2. **Punto misurato** (`fpd_method`): `peak` (attivo) = latenza del picco dell'onda; alternative `tangent` (intersezione della tangente di discesa con lo zero), `max_slope`, `50pct`, `baseline_return`, `consensus`. Il picco è il punto più ripetibile tra battiti ed elettrodi, ed è quello con cui è stata fatta la validazione sul report PHOENIX D10.1.
+Prima **sul template** (battito mediano di fino a 60 battiti allineati): finestra da 150 ms dopo lo spike a max(900 ms, 70 % del RR, min(85 % del RR, inizio del battito più precoce − 60 ms)): su un ritmo regolare la ricerca arriva all'85 % del ciclo, su uno irregolare si ferma prima di dove può cominciare il battito successivo; passa-basso 20 Hz e detrend; FPD minimo max(120 ms, 20 % RR, ≤ 600 ms); candidati = picchi positivi e negativi con prominenza ≥ 15 % della deviazione; **scelta dell'onda** `prefer_positive` (attiva): il picco positivo più prominente, purché abbia almeno metà della prominenza massima e stia entro 400 ms dal candidato più prominente, altrimenti il più prominente (alternativa `max_prominence`); soglia di qualità prominenza/rumore ≥ 2. **Punto misurato** (`fpd_method`): `peak` (attivo) = latenza del picco dell'onda; alternative `tangent` (intersezione della tangente di discesa con lo zero), `max_slope`, `50pct`, `baseline_return`, `consensus`. Il picco è il punto più ripetibile tra battiti ed elettrodi, ed è quello con cui è stata fatta la validazione sul report PHOENIX D10.1.
 
 Poi **per battito**, attorno alla posizione trovata sul template (± 150 ms), con soglia 1,5 × rumore; i battiti senza onda hanno FPD NaN. `fpd_ms_median` è la mediana; `fpd_reliable` richiede ≥ 50 % di battiti validi; `fpd_confidence` = metà qualità del template, metà coerenza tra battiti.
 
@@ -400,6 +400,7 @@ Domini TS, DM, EX, EG, TX, DS, SUPPEG + `define.xml` (SENDIG 3.1.1); formato `.x
 - **GUI**: la mappa dei campioni, il flusso per camera del batch e la decisione per composto sono solo da riga di comando/Python; il pannello Studi lavora per file. I punteggi degli elettrodi sono compositi (SNR + ripolarizzazione − CV); nella mappa del chip il colore è relativo al file.
 - **Vincoli di versione**: `numpy < 2` e `pyqtgraph < 0.14` finché non saranno provati; da qui l'ambiente virtuale.
 - **Validazione**: CiPA (Visone 2023) 6/7 composti; gold standard manuale GG; PHOENIX D10.1 cinque piastre (§7.3). Il consenso di camera è validato contro l'analisi di riferimento del report PHOENIX, non ancora contro misure manuali indipendenti del laboratorio.
+- **Finestra di ricerca dell'onda** (v3.15): fino all'85 % del ciclo su un ritmo regolare; su un ritmo irregolare si ferma prima di dove può cominciare il battito successivo. Sui tessuti con plateau positivo seguito da una deflessione negativa la scelta tra i due candidati resta delicata (prominenze simili); in camera il consenso tra elettrodi protegge, sul singolo elettrodo conviene guardare il template.
 - **Verifica della v3.14.0**: le discordanze tra commenti e codice e il difetto del filtro di ritmo (indici di gruppo non aggiornati) trovati scrivendo la scheda dei parametri sono stati corretti nella v3.14.1 (`DOCUMENTATION.md` §11.12); i valori di camera sulla piastra PHOENIX PM01001 sono invariati.
 
 # 12. Risoluzione dei problemi
@@ -411,6 +412,7 @@ Domini TS, DM, EX, EG, TX, DS, SUPPEG + `define.xml` (SENDIG 3.1.1); formato `.x
 | `No module named h5py` aprendo un `.h5` | `pip install -e ".[mcs]"`; i `.npz` non lo richiedono |
 | "Nessun battito rilevato" | guadagno sbagliato (CSV: `amplifier_gain`), tessuto fermo, elettrodo piatto: provare un altro elettrodo o il preset `sensitive` |
 | FPD NaN con `fpd_reliable` falso | onda di ripolarizzazione non visibile: controllare il template; sui chip il motivo è in `chamber_status_reason` |
+| Composto che allunga molto il QT: l'FPD si ferma o salta | la ricerca arriva all'85 % del ciclo su un ritmo regolare (fino alla v3.14.1 al 70 %); un'onda oltre l'80 % del ciclo si fonde con il battito successivo e non è misurabile (il criterio FPD/RR ≤ 0,8 lo esclude): è il limite fisico, non del software |
 | "ritmo irregolare" / "conduzione persa" / "tessuto fermo" | stato della camera: è un risultato, non un errore; il periodo resta disponibile |
 | Dose senza ΔFPDc | nessun riferimento analizzabile per quel tessuto, baseline escluso dall'inclusione, o periodo > 6 s: vedere `Normalization` nel report |
 | Composto "dati insufficienti" | meno di 2 concentrazioni misurate su ≥ 2 tessuti: controllare `samples.csv` (item, dosi, unità) |

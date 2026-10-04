@@ -52,6 +52,7 @@ CV_IRREGULAR_PCT = 15.0
 SYNC_LOST = 0.5
 FPD_MAX_FRACTION_BP = 0.8
 FPD_AGREE_PCT = 15.0
+REF_OWN_LATENCY_PCT = 5.0    # electrode's own latency used for its reference template only within this
 MIN_CORR = 0.8
 TEMPLATE_HALF_S = 0.12
 TEMPLATE_HALF_SHORT_S = 0.06
@@ -247,6 +248,10 @@ def analyze_chamber(df, fs, electrodes, stimulation=(), cfg=None, reference=None
     # FPD per electrode on the median beat (20 Hz low-pass), recording electrodes only
     bp = out['bp_ms'] / 1000
     post = min(4.0, max(1.15, 0.95 * bp))
+    # where the next beat can start (low percentile of the common-beat
+    # intervals): bounds the repolarisation search window
+    rr_low = float(np.percentile(d, float(getattr(cfg.repolarization, 'search_end_next_beat_pct', 10.0)))) \
+        if len(d) >= 5 else None
     hw, hws = int(TEMPLATE_HALF_S * fs), int(TEMPLATE_HALF_SHORT_S * fs)
     rec = [e for e in usable if e not in stimulation] or usable
     beats_lp = {}
@@ -262,7 +267,8 @@ def analyze_chamber(df, fs, electrodes, stimulation=(), cfg=None, reference=None
         for e, m in beats_lp.items():
             try:
                 f_s, _sign, _amp, _conf, _pk, _det = find_repolarization_on_template(m, fs, pre_ms=PRE_S * 1000,
-                                                                                        cfg=cfg.repolarization, median_bp_s=bp)
+                                                                                        cfg=cfg.repolarization, median_bp_s=bp,
+                                                                                        rr_low_s=rr_low)
             except (ValueError, IndexError):
                 f_s = None
             if f_s is not None and f_s > 0:
@@ -282,9 +288,17 @@ def analyze_chamber(df, fs, electrodes, stimulation=(), cfg=None, reference=None
         out.update({'fpd_ms': cons, 'fpd_n': len(agree), 'fpd_method': 'consensus', 'ok': True,
                     'fpd_spread_note': '' if len(agree) >= 0.5 * len(valid) else
                     f'{len(valid) - len(agree)} of {len(valid)} electrodes give another FPD'})
+        # Reference wave per electrode: the consensus wave. An electrode's
+        # own latency is used only when it is the same wave within a few
+        # per cent (conduction delays along the tissue are tens of ms);
+        # an electrode whose own best peak is another deflection (the
+        # agreeing group spans up to ±FPD_AGREE_PCT around one anchor, so a
+        # second wave 13 % later can sit inside it) would otherwise carry
+        # that other wave into the dose tracking (v3.15).
         ref = {}
         for e, m in beats_lp.items():
-            f0 = agree.get(e, cons)
+            own = agree.get(e)
+            f0 = own if own is not None and abs(own / cons - 1) <= REF_OWN_LATENCY_PCT / 100 else cons
             k = int(PRE_S * fs) + int(f0 / 1000 * fs)
             if k - hw >= 0 and k + hw <= len(m):
                 ref[e] = {'f0_ms': float(f0), 'template': m[k - hw:k + hw].astype(np.float32).tolist(),

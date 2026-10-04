@@ -449,13 +449,26 @@ class RepolarizationConfig:
     search_end_ms: float = 900.0        # stop searching N ms after spike
 
     # --- Adaptive search window extension ---
-    # For signals with long beat periods (e.g. dofetilide-induced bradycardia),
-    # the fixed search_end_ms may be too short to reach the real T-wave.
-    # When median_bp is available, the effective search end is:
-    #   max(search_end_ms, search_end_pct_rr × RR_ms)
-    # 70% of RR is safe because the T-wave always ends well before the next beat.
-    # Set to 0.0 to disable (use fixed search_end_ms only).
-    search_end_pct_rr: float = 0.70
+    # For signals with long beat periods the fixed search_end_ms is too
+    # short to reach the T-wave. With the rhythm known, the window ends at
+    #   max(search_end_ms,
+    #       search_end_pct_rr_safe × RR,
+    #       min(search_end_pct_rr × RR, RR_low − search_end_next_beat_margin_ms))
+    # where RR is the median beat period and RR_low its
+    # search_end_next_beat_pct-th percentile: the search reaches 85 % of the
+    # cycle, but never closer than the margin to where the next beat can
+    # start (the template is a median over beats, so the next
+    # depolarisation leaks into it from the shortest cycles onwards). On a
+    # regular rhythm the extension is the full 85 %; on an irregular one it
+    # falls back towards the 70 % always searched. Until v3.14.1 the end
+    # was 70 % of RR: a T-wave at 71–80 % of the cycle (manual gold
+    # standard GG: 5 of 271 electrodes; a strong hERG blocker on a slow
+    # tissue) was out of reach. Set search_end_pct_rr to 0.0 to disable
+    # the RR-based extension (fixed search_end_ms only).
+    search_end_pct_rr: float = 0.85
+    search_end_pct_rr_safe: float = 0.70
+    search_end_next_beat_pct: float = 10.0
+    search_end_next_beat_margin_ms: float = 60.0
 
     # --- Minimum FPD constraint ---
     # Physiological floor: FPD below this is almost certainly an

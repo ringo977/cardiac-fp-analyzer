@@ -32,6 +32,7 @@ from .repolarization import (
 from .repolarization import (
     find_repolarization_per_beat as _find_repolarization_per_beat,
 )
+from .repolarization import search_window_end_ms as _search_window_end_ms
 
 logger = logging.getLogger(__name__)
 
@@ -373,7 +374,7 @@ def build_beat_template(beats_data, fs, cfg=None):
 def extract_beat_parameters(beat_data, beat_time, fs, rr_interval=None,
                            template_fpd_samples=None, template_peak_samples=None,
                            template_repol_sign=1, cfg=None,
-                           beat_period_s=None):
+                           beat_period_s=None, next_rr_s=None):
     """
     Extract parameters from a single segmented beat.
 
@@ -410,7 +411,8 @@ def extract_beat_parameters(beat_data, beat_time, fs, rr_interval=None,
         template_peak_samples=template_peak_samples,
         template_repol_sign=template_repol_sign,
         cfg=cfg,
-        beat_period_s=beat_period_s
+        beat_period_s=beat_period_s,
+        next_rr_s=next_rr_s,
     )
     params['fpd_ms'] = fpd * 1000 if fpd is not None else np.nan
     params['repol_amplitude_mV'] = repol_amp * 1000 if not np.isnan(repol_amp) else np.nan
@@ -562,23 +564,30 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None,
     # two estimates and let the template search guard the extension.
     window_bp_s = median_bp_s
     window_guard_after_ms = None
+    # Where the next beat can start: a low percentile of the beat periods
+    # of the rhythm (all_beat_indices, the rhythm train when applied). The
+    # search window stops a margin before it (search_window_end_ms).
+    rr_low_s = None
+    _rr_src = all_beat_indices if all_beat_indices is not None and len(all_beat_indices) >= 6 else beat_indices
+    if _rr_src is not None and len(_rr_src) >= 6:
+        _rr = np.diff(np.asarray(_rr_src, dtype=float)) / fs
+        _rr = _rr[_rr > 0]
+        if len(_rr) >= 5:
+            rr_low_s = float(np.percentile(_rr, float(getattr(rc, 'search_end_next_beat_pct', 10.0))))
     if getattr(rc, 'window_rr_from_template_beats', False) and len(beat_indices) >= 3:
         kept_bp = np.diff(np.asarray(beat_indices, dtype=float)) / fs
         kept_bp = kept_bp[kept_bp > 0]
         if len(kept_bp) > 0:
             kept_med = float(np.median(kept_bp))
             if median_bp_s is None or kept_med > median_bp_s:
-                old_end_ms = rc.search_end_ms
-                if getattr(rc, 'search_end_pct_rr', 0.0) > 0 and median_bp_s:
-                    old_end_ms = max(old_end_ms, rc.search_end_pct_rr * median_bp_s * 1000)
-                window_guard_after_ms = old_end_ms
+                window_guard_after_ms = _search_window_end_ms(rc, median_bp_s, rr_low_s)
                 window_bp_s = kept_med
 
     if template is not None and not signal_too_weak:
         pre_ms = rc.segment_pre_ms
         fpd_result = _find_repolarization_on_template(
             template, fs, pre_ms=pre_ms, cfg=cfg,
-            median_bp_s=window_bp_s, guard_after_ms=window_guard_after_ms)
+            median_bp_s=window_bp_s, guard_after_ms=window_guard_after_ms, rr_low_s=rr_low_s)
         if fpd_result[0] is not None:
             template_fpd_samples = fpd_result[0]
             template_repol_sign = fpd_result[1]
@@ -618,10 +627,19 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None,
             t_spike_shape = t_spike - t_spike.mean()
     inversion_thr = float(getattr(rc, 'inversion_corr_threshold', -0.5))
 
+    # The beat's own next period (to the next beat of the rhythm, more than
+    # 50 ms later): bounds the per-beat repolarisation window.
+    _all_sorted = np.sort(np.asarray(all_beat_indices if all_beat_indices is not None else beat_indices, dtype=float))
+
+    def _next_rr_s(bi_g):
+        j = np.searchsorted(_all_sorted, bi_g + 0.05 * fs, side='left')
+        return float((_all_sorted[j] - bi_g) / fs) if j < len(_all_sorted) else None
+
     for i, (bd, bt) in enumerate(zip(beats_data, beats_time)):
         rr = local_rr[i] if i < len(local_rr) else None
         # Use per-beat RR for adaptive min FPD; fall back to median
         bp_for_beat = rr if rr is not None else median_bp_s
+        next_rr = _next_rr_s(beat_indices[i]) if i < len(beat_indices) else None
 
         # Per-beat polarity detection: check if this beat's spike is inverted
         # relative to the template.  If so, flip the repol sign and drop the
@@ -649,7 +667,8 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None,
             template_peak_samples=beat_tpl_peak,
             template_repol_sign=beat_repol_sign,
             cfg=cfg,
-            beat_period_s=bp_for_beat
+            beat_period_s=bp_for_beat,
+            next_rr_s=next_rr,
         )
         params['beat_number'] = i + 1
         params['rr_interval_ms'] = rr * 1000 if rr is not None else np.nan

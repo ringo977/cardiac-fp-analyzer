@@ -79,6 +79,33 @@ def test_silent_irregular_conduction_lost():
     assert lost['rhythm_status'] == 'conduction_lost' and lost['synchrony'] < CH.SYNC_LOST
 
 
+def test_reference_templates_follow_the_consensus_wave():
+    """An electrode whose own best peak is another deflection (here a later
+    wave on E18–E20) must not carry it into the dose tracking: its reference
+    template is centred on the consensus latency (v3.15)."""
+    cfg = AnalysisConfig()
+    df = _chamber_df(seed=21, beat_ms=1400.0, fpd_ms=600.0, n_s=30.0)
+    # a second, larger hump 180 ms after the T-wave on three electrodes
+    t = np.arange(len(df)) / FS
+    period = 1.4
+    for e in ('E18', 'E19', 'E20'):
+        extra = np.zeros(len(df))
+        for k in range(1, int(30 / period)):
+            c = k * period + 0.78
+            extra += 25e-6 * np.exp(-0.5 * ((t - c) / 0.03) ** 2)
+        df[e] = df[e] + extra
+    base = CH.analyze_chamber(df, FS, CHAMBER.electrodes, CHAMBER.stimulation, cfg)
+    assert base['rhythm_status'] == 'regular' and base['ok']
+    assert base['fpd_ms'] == pytest.approx(600, abs=40)
+    own = base['electrode_fpd']
+    assert all(own[e] > 700 for e in ('E18', 'E19', 'E20') if e in own)      # their own peak is the later hump
+    for e in ('E18', 'E19', 'E20'):
+        if e in base['reference']['electrodes']:
+            assert base['reference']['electrodes'][e]['f0_ms'] == pytest.approx(base['fpd_ms'], rel=1e-6)
+    for e, r in base['reference']['electrodes'].items():
+        assert abs(r['f0_ms'] / base['fpd_ms'] - 1) <= CH.REF_OWN_LATENCY_PCT / 100 + 1e-9
+
+
 def test_agreeing_groups():
     assert CH.agreeing({'a': 100.0, 'b': 105.0, 'c': 200.0, 'd': 210.0, 'e': 205.0}) == {'c': 200.0, 'd': 210.0, 'e': 205.0}
     assert set(CH.agreeing({'a': 100.0, 'b': 110.0, 'c': 300.0})) == {'a', 'b'}

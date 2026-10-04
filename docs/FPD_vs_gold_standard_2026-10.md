@@ -81,3 +81,18 @@ Corpus del paper (Visone 2023, 8 registrazioni): errore medio 3.4 % → 3.2 %, s
 - Template **senza onda T visibile** (rumore dominante, gradi B/C): l'analista la vede sui singoli battiti, la mediana no. Serve un approccio per battito con vincolo di coerenza tra battiti, non una regola sul template.
 - Elettrodi con **RR sbagliato** per sovra-rilevazione residua: sistemata la finestra, resta sbagliato il BP. Problema di detection.
 - La convenzione del lobo positivo vale nell'87 % dei casi: negli altri l'analista segna il negativo, e la regola lo sbaglia.
+
+
+## Parte III — Finestra di ricerca fino all'85 % del ciclo (4 ottobre, v3.15.0)
+
+La finestra finiva al 70 % del RR; 5 elettrodi su 271 (4 DEV, 1 TEST) hanno l'FPD dell'analista oltre quel limite (fino al 78 % del ciclo) e il software li sbagliava tutti. Ora la finestra arriva all'85 % del RR su un ritmo regolare e si ferma 60 ms prima del 10° percentile degli intervalli su uno irregolare (`tools/compare_gold.py`, tag `new_w85` contro `v3.14.1_w70`).
+
+| | DEV (189 analizzabili, 145 con FPD) | TEST (83, 63) — una esecuzione |
+|---|---|---|
+| FPD entro ±10 % (riportati) | 95 → 95 | 46 → 46 |
+| FPD entro ±20 % | 105 → 106 | 52 → 52 |
+| errore mediano | 4,1 → 2,9 % | 2,6 → 2,7 % |
+| elettrodi con BP corretto: entro ±5 % / ±10 % | 59 → 61 / 71 → 72 su 90 | 32 → 33 / 38 → 38 su 44 |
+| elettrodi con BP corretto: 90° percentile dell'errore | 35 → 30 % | 10,6 → 10,2 % |
+
+Dei 4 FPD DEV oltre il 70 %: `Exp10_ChipE_ch2_TI12_…_A el1` da −49 % a +1,6 %; `Exp5_chipF_ch3_Ti02_…_C el1` da −61 % a +23 % e `Exp8_ChipE_…_C_post_rec el2` da −76 % a −64 % (periodo sbagliato in entrambi); `Exp8_ChipE_…_C el2` invariato (nessun FPD). Gli altri elettrodi che cambiano (70 DEV, 25 TEST) hanno quasi tutti il periodo sbagliato per sovra-rilevazione: lì la finestra, vecchia o nuova, misura un template senza senso. Due regressioni con periodo corretto: `Exp5_chipE_ch2_chipA_ch2_baseline el1` (1522 → 1060 ms, analista 1521: un plateau positivo e una deflessione negativa di prominenza quasi uguale, la regola `prefer_positive` cambia scelta con la pendenza del detrend) e `Exp7_ChipC_ch1_Ti01_…_C el1` (TEST, 18 → 38 %). È la fragilità già nota del §7, non della finestra.

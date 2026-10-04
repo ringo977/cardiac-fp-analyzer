@@ -40,6 +40,7 @@ from cardiac_fp_analyzer.mcs_hdf5 import STIMULUS_SUBTYPES
 from cardiac_fp_analyzer.overrides import apply_overrides, load_overrides
 from cardiac_fp_analyzer.parameters import extract_all_parameters
 from cardiac_fp_analyzer.quality_control import assess_analysability, validate_beats
+from cardiac_fp_analyzer.repolarization import search_window_end_ms
 from cardiac_fp_analyzer.report import generate_excel_report, generate_pdf_report
 from cardiac_fp_analyzer.rhythm_integration import (
     apply_rhythm_filter,
@@ -216,8 +217,9 @@ def _analyze_from_beats(
     _bp_pre = compute_beat_periods(bi_stats, fs)
     _median_bp_s = float(np.median(_bp_pre)) if len(_bp_pre) > 0 else 0.0
     _pct_rr = getattr(rep_cfg, 'search_end_pct_rr', 0.0)
-    _adaptive_end_ms = (_pct_rr * _median_bp_s * 1000.0
-                        if (_pct_rr > 0 and _median_bp_s > 0) else 0.0)
+    # The segment must hold the longest window the search can use
+    # (search_window_end_ms without the next-beat cap).
+    _adaptive_end_ms = search_window_end_ms(rep_cfg, _median_bp_s or None)
     # 50 ms margin after the effective search end so the repolarization
     # tail is never clipped at the template boundary.
     _post_ms = max(850.0,
@@ -346,10 +348,7 @@ def _analyze_from_beats(
         _bp_post = compute_beat_periods(bi_fpd, fs)
         _median_bp_post_s = (float(np.median(_bp_post))
                              if len(_bp_post) > 0 else 0.0)
-        if _pct_rr > 0 and _median_bp_post_s > 0:
-            _adaptive_end_post_ms = _pct_rr * _median_bp_post_s * 1000.0
-        else:
-            _adaptive_end_post_ms = 0.0
+        _adaptive_end_post_ms = search_window_end_ms(rep_cfg, _median_bp_post_s or None)
         _post_ms_needed = max(850.0,
                                rep_cfg.search_end_ms + 50.0,
                                _adaptive_end_post_ms + 50.0)
