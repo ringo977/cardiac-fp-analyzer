@@ -1161,6 +1161,14 @@ class AnalysisConfig:
     # Set to False to ignore any sidecars (e.g. for a pristine re-run).
     use_overrides: bool = True
 
+    # ── Multi-chamber chips (MCS files) ──
+    # 'auto': a file whose channel labels match a known layout (chambers.py:
+    # 'uheart_mvp_64', E1…E64) is analysed as one recording per chamber,
+    # each restricted to the chamber's electrodes, with the stimulation
+    # electrodes left out of the electrode choice. A layout name forces
+    # it; 'none' treats the file as one tissue.
+    chamber_layout: str = 'auto'
+
     # ── Serialization ──
 
     def to_dict(self) -> dict:
@@ -1232,6 +1240,8 @@ class AnalysisConfig:
             cfg.enable_spectral = d['enable_spectral']
         if 'use_overrides' in d:
             cfg.use_overrides = bool(d['use_overrides'])
+        if 'chamber_layout' in d:
+            cfg.chamber_layout = str(d['chamber_layout'] or 'auto')
 
         return cfg
 

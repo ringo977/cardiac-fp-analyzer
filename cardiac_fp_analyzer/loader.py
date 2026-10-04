@@ -92,6 +92,23 @@ def is_recording_file(filepath):
     return False
 
 
+def recording_channels(filepath):
+    """Channel labels of a recording without loading the data: the electrode
+    labels of the raw stream of an MCS file, ['el1', 'el2'] (or ['el1']) for
+    a CSV. [] when they cannot be read."""
+    p = Path(filepath)
+    if p.suffix.lower() in ('.h5', '.hdf5', '.hdf'):
+        try:
+            from .mcs_hdf5 import inspect
+            rec = inspect(p)['recordings'][0]
+            el = [a for a in rec['analog'] if a['subtype'] == 'Electrode']
+            raw = [a for a in el if 'raw' in a['label'].lower()]
+            return list((raw or el or rec['analog'])[0]['channels'])
+        except (OSError, KeyError, IndexError, ImportError, ValueError):
+            return []
+    return [f'el{c}' for c in input_columns(p)]
+
+
 def electrode_columns(df):
     """Signal columns of a loaded recording, in file order ('el1', 'el2' or
     the electrode labels of an MCS file)."""
@@ -221,6 +238,13 @@ _T0_TOKEN = re.compile(r'(?:^|[_\s-])t0\d?(?=$|[_\s-])', re.IGNORECASE)
 # 't1'…'t7' with no drug, or 'Ctrl': time-matched control recordings.
 _TIME_CONTROL = re.compile(r'(?:t(\d{1,2}))?[\s_-]*(ctrl|ctr|control)?', re.IGNORECASE)
 _TISSUE_IN_NAME = re.compile(r'chip[\s_-]*[A-Za-z0-9]+?[\s_-]*ch[\s_-]*\d+[\s_-]*', re.IGNORECASE)
+# Multi Channel Systems recordings, one file per chip (plate) and condition:
+# '2026-01-27T12-00-41McsRecording_PM01001_baseline_Recording-0_(…)'. The
+# condition is 'baseline' or the dose letter; a suffix after the letter is a
+# note ('D_heater'). The chambers of the chip come from the layout
+# (chambers.py) or from samples.csv, not from the name.
+_MCS_NAME = re.compile(r'McsRecording_(?P<plate>[A-Za-z0-9]+)_(?P<cond>[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*?)_Recording-?(?P<rec>\d+)',
+                       re.IGNORECASE)
 
 
 def _conc_value(num):
@@ -250,6 +274,16 @@ def parse_filename(filename):
     info = {'chip': None, 'channel': None, 'drug': None,
             'concentration': None, 'is_baseline': False}
     stem = Path(filename).stem
+    mcs = _MCS_NAME.search(stem)
+    if mcs:
+        cond = mcs.group('cond')
+        info.update({'chip': mcs.group('plate'), 'mcs_recording': int(mcs.group('rec')), 'format': 'mcs_hdf5'})
+        if _BASELINE_WORD.search(cond) or _T0_TOKEN.search(cond):
+            info.update({'is_baseline': True, 'drug': 'baseline', 'concentration': '0',
+                         'reference_kind': 't0' if _T0_TOKEN.search(cond) else 'baseline'})
+        else:
+            info['concentration'] = cond            # dose letter ('A') or letter with a note ('D_heater')
+        return info
     old_layout = bool(_ELECTRODE_SUFFIX.search(stem))
     name = _ELECTRODE_SUFFIX.sub('', stem) or stem
 
@@ -368,6 +402,8 @@ def describe_recording(filepath):
     if day:
         info['day'] = day
 
+    if info.get('format') == 'mcs_hdf5':
+        return info                      # chip = plate; chambers from the layout or samples.csv
     tokens = _TISSUE_TOKEN.findall(p.stem)
     chip = chamber = None
     if tokens:
@@ -402,7 +438,8 @@ def describe_recording(filepath):
 
 
 def tissue_key(experiment, day, chip, chamber):
-    """Normalisation key of one tissue: 'exp5/day7/chipB_ch1'.
+    """Normalisation key of one tissue: 'exp5/day7/chipB_ch1' (or
+    '-/-/chipPM01001_chA' for a chamber of a multi-chamber chip).
 
     ``experiment`` and ``day`` are folder names ('Exp 5', 'Day7', None);
     the key reads 'exp<N>' and 'day<N>' from them, '-' when absent.
@@ -415,7 +452,9 @@ def tissue_key(experiment, day, chip, chamber):
         ek = re.sub(r'\W+', '', str(experiment).lower()) or '-'
     dm = _DAY_DIR.match(str(day).strip()) if day else None
     dk = f"day{int(dm.group(1))}" if dm else '-'
-    return f"{ek}/{dk}/chip{str(chip).upper()}_ch{int(chamber)}"
+    ch = str(chamber).strip()
+    ch = str(int(ch)) if ch.isdigit() else ch.upper()      # '1' or a chamber letter ('A')
+    return f"{ek}/{dk}/chip{str(chip).upper()}_ch{ch}"
 
 
 # ── Two tissues in one file ───────────────────────────────────────────

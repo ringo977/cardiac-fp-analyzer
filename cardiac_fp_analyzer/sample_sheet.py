@@ -9,6 +9,11 @@ and the dose from the folder layout and the file name
   input records a different tissue and the name lists them in input order
   ('Exp1_ChipP_ch1_K01_ChipQ_ch2_K02_A'). Each input becomes a recording
   of its own tissue (``plan_batch``). An input written 'na' holds no tissue.
+* **Multi-chamber chips** (Multi Channel Systems files, one file per chip
+  and condition): each chamber of the layout (chambers.py) becomes a
+  recording of its own tissue; the sheet says which test item and dose each
+  chamber received (one row per file and chamber, chamber letter in the
+  'electrode' column or in 'chamber').
 * **Names that are wrong or ambiguous**: a chamber number typed wrong, the
   same chip letter used for two chips, repeated recordings, a file with two
   inputs and one tissue named. A ``samples.csv`` in the analysed folder (or
@@ -24,7 +29,9 @@ Columns (English or Italian headers, comma or semicolon separated):
   file        path relative to the folder of the sheet, or the bare file
               name when it is unique there
   electrode   el1 / el2 (input 1 / 2); empty or 'auto' = the software picks,
-              as for any single-tissue file
+              as for any single-tissue file. For a multi-chamber MCS file:
+              the chamber letter ('A') — the software picks the electrode
+              within the chamber — or an electrode label ('E18')
   experiment  optional: overrides the experiment folder (a chip recorded in
               the folder of another experiment)
   chip, chamber
@@ -79,7 +86,13 @@ def _norm_electrode(value):
     if s in ('', 'auto'):
         return 'auto'
     m = re.fullmatch(r'(?:el|input|ingresso|channel|canale)?\s*([12])', s)
-    return f'el{m.group(1)}' if m else None
+    if m:
+        return f'el{m.group(1)}'
+    if re.fullmatch(r'[a-z]', s):                       # chamber letter of a multi-chamber chip
+        return s.upper()
+    if re.fullmatch(r'e\d{1,3}', s):                    # electrode label of an MCS file
+        return s.upper()
+    return None
 
 
 @dataclass
@@ -88,7 +101,7 @@ class SheetRow:
     electrode: str = 'auto'
     experiment: str = ''
     chip: str = ''
-    chamber: int | None = None
+    chamber: int | str | None = None            # 1, 2 … or a chamber letter ('A')
     item: str = ''
     dose: str = ''
     exclude: str = ''
@@ -141,16 +154,18 @@ def read_sample_sheet(path):
             continue
         el = _norm_electrode(get(rec, 'electrode'))
         if el is None:
-            problems.append(f"line {n}: electrode '{get(rec, 'electrode')}' not understood (el1, el2 or empty)")
+            problems.append(f"line {n}: electrode '{get(rec, 'electrode')}' not understood (el1, el2, a chamber letter, an electrode label or empty)")
             continue
         chamber = None
         ch_txt = get(rec, 'chamber')
         if ch_txt:
-            m = re.fullmatch(r'(?:ch|camera|chamber)?\s*(\d+)', ch_txt.lower())
+            m = re.fullmatch(r'(?:ch|camera|chamber)?\s*(\d+|[A-Za-z])', ch_txt.strip())
             if m is None:
                 problems.append(f"line {n}: chamber '{ch_txt}' not understood")
                 continue
-            chamber = int(m.group(1))
+            chamber = int(m.group(1)) if m.group(1).isdigit() else m.group(1).upper()
+        elif re.fullmatch(r'[A-Z]', el):
+            chamber = el                                   # chamber letter given as the electrode
         row = SheetRow(file=name.replace('\\', '/'), electrode=el, experiment=get(rec, 'experiment'),
                        chip=re.sub(r'^chip[\s_-]*', '', get(rec, 'chip'), flags=re.IGNORECASE).upper(),
                        chamber=chamber, item=get(rec, 'item'), dose=get(rec, 'dose'),
@@ -220,6 +235,21 @@ def _name_update(entry, entries, path, info, two_tissues):
     return upd
 
 
+def _chamber_fields(path, chamber, layout=None):
+    """Electrodes of a chamber of a multi-chamber file (or {} when the file
+    has no layout or the chamber is not in it)."""
+    from .chambers import layout_for
+    from .loader import recording_channels
+    if not isinstance(chamber, str):
+        return {}
+    lay = layout_for(recording_channels(path), layout or 'auto')
+    if lay is None or chamber not in lay.names:
+        return {}
+    c = lay[chamber]
+    return {'electrodes': list(c.electrodes), 'stimulation_electrodes': list(c.stimulation),
+            'chamber_layout': lay.name, 'two_tissue_file': True}
+
+
 def _sheet_update(row, info, two_tissues):
     role = row.role
     upd = {'tissue': tissue_key(row.experiment or info.get('experiment'), info.get('day'), row.chip, row.chamber),
@@ -236,11 +266,38 @@ def _sheet_update(row, info, two_tissues):
     return upd
 
 
-def _units_from_sheet(path, rel, info, rows, report):
+def _units_from_sheet(path, rel, info, rows, report, layout=None):
     active = [r for r in rows if not r.exclude]
     for r in rows:
         if r.exclude:
             report['excluded'].append((rel, r.electrode, r.exclude))
+    if any(isinstance(r.chamber, str) for r in active):
+        # multi-chamber file: one recording per chamber row, electrode chosen
+        # within the chamber (or the electrode label the row gives)
+        out = []
+        seen = set()
+        for r in active:
+            if not isinstance(r.chamber, str):
+                report['issues'].append(f'{rel} line {r.line}: numbered chamber in a multi-chamber file; skipped')
+                continue
+            if r.chamber in seen:
+                report['issues'].append(f'{rel} line {r.line}: chamber {r.chamber} listed twice; only the first is used')
+                continue
+            seen.add(r.chamber)
+            fields = _chamber_fields(path, r.chamber, layout)
+            if not fields:
+                report['issues'].append(f'{rel} line {r.line}: chamber {r.chamber} not in the layout of the file; skipped')
+                continue
+            el = r.electrode if r.electrode.startswith('E') else 'auto'
+            if el != 'auto' and el not in fields['electrodes']:
+                report['issues'].append(f'{rel} line {r.line}: electrode {el} is not in chamber {r.chamber}; the software picks')
+                el = 'auto'
+            upd = _sheet_update(r, info, True)
+            upd.update(fields)
+            out.append({'file': path, 'electrode': el, 'update': upd, 'source': SHEET_NAME, 'multi': True})
+        report['multi_chamber_files'] += 1
+        report['from_sheet'] += len(out)
+        return out
     els = [r.electrode for r in active]
     if len(active) > 1 and ('auto' in els or len(set(els)) < len(els)):
         report['issues'].append(f'{rel}: {len(active)} rows need different electrodes (el1, el2); '
@@ -251,6 +308,34 @@ def _units_from_sheet(path, rel, info, rows, report):
     report['from_sheet'] += len(active)
     return [{'file': path, 'electrode': r.electrode, 'update': _sheet_update(r, info, two),
              'source': SHEET_NAME, 'multi': len(active) > 1} for r in active]
+
+
+def _units_from_layout(path, rel, info, report, layout=None):
+    """Multi-chamber file without a sheet: one recording per chamber of the
+    layout; chip = plate from the name, item unknown, dose from the name."""
+    from .chambers import layout_for
+    from .loader import recording_channels
+    if info.get('format') != 'mcs_hdf5':
+        return None
+    lay = layout_for(recording_channels(path), layout or 'auto')
+    if lay is None:
+        return None
+    role = 'baseline' if info.get('is_baseline') else 'dose'
+    out = []
+    for c in lay.chambers:
+        upd = {'tissue': tissue_key(info.get('experiment'), info.get('day'), info.get('chip') or path.stem, c.name),
+               'chip': info.get('chip') or path.stem, 'channel': c.name, 'chamber': c.name, 'item': None,
+               'role': role, 'is_baseline': role == 'baseline', 'dual_tissue': False, 'two_tissue_file': True,
+               'source': f'layout {lay.name}', 'electrodes': list(c.electrodes),
+               'stimulation_electrodes': list(c.stimulation), 'chamber_layout': lay.name}
+        if role == 'baseline':
+            upd.update({'drug': 'baseline', 'concentration': '0', 'reference_kind': info.get('reference_kind', 'baseline')})
+        else:
+            upd.update({'drug': info.get('drug'), 'concentration': info.get('concentration')})
+        out.append({'file': path, 'electrode': 'auto', 'update': upd, 'source': f'layout {lay.name}', 'multi': True})
+    report['multi_chamber_files'] += 1
+    report['from_layout'] += len(out)
+    return out
 
 
 def _units_from_name(path, rel, info, report):
@@ -275,20 +360,23 @@ def _units_from_name(path, rel, info, report):
     return [{'file': path, 'electrode': 'auto', 'update': None, 'source': '', 'multi': False}]
 
 
-def plan_batch(csv_files, data_dir, infos=None):
+def plan_batch(csv_files, data_dir, infos=None, layout=None):
     """Recordings to analyse: one per file, or one per input.
 
     Returns (units, report). Each unit: {'file', 'electrode' ('auto', 'el1',
-    'el2'), 'update' (file_info fields that replace those read from the
-    name, or None), 'source', 'multi' (the file yields several recordings),
-    'uid'}. ``report`` lists the sheets used, excluded inputs, files under a
+    'el2', or an electrode label), 'update' (file_info fields that replace
+    those read from the name, or None; for a chamber of a multi-chamber chip
+    it carries 'electrodes' and 'stimulation_electrodes'), 'source', 'multi'
+    (the file yields several recordings), 'uid'}. ``layout``: chamber layout
+    choice ('auto', 'none' or a name; AnalysisConfig.chamber_layout). ``report`` lists the sheets used, excluded inputs, files under a
     sheet but not listed in it, and problems found.
     """
     data_dir = Path(data_dir)
     infos = infos or {}
     sheets = find_sample_sheets(data_dir)
     report = {'sheets': [_rel(s, data_dir) for s in sheets], 'issues': [], 'excluded': [],
-              'not_in_sheet': [], 'two_tissue_files': 0, 'from_sheet': 0, 'from_name': 0}
+              'not_in_sheet': [], 'two_tissue_files': 0, 'multi_chamber_files': 0, 'from_sheet': 0,
+              'from_name': 0, 'from_layout': 0}
     by_file = defaultdict(list)
     for s in sheets:
         rows, problems = read_sample_sheet(s)
@@ -303,9 +391,10 @@ def plan_batch(csv_files, data_dir, infos=None):
             key = r.file.lower()
             while key.startswith('./'):
                 key = key[2:]
-            f = rel_index.get(key) or rel_index.get(key + '.csv')
+            f = rel_index.get(key) or rel_index.get(key + '.csv') or rel_index.get(key + '.h5')
             if f is None:
-                cands = name_index.get(Path(key).name) or name_index.get(Path(key).name + '.csv') or []
+                cands = (name_index.get(Path(key).name) or name_index.get(Path(key).name + '.csv')
+                         or name_index.get(Path(key).name + '.h5') or [])
                 if len(cands) > 1:
                     report['issues'].append(f"{rel_s} line {r.line}: '{r.file}' matches {len(cands)} files; "
                                             f"write the path")
@@ -322,11 +411,12 @@ def plan_batch(csv_files, data_dir, infos=None):
         info = infos.get(f) or describe_recording(f)
         rel = _rel(f, data_dir)
         if f in by_file:
-            units += _units_from_sheet(f, rel, info, by_file[f], report)
+            units += _units_from_sheet(f, rel, info, by_file[f], report, layout)
             continue
         if any(_is_under(f, d) for d in covered):
             report['not_in_sheet'].append(rel)
-        units += _units_from_name(f, rel, info, report)
+        from_layout = _units_from_layout(f, rel, info, report, layout)
+        units += from_layout if from_layout is not None else _units_from_name(f, rel, info, report)
     for i, u in enumerate(units):
         u['uid'] = i
     for msg in report['issues']:
@@ -345,6 +435,9 @@ def describe_plan(report) -> list[str]:
                      f"({report.get('from_sheet', 0)} recordings defined there)")
     if report.get('two_tissue_files'):
         lines.append(f"{report['two_tissue_files']} file(s) with two tissues, one recording per input")
+    if report.get('multi_chamber_files'):
+        lines.append(f"{report['multi_chamber_files']} multi-chamber file(s), one recording per chamber"
+                     + (f" ({report['from_layout']} from the chip layout)" if report.get('from_layout') else ''))
     if report.get('excluded'):
         lines.append(f"{len(report['excluded'])} input(s) left out (no tissue or excluded in samples.csv)")
     if report.get('not_in_sheet'):
@@ -359,9 +452,25 @@ def describe_plan(report) -> list[str]:
 #   Draft
 # ──────────────────────────────────────────────────────────────────────
 
-def _draft_rows_for_file(path, folder):
+def _draft_rows_for_file(path, folder, layout=None):
     info = describe_recording(path)
     rel = _rel(path, folder)
+    if info.get('format') == 'mcs_hdf5':
+        from .chambers import layout_for
+        from .loader import recording_channels
+        lay = layout_for(recording_channels(path), layout or 'auto')
+        is_ref = bool(info.get('is_baseline'))
+        dose = ('t0' if info.get('reference_kind') == 't0' else 'baseline') if is_ref else (info.get('concentration') or '')
+        if lay is None:
+            return [{'experiment': '', 'exclude': '', 'file': rel, 'electrode': '', 'chip': info.get('chip') or '',
+                     'chamber': '', 'item': '', 'dose': dose,
+                     'note': ['multi-electrode file without a known chamber layout: the software picks one electrode']}], info
+        rows = []
+        for c in lay.chambers:
+            rows.append({'experiment': '', 'exclude': '', 'file': rel, 'electrode': c.name, 'chip': info.get('chip') or '',
+                         'chamber': c.name, 'item': '', 'dose': dose,
+                         'note': [] if is_ref else ['write the test item of this chamber']})
+        return rows, info
     entries = parse_inputs(path.name)
     inputs = input_columns(path)
     named = [e for e in entries if not e.get('empty')]
@@ -419,7 +528,7 @@ def _draft_rows_for_file(path, folder):
     return rows, info
 
 
-def draft_sample_sheet(folder, write=True, chambers_per_chip=CHAMBERS_PER_CHIP):
+def draft_sample_sheet(folder, write=True, chambers_per_chip=CHAMBERS_PER_CHIP, layout=None):
     """Rows of a sample sheet as the software reads the names, with checks.
 
     One row per file, or per input for files with two tissues; the 'note'
@@ -437,7 +546,7 @@ def draft_sample_sheet(folder, write=True, chambers_per_chip=CHAMBERS_PER_CHIP):
     files = find_recordings(folder, is_sheet_file)
     rows = []
     for f in files:
-        frows, info = _draft_rows_for_file(f, folder)
+        frows, info = _draft_rows_for_file(f, folder, layout)
         for r in frows:
             ok = r['chip'] != '' and r['chamber'] not in ('', None)
             r['_tissue'] = tissue_key(info.get('experiment'), info.get('day'), r['chip'], r['chamber']) if ok else None

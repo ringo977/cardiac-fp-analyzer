@@ -124,3 +124,96 @@ def select_best_channel(df, fs, cfg=None, channels=None):
             logger.debug("Channel %s scoring failed: %s", ch, e)
             details[ch] = f'error: {e}'
     return best_ch, details
+
+
+# ──────────────────────────────────────────────────────────────────────
+#   Quick scoring for many electrodes (multi-chamber MCS files)
+# ──────────────────────────────────────────────────────────────────────
+
+def quick_electrode_scores(df, fs, channels, cfg=None, exclude=(), min_beats=10, bp_range_s=(0.2, 6.0)):
+    """Score electrodes cheaply (about 0.15 s each at 2 kHz) to pick the one to
+    analyse in a chamber of a multi-electrode chip.
+
+    For each electrode: band-pass as the pipeline, spikes = peaks of |signal|
+    above 5 × the robust noise (1.4826 MAD) at least 150 ms apart; then
+
+      snr          median spike peak-to-peak / noise
+      cv_pct       robust CV of the intervals (1.4826 MAD / median)
+      repol_snr    peak-to-peak of the median beat (20 Hz low-pass) between
+                   200 ms and 0.9 × period, over the low-pass noise
+      score        min(snr, 30) + 1.5·min(repol_snr, 10) − 0.4·cv_pct,
+                   −inf when fewer than ``min_beats`` spikes or the period is
+                   outside ``bp_range_s``
+
+    Electrodes in ``exclude`` (stimulation electrodes) get score −inf and
+    reason 'stimulation'. Returns {label: dict(score, snr, cv_pct, repol_snr,
+    n_beats, period_ms, reason)}.
+    """
+    from .filtering import lowpass_filter
+    fc = cfg.filtering if cfg is not None else None
+    if fc is None:
+        from .config import FilterConfig
+        fc = FilterConfig()
+    from scipy.signal import find_peaks
+    out = {}
+    for ch in channels:
+        r = {'score': -np.inf, 'snr': np.nan, 'cv_pct': np.nan, 'repol_snr': np.nan, 'n_beats': 0,
+             'period_ms': np.nan, 'reason': ''}
+        out[ch] = r
+        if ch in exclude:
+            r['reason'] = 'stimulation'
+            continue
+        x = np.asarray(df[ch].values, dtype=np.float64)
+        if not np.isfinite(x).all() or np.ptp(x) == 0:
+            r['reason'] = 'flat'
+            continue
+        f = full_filter_pipeline(x, fs, cfg=fc)
+        noise = 1.4826 * np.median(np.abs(f - np.median(f)))
+        if noise <= 0:
+            r['reason'] = 'flat'
+            continue
+        pk, _ = find_peaks(np.abs(f), height=5.0 * noise, distance=int(0.15 * fs))
+        r['n_beats'] = int(len(pk))
+        if len(pk) < min_beats:
+            r['reason'] = 'too few spikes'
+            continue
+        d = np.diff(pk) / fs
+        bp = float(np.median(d))
+        r['period_ms'] = bp * 1000
+        r['cv_pct'] = float(1.4826 * np.median(np.abs(d - bp)) / bp * 100)
+        w = int(0.02 * fs)
+        amp = np.median([np.ptp(f[max(0, k - w):k + w]) for k in pk])
+        r['snr'] = float(amp / noise)
+        if not (bp_range_s[0] <= bp <= bp_range_s[1]):
+            r['reason'] = 'period out of range'
+            continue
+        lp = lowpass_filter(f, fs, cutoff=20.0)
+        post = int(min(0.9 * bp, 1.5) * fs)
+        pre = int(0.05 * fs)
+        segs = [lp[k - pre:k + post] for k in pk if k - pre >= 0 and k + post <= len(lp)]
+        if len(segs) >= 5:
+            m = np.median(np.stack(segs), 0)
+            a, b = pre + int(0.2 * fs), len(m)
+            if b - a > int(0.1 * fs):
+                lp_noise = 1.4826 * np.median(np.abs(lp - np.median(lp)))
+                r['repol_snr'] = float(np.ptp(m[a:b]) / lp_noise) if lp_noise > 0 else np.nan
+        rep = 0.0 if not np.isfinite(r['repol_snr']) else min(r['repol_snr'], 10.0)
+        r['score'] = float(min(r['snr'], 30.0) + 1.5 * rep - 0.4 * min(r['cv_pct'], 100.0))
+    return out
+
+
+def select_electrode_quick(df, fs, channels, cfg=None, exclude=()):
+    """Best electrode among ``channels`` by ``quick_electrode_scores``; the
+    excluded ones are used only when no other electrode scores. Returns
+    (label, scores)."""
+    scores = quick_electrode_scores(df, fs, channels, cfg=cfg, exclude=exclude)
+    ranked = sorted(scores.items(), key=lambda kv: kv[1]['score'], reverse=True)
+    if ranked and np.isfinite(ranked[0][1]['score']):
+        return ranked[0][0], scores
+    if exclude:
+        fallback = quick_electrode_scores(df, fs, [c for c in channels if c in exclude], cfg=cfg)
+        ranked = sorted(fallback.items(), key=lambda kv: kv[1]['score'], reverse=True)
+        if ranked and np.isfinite(ranked[0][1]['score']):
+            scores.update(fallback)
+            return ranked[0][0], scores
+    return channels[0], scores

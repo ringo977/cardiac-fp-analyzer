@@ -23,7 +23,11 @@ from cardiac_fp_analyzer.beat_detection import (
     rhythm_train,
     segment_beats,
 )
-from cardiac_fp_analyzer.channel_selection import select_best_channel
+from cardiac_fp_analyzer.channel_selection import (
+    quick_electrode_scores,
+    select_best_channel,
+    select_electrode_quick,
+)
 from cardiac_fp_analyzer.filtering import full_filter_pipeline
 from cardiac_fp_analyzer.inclusion import apply_inclusion_criteria
 from cardiac_fp_analyzer.loader import (
@@ -590,20 +594,47 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
         if file_info_update:
             file_info.update(file_info_update)
 
+        # Electrodes this recording may use: the chamber's, for one chamber
+        # of a multi-chamber chip (sample_sheet.plan_batch), else every
+        # signal column of the file. Stimulation electrodes are never chosen
+        # automatically.
+        allowed = [c for c in (file_info.get('electrodes') or cols) if c in cols]
+        if file_info.get('electrodes') and not allowed:
+            raise ValueError(f"none of the electrodes {file_info['electrodes']} is in {filepath.name}")
+        stim = [c for c in (file_info.get('stimulation_electrodes') or []) if c in allowed]
         actual_ch = channel
         if channel == 'auto':
-            actual_ch, ch_det = select_best_channel(df, fs, cfg=config, channels=cols)
+            if len(allowed) <= 2 and not file_info.get('electrodes'):
+                actual_ch, ch_det = select_best_channel(df, fs, cfg=config, channels=allowed)
+            else:
+                # many electrodes (MCS chip): cheap scoring per electrode
+                actual_ch, sc = select_electrode_quick(df, fs, allowed, cfg=config, exclude=stim)
+                ch_det = {k: (f"spikes={v['n_beats']}, BP={v['period_ms']:.0f}ms, CV={v['cv_pct']:.1f}%, "
+                              f"SNR={v['snr']:.1f}, repol={v['repol_snr']:.1f}, score={v['score']:.1f}"
+                              if np.isfinite(v['score']) else (v['reason'] or 'no score')) for k, v in sc.items()}
+                file_info['electrode_scores'] = {k: round(v['score'], 1) for k, v in sc.items() if np.isfinite(v['score'])}
+                if np.isfinite(sc[actual_ch]['period_ms']):
+                    file_info['spike_period_ms'] = float(sc[actual_ch]['period_ms'])
+                    file_info['spike_cv_pct'] = float(sc[actual_ch]['cv_pct'])
             if verbose:
                 print(f"  Channel selection:")
                 for ch, d in ch_det.items():
                     print(f"    {ch}: {d}{' *' if ch==actual_ch else ''}")
-        elif channel not in cols:
-            raise ValueError(f"channel {channel!r} not in {filepath.name}; available: {cols}")
+        elif channel not in allowed:
+            raise ValueError(f"channel {channel!r} not in {filepath.name}"
+                             + (f" chamber {file_info.get('chamber')}" if file_info.get('chamber') else '')
+                             + f"; available: {allowed}")
+        elif len(allowed) > 2 or file_info.get('electrodes'):
+            # a given electrode of a chip: measure its spike period too (fast rhythms)
+            sc = quick_electrode_scores(df, fs, [channel], cfg=config)
+            if np.isfinite(sc[channel]['period_ms']):
+                file_info['spike_period_ms'] = float(sc[channel]['period_ms'])
+                file_info['spike_cv_pct'] = float(sc[channel]['cv_pct'])
         file_info['analyzed_channel'] = actual_ch
         if metadata.get('format') == 'mcs_hdf5':
             # electrode labels, stimulus events and the MCS spike detector's
             # time stamps travel with the result (pacing analysis to come)
-            file_info['electrodes'] = list(cols)
+            file_info.setdefault('electrodes', list(cols))
             file_info['paced'] = bool(metadata.get('paced'))
             if metadata.get('paced'):
                 file_info['stimulus_times_s'] = [t for e in metadata['events']
@@ -613,7 +644,9 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
 
         # ── Amplifier gain correction ──
         # Divide by gain to obtain real voltage.  Default gain=1 (no-op).
-        gain = config.amplifier_gain
+        # MCS files are already in physical units (volts at the electrode):
+        # no gain applies, whatever the configuration says.
+        gain = 1.0 if metadata.get('format') == 'mcs_hdf5' else config.amplifier_gain
         if gain != 1.0:
             raw = raw / gain
             if verbose:
@@ -624,6 +657,18 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
         if verbose: print(f"  Filtered ({actual_ch})")
 
         bd_cfg = config.beat_detection
+        # Fast rhythms (verapamil at high dose: periods of 250-350 ms) are
+        # shorter than the detector's minimum spacing (400 ms), which then
+        # keeps every other beat. The quick electrode scoring measures the
+        # spike period with a 150 ms spacing; when it is below the minimum
+        # spacing, the spacing follows the period for this recording.
+        fast = file_info.get('spike_period_ms')
+        if fast and fast < 1.1 * bd_cfg.min_distance_ms and (file_info.get('spike_cv_pct') or 0) <= 15.0:
+            import dataclasses
+            md = max(100.0, 0.5 * fast)
+            bd_cfg = dataclasses.replace(bd_cfg, min_distance_ms=md, retry_min_distance_ms=md)
+            file_info['min_distance_ms'] = md
+            if verbose: print(f"  Fast rhythm (spike period {fast:.0f} ms): minimum beat spacing {md:.0f} ms")
         bi, bt, det = detect_beats(filtered, fs, cfg=bd_cfg)
         if verbose: print(f"  Beats: {det['n_beats']} ({det['method']})")
 
@@ -912,7 +957,7 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
         # input, and a samples.csv in the folder overrides the names for the
         # files it lists (sample_sheet.plan_batch).
         infos = {f: describe_recording(f) for f in csv_files}
-        units, plan = plan_batch(csv_files, data_dir, infos)
+        units, plan = plan_batch(csv_files, data_dir, infos, layout=getattr(config, 'chamber_layout', 'auto'))
         for line in describe_plan(plan):
             logger.info(line)
             if verbose:
@@ -947,6 +992,34 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
         errors += err2
         for job, r in out2.items():
             out[job_of[job[2]]] = r
+        # A chamber of a multi-electrode chip keeps its baseline's electrode
+        # for the doses; when that electrode fails at a dose (flat, lost,
+        # not analysable) the other electrodes of the chamber still hold the
+        # tissue: the dose is re-run choosing among them.
+        fallback = []
+        for job in rest:
+            uid = job[2]
+            info = unit_info[job_of[uid]]
+            if not info.get('electrodes') or job[1] == 'auto':
+                continue
+            r = out.get(job_of[uid])
+            failed = r is None or (r.get('summary') or {}).get('not_analysable') \
+                or getattr(r.get('qc_report'), 'grade', None) == 'F'
+            if failed:
+                upd = dict(updates.get(uid) or {})
+                upd['electrodes'] = [e for e in info['electrodes'] if e != job[1]]
+                upd['tissue_electrode_fallback_from'] = job[1]
+                updates[uid] = upd
+                fallback.append((job[0], 'auto', uid))
+        if fallback:
+            counter['total'] += len(fallback)
+            if verbose:
+                print(f"  {len(fallback)} dose recording(s) re-run on another electrode of the chamber")
+            out3, err3 = _run_batch_jobs(fallback, config, n_workers, verbose, True, counter, updates)
+            for job, r in out3.items():
+                if r is not None and not (r.get('summary') or {}).get('not_analysable'):
+                    out[job_of[job[2]]] = r
+                    errors = [e for e in errors if str(job[0]) not in e]
         results = []
         for u in units:
             r = out.get(job_of[u['uid']])
@@ -960,6 +1033,9 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
                 t = tissue_el[fi['tissue']]
                 fi['tissue_electrode'] = t['electrode']
                 fi['tissue_electrode_from'] = t['baseline_file']
+                if fi.get('tissue_electrode_fallback_from'):
+                    fi['tissue_electrode_from'] = (f"{t['electrode']} failed on this recording; "
+                                                   f"{fi.get('analyzed_channel')} chosen among the chamber's electrodes")
             # one electrode (or one given input) per tissue: the tissue is
             # one normalisation group whatever input its files used
             fi['group_electrode'] = ''

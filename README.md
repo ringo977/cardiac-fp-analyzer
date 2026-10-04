@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.11.0
+**Versione**: 3.12.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali) o con sistemi **Multi Channel Systems** (file HDF5 del protocollo MCS RawData, fino a 64 elettrodi).
@@ -169,6 +169,13 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.12.0 (Ottobre 2026) — chip a più camere: una registrazione per camera
+- **Layout dei chip** (`chambers.py`): il µHeart MVP a 64 canali (4 camere × 12 elettrodi di registrazione + 4 di stimolazione, passo 400 µm; A = E16–E30 + E62, B = E31–E45 + E63, C = E1–E15 + E61, D = E46–E60 + E64). Un file MCS diventa una registrazione per camera, limitata agli elettrodi della camera; `AnalysisConfig.chamber_layout` (`auto`, nome, `none`).
+- **`samples.csv` per camera**: una riga per file e camera (lettera della camera in `electrode` o `chamber`, o l'etichetta di un elettrodo per imporlo) con test item e dose; la bozza le scrive già così. Nomi dei file MCS letti per chip e condizione.
+- **Scelta rapida dell'elettrodo** nella camera (spike, regolarità, onda di ripolarizzazione; elettrodi di stimolazione esclusi): circa 20 s per un file da 64 elettrodi invece di 4 minuti. L'elettrodo del baseline vale per le dosi; se su una dose non è analizzabile, la dose è rifatta su un altro elettrodo della camera.
+- **Ritmi veloci**: la distanza minima tra battiti segue il periodo degli spike quando il treno è regolare (verapamil 5 µM, 250–330 ms).
+- Sulle cinque piastre PHOENIX il batch per camera riproduce il periodo dell'analisi di riferimento (mediana 0,1 %, 95 % entro il 2 %); FPDc sui ritmi sopra 450 ms entro il 10 % nell'81 % dei casi.
 
 ### v3.11.0 (Ottobre 2026) — file HDF5 di Multi Channel Systems
 - **Lettore MCS-HDF5** (`mcs_hdf5.py`, extra `pip install ".[mcs]"`): i file `.h5` di Multi Channel Experimenter / DataManager (protocollo RawData) si analizzano come i CSV, da riga di comando, batch e GUI. Stream analogici con etichette (`E1`…`E64`), unità e fattore di conversione degli elettrodi; eventi dello stimolatore e della porta digitale (`paced`, `stimulus_times_s` in `file_info`); tempi e ritagli degli spike del rivelatore MCS.

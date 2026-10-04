@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.11.0
+**Versione**: 3.12.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -211,7 +211,19 @@ Legge i file CSV prodotti dal sistema Digilent WaveForms (Analog Discovery 2). I
 
 **Caricamento**: lo stream scelto è di default quello `Electrode` con "Raw" nell'etichetta (altrimenti il primo `Electrode`); si può indicare per nome (`Stream_1`) o per parte dell'etichetta (`'Filter (1)'`). Il DataFrame ha `time` e una colonna per elettrodo, con l'etichetta MCS (`E1`…`E64`) e i valori in volt (float32). La lettura è a blocchi lungo il tempo e la decimazione (sopra 3 kHz, a circa 2 kHz) avviene blocco per blocco con un FIR a fase lineare senza ritardo: una registrazione di 64 canali × 5 minuti a 20 kHz (650 MB) si carica in circa 20 s con meno di 0,7 GB di memoria. I metadati portano `format = 'mcs_hdf5'`, `channels`, `unit`, `stream`, `conversion`, `datetime` (da `DateInTicks`), `events`, `spike_timestamps` e `paced`: vero quando c'è uno stream di eventi dello stimolatore o della porta digitale (`StgSideband`, `DigitalPort`) con almeno un evento. `inspect(path)` elenca registrazioni e stream; `read_segments(path)` restituisce i ritagli; `write_mcs_h5(...)` scrive un file minimo nello stesso formato (test, conversioni).
 
-**Canale**: `channel='auto'` valuta tutti gli elettrodi del file con `select_best_channel` e tiene il migliore; in alternativa si indica l'etichetta (`'E18'`). `file_info` riceve `electrodes` (le etichette del file), `paced` e, se il file ha eventi di stimolo, `stimulus_times_s`. La mappa elettrodi → camere, l'FPD di consenso per camera e l'analisi delle registrazioni stimolate (artefatto, cattura, latenza) non sono ancora nel software: per ora ogni file dà una misura su un elettrodo, come per i CSV.
+**Canale**: `channel='auto'` sceglie l'elettrodo; in alternativa si indica l'etichetta (`'E18'`). `file_info` riceve `electrodes` (le etichette tra cui si è scelto), `paced` e, se il file ha eventi di stimolo, `stimulus_times_s`. L'analisi delle registrazioni stimolate (artefatto, cattura, latenza) non è ancora nel software.
+
+#### Chip a più camere (dalla v3.12)
+
+Un file MCS contiene tutti gli elettrodi del chip, e un chip ospita più microtessuti, uno per camera. Il software misura un tessuto alla volta, quindi un file a più camere diventa **una registrazione per camera**, ognuna limitata agli elettrodi della sua camera (`chambers.py`, `sample_sheet.plan_batch`).
+
+- **Layout** (`chambers.py`): `uheart_mvp_64`, il µHeart MVP a 64 canali del progetto PHOENIX (deliverable D1.2, confermato dal laboratorio): quattro moduli da 16 elettrodi, due coppie di stimolazione alle estremità del canale (il 1°–2° e il 14°–15° di ogni blocco di 15) e 12 elettrodi di registrazione in fila con passo 400 µm, il dodicesimo è uno dei quattro pad E61–E64 che l'acquisizione aggiunge dopo E60. Lettere del laboratorio: A = E16–E30 + E62, B = E31–E45 + E63, C = E1–E15 + E61, D = E46–E60 + E64. `AnalysisConfig.chamber_layout`: `'auto'` (il layout si riconosce dalle etichette dei canali: 64 canali E1…E64 → µHeart), un nome, o `'none'` (file come un solo tessuto).
+- **Nomi dei file MCS** (`McsRecording_<chip>_<condizione>_Recording-<n>_…`): il chip (piastra, `PM01001`) e la condizione (`baseline`, lettera di dose, `D_heater`) vengono dal nome; il tessuto è `-/-/chipPM01001_chA` (con la cartella dell'esperimento, `exp7/-/chipPM01001_chA`). Il test item di ogni camera va scritto in `samples.csv`: una riga per file e camera, con la lettera della camera nella colonna `electrode` o `chamber`; `electrode` può anche essere l'etichetta di un elettrodo (`E18`) per imporlo. Senza foglio, il batch crea comunque una registrazione per camera, senza test item. Attenzione: i nomi MCS contengono `;` e `,`, quindi nel foglio vanno tra virgolette (`samples_draft.csv` li scrive già così, una riga per camera).
+- **Scelta dell'elettrodo** (`channel_selection.quick_electrode_scores`): per ogni elettrodo della camera, esclusi quelli di stimolazione, un punteggio rapido (circa 0,07 s per elettrodo): rapporto segnale/rumore degli spike (picchi di |segnale| sopra 5 volte il rumore robusto, distanza minima 150 ms), CV robusto degli intervalli, ampiezza dell'onda di ripolarizzazione sul battito mediano (passa-basso 20 Hz, da 200 ms a 0,9 periodi). Il migliore va alla pipeline completa; i punteggi finiscono in `file_info['electrode_scores']`. Come per i CSV, nel batch `auto` il baseline sceglie l'elettrodo e le dosi dello stesso tessuto lo tengono; se su una dose quell'elettrodo non è analizzabile (piatto, perso, grado F), la dose viene rifatta scegliendo tra gli altri elettrodi della camera (`tissue_electrode_from` lo dice). Un file da 64 elettrodi × 4 camere richiede circa 20 s invece dei 4 minuti dello `auto` precedente.
+- **Ritmi veloci**: il periodo degli spike misurato dal punteggio rapido (`file_info['spike_period_ms']`) abbassa, solo per quella registrazione, la distanza minima tra battiti del rivelatore (400 ms) a metà del periodo quando il treno è regolare (CV ≤ 15 %): il verapamil a 5 µM (periodi di 250–330 ms) non perde più un battito su due.
+- **Dati MCS in volt**: `amplifier_gain` non si applica ai file MCS, che sono già in unità fisiche.
+
+Sulle cinque piastre PHOENIX (26 registrazioni, 4 camere ciascuna, 108 misure) il batch per camera riproduce il periodo di battito dell'analisi di riferimento (mediana degli elettrodi concordi) con differenza mediana 0,1 % (95 % entro il 2 %) e l'FPDc, sui ritmi sopra 450 ms, con differenza mediana 4 % (81 % entro il 10 %); l'FPD di consenso per camera (stessa onda seguita su tutti gli elettrodi) resta da integrare.
 
 **Nota sulla nomenclatura (v3.5)**: nei nomi dei file, `ch1`/`ch2`/`ch3` indicano le *camere* (chamber) del chip. Le colonne del CSV, che rappresentano i due *elettrodi* di registrazione del Digilent, sono rinominate in `el1`/`el2` per evitare ambiguità.
 
@@ -1296,6 +1308,10 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.12.0 (Ottobre 2026) — chip a più camere: una registrazione per camera
+
+Layout dei chip (`chambers.py`, µHeart MVP a 64 canali, passo 400 µm; `AnalysisConfig.chamber_layout`): un file MCS diventa una registrazione per camera, limitata agli elettrodi della camera, con il test item da `samples.csv` (una riga per file e camera). Scelta rapida dell'elettrodo tra quelli di registrazione (spike, regolarità, onda di ripolarizzazione; circa 20 s per 64 elettrodi invece di 4 minuti), elettrodo del baseline tenuto per le dosi con ripiego su un altro elettrodo della camera quando fallisce. Distanza minima tra battiti adattata ai ritmi veloci regolari. Nomi dei file MCS (chip e condizione), `tissue_key` con camere a lettera, bozza del foglio campioni per camera (§4.1).
 
 ### v3.11.0 (Ottobre 2026) — file HDF5 di Multi Channel Systems
 
