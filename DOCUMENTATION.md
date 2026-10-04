@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.13.0
+**Versione**: 3.14.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -224,6 +224,21 @@ Un file MCS contiene tutti gli elettrodi del chip, e un chip ospita più microte
 - **Scelta dell'elettrodo** (`channel_selection.quick_electrode_scores`): per ogni elettrodo della camera, esclusi quelli di stimolazione, un punteggio rapido (circa 0,07 s per elettrodo): rapporto segnale/rumore degli spike (picchi di |segnale| sopra 5 volte il rumore robusto, distanza minima 150 ms), CV robusto degli intervalli, ampiezza dell'onda di ripolarizzazione sul battito mediano (passa-basso 20 Hz, da 200 ms a 0,9 periodi). Il migliore va alla pipeline completa; i punteggi finiscono in `file_info['electrode_scores']`. Come per i CSV, nel batch `auto` il baseline sceglie l'elettrodo e le dosi dello stesso tessuto lo tengono; se su una dose quell'elettrodo non è analizzabile (piatto, perso, grado F), la dose viene rifatta scegliendo tra gli altri elettrodi della camera (`tissue_electrode_from` lo dice). Un file da 64 elettrodi × 4 camere richiede circa 20 s invece dei 4 minuti dello `auto` precedente.
 - **Ritmi veloci**: il periodo degli spike misurato dal punteggio rapido (`file_info['spike_period_ms']`) abbassa, solo per quella registrazione, la distanza minima tra battiti del rivelatore (400 ms) a metà del periodo quando il treno è regolare (CV ≤ 15 %): il verapamil a 5 µM (periodi di 250–330 ms) non perde più un battito su due.
 - **Dati MCS in volt**: `amplifier_gain` non si applica ai file MCS, che sono già in unità fisiche.
+
+#### Misure di camera (dalla v3.14)
+
+**Modulo** `chamber.py`, `analyze_chamber(df, fs, electrodes, stimulation, cfg, reference=None)`. Perché: il singolo elettrodo è fragile proprio sulle due misure che contano, l'FPD (su parte degli elettrodi il template prende l'onda sbagliata: PM01001 B al baseline, 405 ms invece di 801) e il giudizio sul ritmo (un periodo "medio" su un tessuto aritmico entrerebbe nelle medie). Con `AnalysisConfig.chamber_consensus` (default True) ogni registrazione di camera viene misurata anche con tutti i suoi elettrodi:
+
+1. **Elettrodi usabili**: segnale non piatto né saturo (deviazione standard tra 1 e 100 µV nei primi 60 s), almeno 10 spike, periodo entro il 20 % della mediana della camera. Gli spike sono i picchi della componente veloce del segnale filtrato (sopra 10 Hz) oltre 5 volte il rumore robusto, ad almeno 150 ms l'uno dall'altro.
+2. **Ritmo**: i battiti della camera sono quelli visti da almeno 3 elettrodi entro 60 ms. Periodo = mediana degli intervalli; CV robusto = 1,4826·MAD/mediana; sincronia = frazione degli spike di un elettrodo che un altro elettrodo vede nello stesso istante (mediana sulle coppie). Stato: `regular` (CV robusto ≤ 15 % e sincronia ≥ 0,5), `irregular` (CV sopra il 15 %), `conduction_lost` (sincronia sotto 0,5: il battito non attraversa più il tessuto), `silent` (meno di 10 battiti comuni), `insufficient` (meno di 3 elettrodi usabili: si resta al singolo elettrodo, come per PM01003 A, visibile su un elettrodo solo).
+3. **FPD di consenso** (riferimento, cioè baseline): sul battito mediano di ogni elettrodo di registrazione (passa-basso 20 Hz) l'FPD con il metodo configurato (`find_repolarization_on_template`); validi quelli sotto l'80 % del periodo; il gruppo più numeroso entro il 15 % dà l'FPD della camera (mediana) e il numero di elettrodi concordi. L'onda di ogni elettrodo (±120 ms attorno al suo FPD, ±60 ms per i ritmi veloci) diventa il template della camera (`result['chamber']['reference']`).
+4. **Stessa onda** (dosi): il template di ogni elettrodo è cercato per correlazione nel battito mediano della dose, da 250 ms fino a prima del battito successivo (0,9 periodi, al massimo 3 s); contano gli elettrodi con correlazione ≥ 0,8, e di questi il gruppo più numeroso entro il 15 %. FPDc di Fridericia con il periodo della camera.
+
+**Nel risultato**: `result['chamber']` (stato, motivo, periodo, CV, sincronia, FPD, FPDc, elettrodi concordi, FPD per elettrodo, correlazioni, template). Nel `summary` i valori di camera prendono il posto di `beat_period_ms_mean/median`, `fpd_ms_median`, `fpdc_ms_mean`; quelli del singolo elettrodo restano in `*_electrode`; `fpd_source` dice da dove viene l'FPD (`chamber consensus (10 electrodes)`, `chamber same wave (7 electrodes)`, `single electrode (…)`), `chamber_status`, `chamber_synchrony`, `beat_period_cv_robust_pct`. Con ritmo irregolare, conduzione persa o tessuto fermo la registrazione è `not_analysable` con il motivo (`ritmo irregolare: robust CV 57 %`), l'FPD è NaN e il referto delle aritmie riceve una bandiera critica; il periodo resta. Se il ritmo è regolare ma l'onda non si segue su almeno 3 elettrodi, l'FPD è NaN e `fpd_reliable` False.
+
+**Nel batch**: il baseline di ogni tessuto produce i template; le dosi dello stesso tessuto li ricevono (`file_info['chamber_reference']`) e seguono la stessa onda. Senza baseline (file aperto da solo nella GUI) l'FPD è il consenso della registrazione stessa.
+
+Sulle cinque piastre PHOENIX (108 registrazioni di camera) il batch con il consenso riproduce l'analisi di riferimento del report PHOENIX (stesso metodo, script separati): periodo con differenza mediana 0,1 %, FPDc di camera con differenza mediana 2,0 % (88 % entro il 5 %, 96 % entro il 10 %), contro 5,1 % (49 % e 75 %) dell'elettrodo singolo; 9 registrazioni classificate irregolari, ferme o con conduzione persa invece di ricevere un FPD.
 
 Sulle cinque piastre PHOENIX (26 registrazioni, 4 camere ciascuna, 108 misure) il batch per camera riproduce il periodo di battito dell'analisi di riferimento (mediana degli elettrodi concordi) con differenza mediana 0,1 % (95 % entro il 2 %) e l'FPDc, sui ritmi sopra 450 ms, con differenza mediana 4 % (81 % entro il 10 %); l'FPD di consenso per camera (stessa onda seguita su tutti gli elettrodi) resta da integrare.
 
@@ -1312,6 +1327,10 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.14.0 (Ottobre 2026) — misure di camera: consenso per l'FPD e stato del ritmo
+
+Su una camera di un chip a più elettrodi (`chamber.py`, `AnalysisConfig.chamber_consensus`, attivo di default) il periodo di battito viene dai battiti visti da almeno 3 elettrodi, il ritmo è classificato (regolare / irregolare / conduzione persa / fermo) dal CV robusto degli intervalli e dalla sincronia tra elettrodi, e l'FPD è il consenso degli elettrodi: sul baseline la mediana degli FPD validi (< 80 % del periodo) misurati sul battito mediano di ogni elettrodo, sulle dosi la stessa onda del baseline seguita per correlazione su ogni elettrodo (gruppo più numeroso entro il 15 %). I valori del singolo elettrodo restano in `*_electrode`. Ritmo irregolare, conduzione persa o tessuto fermo rendono la registrazione non analizzabile con quel motivo, invece di un FPD su un tessuto aritmico. Il batch passa i template del baseline alle dosi dello stesso tessuto. Il rivelatore rapido degli spike lavora sulla componente veloce (sopra 10 Hz), così un'onda di ripolarizzazione grande non conta come battito (§4.1).
 
 ### v3.13.0 (Ottobre 2026) — il chip nella GUI
 

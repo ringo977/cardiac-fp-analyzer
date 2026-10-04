@@ -544,6 +544,77 @@ def recompute_from_beats(result, bi_edited, config=None, verbose=False):
     )
 
 
+def _apply_chamber_consensus(result, df, fs, file_info, config, verbose):
+    """Measure the chamber (all its electrodes) and let its rhythm status and
+    consensus FPD take precedence over the single electrode's values.
+
+    The single-electrode values stay in the summary under ``*_electrode``.
+    With ``file_info['chamber_reference']`` (the baseline's templates, set
+    by the batch) the FPD follows the same wave as the baseline; without
+    it, it is the consensus of this recording and the templates are
+    returned in ``result['chamber']['reference']``.
+    """
+    from .chamber import analyze_chamber, describe
+    ch = analyze_chamber(df, fs, file_info['electrodes'], file_info.get('stimulation_electrodes') or (),
+                         cfg=config, reference=file_info.get('chamber_reference'))
+    result['chamber'] = ch
+    s = result['summary']
+    s['chamber_status'] = ch['rhythm_status']
+    s['chamber_status_reason'] = ch['status_reason']
+    s['chamber_electrodes'] = len(ch['electrodes_usable'])
+    s['chamber_synchrony'] = ch['synchrony']
+    s['beat_period_cv_robust_pct'] = ch['cv_robust_pct']
+    if verbose:
+        print('  ' + describe(ch))
+    if ch['rhythm_status'] == 'insufficient':
+        s['fpd_source'] = 'single electrode (chamber: ' + (ch['status_reason'] or 'insufficient') + ')'
+        return
+    # beat period of the chamber (common beats) instead of the electrode's
+    for k in ('beat_period_ms_mean', 'beat_period_ms_median', 'beat_period_ms_cv'):
+        if k in s:
+            s[k + '_electrode'] = s[k]
+    if np.isfinite(ch['bp_ms']):
+        s['beat_period_ms_mean'] = s['beat_period_ms_median'] = ch['bp_ms']
+        s['beat_period_ms_cv'] = ch['bp_cv_pct']
+    for k in ('fpd_ms_median', 'fpdc_ms_mean'):
+        if k in s:
+            s[k + '_electrode'] = s[k]
+    if ch['rhythm_status'] != 'regular':
+        # irregular rhythm, conduction lost or silent tissue: no FPD, the
+        # recording is reported as not analysable with the chamber's reason
+        reason = {'irregular': 'ritmo irregolare', 'conduction_lost': 'conduzione persa', 'silent': 'tessuto fermo'}[ch['rhythm_status']]
+        s['not_analysable'] = True
+        s['not_analysable_reason'] = f"{reason}: {ch['status_reason']}"
+        s['fpd_reliable'] = False
+        s['fpd_note'] = s['not_analysable_reason']
+        for k in list(s.keys()):
+            if k.startswith(('fpd_ms', 'fpdc_')) and not k.endswith('_electrode') and isinstance(s[k], (int, float, np.floating)):
+                s[k] = np.nan
+        s['fpd_source'] = 'chamber'
+        qc = result.get('qc_report')
+        if qc is not None:
+            qc.not_analysable = True
+            qc.not_analysable_reason = s['not_analysable_reason']
+        ar = result.get('arrhythmia_report')
+        if ar is not None:
+            ar.add_flag('chamber_' + ch['rhythm_status'], 'critical', s['not_analysable_reason'])
+        return
+    if ch['ok']:
+        s['fpd_ms_median'] = ch['fpd_ms']
+        s['fpdc_ms_mean'] = ch['fpdc_ms']
+        s['fpd_reliable'] = True
+        s['fpd_source'] = f"chamber {ch['fpd_method']} ({ch['fpd_n']} electrodes)"
+        s['fpd_note'] = ch.get('fpd_spread_note') or None
+    else:
+        # regular rhythm but the wave cannot be measured on enough electrodes
+        s['fpd_reliable'] = False
+        s['fpd_note'] = 'chamber FPD not measurable: ' + (ch['status_reason'] or '')
+        s['fpd_source'] = 'chamber (not measurable)'
+        for k in list(s.keys()):
+            if k.startswith(('fpd_ms', 'fpdc_')) and not k.endswith('_electrode') and isinstance(s[k], (int, float, np.floating)):
+                s[k] = np.nan
+
+
 def find_recordings(data_dir, exclude=None):
     """Recordings under ``data_dir`` (recursive, sorted): every .csv that is
     not a sample sheet, every .h5 in the MCS raw-data layout and every
@@ -736,7 +807,7 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
                     print(f"  Rhythm train: {r_info['n_kept']}/{r_info['n_input']} detections "
                           f"(period {r_info['period_ms']:.0f} ms) + {r_info['n_recovered']} recovered")
 
-        return _analyze_from_beats(
+        result = _analyze_from_beats(
             bi,
             filtered=filtered,
             raw_signal=raw_signal,
@@ -749,6 +820,9 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
             verbose=verbose,
             rhythm_bi=rhythm_bi,
         )
+        if file_info.get('electrodes') and len(file_info['electrodes']) >= 3 and getattr(config, 'chamber_consensus', True):
+            _apply_chamber_consensus(result, df, fs, file_info, config, verbose)
+        return result
     except _BATCH_SAFE_EXCEPTIONS as e:
         logger.error("Analysis failed for %s: %s", filepath, e, exc_info=True)
         if verbose:
@@ -993,6 +1067,16 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
             errors += err_redo
             for job, r in out_redo.items():
                 out[job_of[job[2]]] = r
+        # chamber templates of the baseline for the doses of the same tissue
+        ref_of = {}
+        for j, r in out.items():
+            ch = (r or {}).get('chamber') or {}
+            if ch.get('reference') and unit_info[j].get('tissue'):
+                ref_of[unit_info[j]['tissue']] = ch['reference']
+        for j in dose_jobs:
+            t = unit_info[j].get('tissue')
+            if t in ref_of and unit_info[j].get('electrodes'):
+                updates[j[2]] = {**(updates.get(j[2]) or {}), 'chamber_reference': ref_of[t]}
         rest = [(j[0], j[1] if j[1] != 'auto'
                  else tissue_el.get(unit_info[j].get('tissue'), {}).get('electrode', 'auto'), j[2])
                 for j in dose_jobs]
@@ -1013,6 +1097,9 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
             r = out.get(job_of[uid])
             failed = r is None or (r.get('summary') or {}).get('not_analysable') \
                 or getattr(r.get('qc_report'), 'grade', None) == 'F'
+            # an irregular / silent chamber is a verdict on the tissue, not on the electrode
+            if r is not None and ((r.get('chamber') or {}).get('rhythm_status') in ('irregular', 'conduction_lost', 'silent')):
+                failed = False
             if failed:
                 upd = dict(updates.get(uid) or {})
                 upd['electrodes'] = [e for e in info['electrodes'] if e != job[1]]

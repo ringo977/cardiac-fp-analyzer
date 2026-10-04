@@ -1168,6 +1168,13 @@ class AnalysisConfig:
     # electrodes left out of the electrode choice. A layout name forces
     # it; 'none' treats the file as one tissue.
     chamber_layout: str = 'auto'
+    # Chamber consensus (v3.14): on a chamber of a multi-electrode chip the
+    # beat period comes from the beats seen by several electrodes, the
+    # rhythm is classified (regular / irregular / conduction lost / silent)
+    # and the FPD is the consensus of the electrodes (same wave as the
+    # baseline on the doses); the single electrode's values stay in the
+    # summary as *_electrode. False keeps the single-electrode measures.
+    chamber_consensus: bool = True
 
     # ── Serialization ──
 
@@ -1242,6 +1249,8 @@ class AnalysisConfig:
             cfg.use_overrides = bool(d['use_overrides'])
         if 'chamber_layout' in d:
             cfg.chamber_layout = str(d['chamber_layout'] or 'auto')
+        if 'chamber_consensus' in d:
+            cfg.chamber_consensus = bool(d['chamber_consensus'])
 
         return cfg
 

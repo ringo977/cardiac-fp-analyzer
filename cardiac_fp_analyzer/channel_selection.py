@@ -134,8 +134,9 @@ def quick_electrode_scores(df, fs, channels, cfg=None, exclude=(), min_beats=10,
     """Score electrodes cheaply (about 0.15 s each at 2 kHz) to pick the one to
     analyse in a chamber of a multi-electrode chip.
 
-    For each electrode: band-pass as the pipeline, spikes = peaks of |signal|
-    above 5 × the robust noise (1.4826 MAD) at least 150 ms apart; then
+    For each electrode: band-pass as the pipeline, spikes = peaks of the fast
+    component (slow waves below 10 Hz removed) above 5 × the robust noise
+    (1.4826 MAD) at least 150 ms apart; then
 
       snr          median spike peak-to-peak / noise
       cv_pct       robust CV of the intervals (1.4826 MAD / median)
@@ -168,11 +169,12 @@ def quick_electrode_scores(df, fs, channels, cfg=None, exclude=(), min_beats=10,
             r['reason'] = 'flat'
             continue
         f = full_filter_pipeline(x, fs, cfg=fc)
-        noise = 1.4826 * np.median(np.abs(f - np.median(f)))
+        fast_part = f - lowpass_filter(f, fs, cutoff=10.0)      # spikes only: slow repolarisation waves removed
+        noise = 1.4826 * np.median(np.abs(fast_part - np.median(fast_part)))
         if noise <= 0:
             r['reason'] = 'flat'
             continue
-        pk, _ = find_peaks(np.abs(f), height=5.0 * noise, distance=int(0.15 * fs))
+        pk, _ = find_peaks(np.abs(fast_part), height=5.0 * noise, distance=int(0.15 * fs))
         r['n_beats'] = int(len(pk))
         if len(pk) < min_beats:
             r['reason'] = 'too few spikes'

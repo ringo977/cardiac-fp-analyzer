@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.13.0
+**Versione**: 3.14.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali) o con sistemi **Multi Channel Systems** (file HDF5 del protocollo MCS RawData, fino a 64 elettrodi).
@@ -169,6 +169,13 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.14.0 (Ottobre 2026) — misure di camera: consenso per l'FPD e stato del ritmo
+- **`chamber.py`** (`chamber_consensus`, attivo di default): su una camera di un chip a più elettrodi il periodo viene dai battiti visti da almeno 3 elettrodi; il ritmo è `regular`, `irregular` (CV robusto > 15 %), `conduction_lost` (sincronia tra elettrodi < 0,5) o `silent`; l'FPD è il consenso degli elettrodi al baseline e la **stessa onda del baseline** seguita su ogni elettrodo alle dosi (correlazione ≥ 0,8, gruppo più numeroso entro il 15 %), FPDc di Fridericia con il periodo della camera.
+- I valori del singolo elettrodo restano nel summary come `*_electrode`; `fpd_source` dice da dove viene l'FPD. Ritmo irregolare, conduzione persa o tessuto fermo → registrazione non analizzabile con quel motivo, niente FPD su tessuti aritmici.
+- Il batch passa i template del baseline alle dosi dello stesso tessuto.
+- Spike rilevati sulla componente veloce del segnale (> 10 Hz): un'onda di ripolarizzazione grande non è più contata come battito (anche nella scelta rapida dell'elettrodo).
+- Sulle cinque piastre PHOENIX: FPDc di camera entro il 5 % dell'analisi di riferimento nell'88 % dei casi (elettrodo singolo: 49 %), entro il 10 % nel 96 % (75 %).
 
 ### v3.13.0 (Ottobre 2026) — il chip nella GUI
 - **Mappa del chip** nella scheda Segnale per i file a più camere: una riga per camera, un riquadro per elettrodo in ordine fisico (stimolazione tratteggiata), colore dal punteggio rapido, cornice sull'elettrodo analizzato, periodo di battito per camera; clic su un elettrodo per analizzarlo.
