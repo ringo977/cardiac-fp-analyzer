@@ -1,9 +1,16 @@
 """
-loader.py — CSV loader for Digilent WaveForms µECG recordings.
+loader.py — Recording loaders and file-name grammar.
 
-Parses the header block (#-prefixed lines) to extract metadata
-(device, date/time, sampling rate, number of samples, channel ranges)
-and returns a clean DataFrame plus a metadata dict.
+Two file formats are read (``load_recording`` dispatches on the suffix):
+
+* Digilent WaveForms CSV (µECG, two oscilloscope inputs): the ``#`` header
+  block gives device, date/time, sampling rate and channel ranges; the
+  DataFrame has columns 'time', 'el1', 'el2'.
+* Multi Channel Systems HDF5 raw data (``.h5``, MCS RawData protocol — the
+  µHeart / MEA2100 recordings, up to 64 electrodes at 20 kHz): columns
+  'time' plus one per electrode label ('E1' … 'E64'); see mcs_hdf5.py.
+
+Recordings sampled above MAX_SAMPLE_RATE are decimated on load.
 """
 
 import re
@@ -52,8 +59,12 @@ def recording_datetime(filepath):
     """Start of acquisition from the '#Date Time:' header line, or None.
 
     Reads only the header, so it is cheap enough to call on every file of a
-    batch before analysis (used to pick the pre-dose reference).
+    batch before analysis (used to pick the pre-dose reference). For MCS
+    HDF5 files the start comes from the file attributes.
     """
+    if Path(filepath).suffix.lower() in ('.h5', '.hdf5', '.hdf'):
+        from .mcs_hdf5 import recording_datetime as _h5_datetime
+        return _h5_datetime(filepath)
     try:
         with open(filepath, errors='replace') as f:
             for line in f:
@@ -64,6 +75,43 @@ def recording_datetime(filepath):
     except OSError:
         return None
     return None
+
+
+RECORDING_SUFFIXES = ('.csv', '.h5', '.hdf5', '.hdf')
+
+
+def is_recording_file(filepath):
+    """A CSV, or an HDF5 file in the MCS raw-data layout."""
+    p = Path(filepath)
+    suf = p.suffix.lower()
+    if suf == '.csv':
+        return True
+    if suf in ('.h5', '.hdf5', '.hdf'):
+        from .mcs_hdf5 import is_mcs_hdf5
+        return is_mcs_hdf5(p)
+    return False
+
+
+def electrode_columns(df):
+    """Signal columns of a loaded recording, in file order ('el1', 'el2' or
+    the electrode labels of an MCS file)."""
+    return [c for c in df.columns if c != 'time']
+
+
+def load_recording(filepath, max_sample_rate=MAX_SAMPLE_RATE, **kwargs):
+    """Load a recording of either format (see module docstring).
+
+    Extra keyword arguments go to ``load_mcs_h5`` (``stream``, ``channels``,
+    ``recording``). Returns (metadata, df) like ``load_csv``; metadata has
+    'format' ('csv' or 'mcs_hdf5').
+    """
+    p = Path(filepath)
+    if p.suffix.lower() in ('.h5', '.hdf5', '.hdf'):
+        from .mcs_hdf5 import load_mcs_h5
+        return load_mcs_h5(p, max_sample_rate=max_sample_rate, **kwargs)
+    metadata, df = load_csv(p, max_sample_rate=max_sample_rate)
+    metadata.setdefault('format', 'csv')
+    return metadata, df
 
 
 def load_csv(filepath, max_sample_rate=MAX_SAMPLE_RATE):
@@ -425,7 +473,7 @@ def parse_inputs(name):
     to it ('300 nM') or a dose letter ('A'), else None. A bare 'na' counts
     only before the first tissue; after it, it is part of the item text.
     """
-    stem = Path(str(name)).stem if str(name).lower().endswith('.csv') else str(name)
+    stem = Path(str(name)).stem if str(name).lower().endswith(RECORDING_SUFFIXES) else str(name)
     ms = [m for m in _INPUT_TOKEN.finditer(stem)]
     out = []
     for i, m in enumerate(ms):
@@ -448,8 +496,11 @@ def parse_inputs(name):
 def input_columns(filepath):
     """Oscilloscope inputs recorded in a file, from its column header:
     ['1', '2'], ['1'] or ['2'] ('Channel N' columns; without names, the
-    number of data columns). [] when the header cannot be read. Reads only
-    the header lines."""
+    number of data columns). [] when the header cannot be read or the file
+    is not a CSV (MCS HDF5 files have electrode labels, not inputs). Reads
+    only the header lines."""
+    if Path(filepath).suffix.lower() != '.csv':
+        return []
     try:
         with open(filepath, errors='replace') as f:
             for k, line in enumerate(f):

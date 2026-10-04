@@ -49,7 +49,7 @@ import streamlit as st
 
 from cardiac_fp_analyzer.analyze import analyze_single_file as _analyze_single_file
 from cardiac_fp_analyzer.config import AnalysisConfig
-from cardiac_fp_analyzer.loader import load_csv as _load_csv
+from cardiac_fp_analyzer.loader import load_recording as _load_csv
 
 
 @st.cache_data(show_spinner=False, max_entries=32)

@@ -1483,9 +1483,9 @@ class StudyPanel(QWidget):
 
         paths, _ = QFileDialog.getOpenFileNames(
             self,
-            self.tr("Aggiungi CSV al gruppo “{0}”").format(group.name),
+            self.tr("Aggiungi registrazioni al gruppo “{0}”").format(group.name),
             self._study.folder,
-            self.tr("CSV files (*.csv);;All files (*)"),
+            self.tr("Recordings (*.csv *.h5);;CSV files (*.csv);;MCS HDF5 (*.h5);;All files (*)"),
         )
         if not paths:
             return
@@ -1574,7 +1574,7 @@ class StudyPanel(QWidget):
             QMessageBox.information(
                 self, self.tr("Nessun CSV trovato"),
                 self.tr(
-                    "Nessun file .csv trovato (ricorsivamente) in “{0}”."
+                    "Nessun file .csv o .h5 (MCS) trovato (ricorsivamente) in “{0}”."
                 ).format(folder),
             )
             return
@@ -3002,7 +3002,7 @@ def _n_files_label(n: int) -> str:
 
 
 def _enumerate_csvs_under(folder: Path) -> list[Path]:
-    """Recursively list *visible* ``*.csv`` files under ``folder``.
+    """Recursively list *visible* recordings (``*.csv``, MCS ``*.h5``) under ``folder``.
 
     Module-level and pure so it can be unit-tested without spinning up
     Qt: :meth:`StudyPanel._on_add_folder` delegates here for the
@@ -3025,7 +3025,9 @@ def _enumerate_csvs_under(folder: Path) -> list[Path]:
     and keeps the tests filesystem-agnostic.
     """
     try:
-        all_csvs = list(Path(folder).rglob('*.csv'))
+        from cardiac_fp_analyzer.loader import is_recording_file
+        all_csvs = [p for p in Path(folder).rglob('*')
+                    if p.suffix.lower() in ('.csv', '.h5', '.hdf5') and p.is_file() and is_recording_file(p)]
     except OSError:
         # Unreadable folder (permissions) — let the caller show an
         # empty-result dialog rather than crashing the UI thread.

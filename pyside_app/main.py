@@ -2110,9 +2110,9 @@ class MainWindow(QMainWindow):
     def _on_open(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            self.tr("Apri CSV di segnale"),
+            self.tr("Apri registrazione (CSV o MCS HDF5)"),
             "",
-            self.tr("CSV files (*.csv);;All files (*)"),
+            self.tr("Recordings (*.csv *.h5);;CSV files (*.csv);;MCS HDF5 (*.h5);;All files (*)"),
         )
         if not path:
             return

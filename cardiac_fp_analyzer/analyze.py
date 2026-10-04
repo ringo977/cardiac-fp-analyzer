@@ -26,7 +26,13 @@ from cardiac_fp_analyzer.beat_detection import (
 from cardiac_fp_analyzer.channel_selection import select_best_channel
 from cardiac_fp_analyzer.filtering import full_filter_pipeline
 from cardiac_fp_analyzer.inclusion import apply_inclusion_criteria
-from cardiac_fp_analyzer.loader import describe_recording, load_csv
+from cardiac_fp_analyzer.loader import (
+    describe_recording,
+    electrode_columns,
+    is_recording_file,
+    load_recording,
+)
+from cardiac_fp_analyzer.mcs_hdf5 import STIMULUS_SUBTYPES
 from cardiac_fp_analyzer.overrides import apply_overrides, load_overrides
 from cardiac_fp_analyzer.parameters import extract_all_parameters
 from cardiac_fp_analyzer.quality_control import assess_analysability, validate_beats
@@ -534,13 +540,27 @@ def recompute_from_beats(result, bi_edited, config=None, verbose=False):
     )
 
 
+def find_recordings(data_dir, exclude=None):
+    """Recordings under ``data_dir`` (recursive, sorted): every .csv that is
+    not a sample sheet, plus every .h5 in the MCS raw-data layout."""
+    out = []
+    for p in sorted(Path(data_dir).rglob('*')):
+        if not p.is_file() or (exclude is not None and exclude(p)):
+            continue
+        if p.suffix.lower() == '.csv' or (p.suffix.lower() in ('.h5', '.hdf5', '.hdf') and is_recording_file(p)):
+            out.append(p)
+    return out
+
+
 def analyze_single_file(filepath, channel='auto', verbose=True, config=None, file_info_update=None):
-    """Analyze a single CSV file through the full pipeline.
+    """Analyze a single recording (CSV or MCS HDF5) through the full pipeline.
 
     Parameters
     ----------
-    filepath : path to CSV file
-    channel : 'auto', 'el1', or 'el2'
+    filepath : path to the recording (.csv, or .h5 in the MCS raw-data layout)
+    channel : 'auto', or a signal column: 'el1' / 'el2' for a CSV, an
+        electrode label ('E18') for an MCS file; 'auto' scores every
+        electrode of the file and keeps the best one
     verbose : print progress
     config : AnalysisConfig or None — controls all pipeline parameters
     file_info_update : dict or None — fields that replace those read from
@@ -556,8 +576,9 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
     if verbose:
         print(f"\n{'='*60}\n  Analyzing: {filepath.name}\n{'='*60}")
     try:
-        metadata, df = load_csv(filepath)
+        metadata, df = load_recording(filepath)
         fs = metadata['sample_rate']
+        cols = electrode_columns(df)
         # Normalize time to start at 0 (hardware may use pre-trigger negative times)
         if len(df) > 0 and df['time'].iloc[0] != 0:
             df['time'] = df['time'] - df['time'].iloc[0]
@@ -571,14 +592,24 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
 
         actual_ch = channel
         if channel == 'auto':
-            actual_ch, ch_det = select_best_channel(df, fs, cfg=config)
+            actual_ch, ch_det = select_best_channel(df, fs, cfg=config, channels=cols)
             if verbose:
                 print(f"  Channel selection:")
                 for ch, d in ch_det.items():
                     print(f"    {ch}: {d}{' *' if ch==actual_ch else ''}")
+        elif channel not in cols:
+            raise ValueError(f"channel {channel!r} not in {filepath.name}; available: {cols}")
         file_info['analyzed_channel'] = actual_ch
+        if metadata.get('format') == 'mcs_hdf5':
+            # electrode labels, stimulus events and the MCS spike detector's
+            # time stamps travel with the result (pacing analysis to come)
+            file_info['electrodes'] = list(cols)
+            file_info['paced'] = bool(metadata.get('paced'))
+            if metadata.get('paced'):
+                file_info['stimulus_times_s'] = [t for e in metadata['events']
+                                                 if e['subtype'] in STIMULUS_SUBTYPES for t in e['times_s']]
 
-        raw = df[actual_ch].values
+        raw = np.asarray(df[actual_ch].values, dtype=np.float64)
 
         # ── Amplifier gain correction ──
         # Divide by gain to obtain real voltage.  Default gain=1 (no-op).
@@ -821,12 +852,12 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
                   inclusion_cv=25.0, fpdc_range=(100, 1200),
                   min_fpd_confidence=0.68):
     """
-    Batch analysis of all CSV files in a directory.
+    Batch analysis of all recordings (CSV, MCS HDF5) in a directory.
 
     Parameters
     ----------
-    data_dir : path to directory with CSV files
-    channel : 'auto', 'el1', 'el2', or 'both'
+    data_dir : path to directory with the recordings
+    channel : 'auto', 'el1', 'el2', 'both', or an electrode label
     output_dir : output directory (default: data_dir/analysis_results)
     verbose : print progress
     config : AnalysisConfig or None — controls all pipeline parameters.
@@ -857,7 +888,7 @@ def batch_analyze(data_dir, channel='auto', output_dir=None, verbose=True,
     output_dir.mkdir(parents=True, exist_ok=True)
 
     from .sample_sheet import describe_plan, is_sheet_file, plan_batch
-    csv_files = sorted(p for p in data_dir.rglob('*.csv') if not is_sheet_file(p))
+    csv_files = find_recordings(data_dir, is_sheet_file)
     print(f"\n{'#'*60}\n  CARDIAC FP ANALYZER\n  Files: {len(csv_files)} | Channel: {channel}\n{'#'*60}")
 
     # Save config alongside results
@@ -1064,7 +1095,8 @@ def main():
 
     parser = argparse.ArgumentParser(description='Cardiac FP Analyzer for hiPSC-CM µECG')
     parser.add_argument('data_dir')
-    parser.add_argument('--channel', default='auto', choices=['auto','el1','el2','both'])
+    parser.add_argument('--channel', default='auto',
+                        help="'auto' (default), 'el1', 'el2', 'both', or an electrode label of an MCS file ('E18')")
     parser.add_argument('--output', '-o', default=None)
     parser.add_argument('--quiet', '-q', action='store_true')
     parser.add_argument('--config', default=None,

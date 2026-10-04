@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.10.0
+**Versione**: 3.11.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -57,6 +57,7 @@ pip install ".[gui]"                 # Core + GUI desktop (PySide6 + PyQtGraph)
 pip install ".[streamlit]"           # Core + GUI web legacy (Streamlit + Plotly)
 pip install ".[reports]"             # Core + xlsxwriter
 pip install ".[cdisc]"              # Core + pyreadstat
+pip install ".[mcs]"                # Core + h5py (file HDF5 Multi Channel Systems)
 pip install ".[all]"                 # Tutto
 pip install ".[dev]"                 # Tutto + pytest + ruff
 
@@ -73,8 +74,9 @@ cardiac-fp /path/to/data/ --channel auto -o results/
 # Senza installazione
 python -m cardiac_fp_analyzer.analyze /path/to/data/
 
-# Con selezione elettrodo manuale
+# Con selezione elettrodo manuale (el1/el2 per i CSV, etichetta dell'elettrodo per i file MCS)
 python -m cardiac_fp_analyzer.analyze /path/to/data/ --channel el1
+python -m cardiac_fp_analyzer.analyze /path/to/mcs_h5/ --channel E18
 
 # Con file di configurazione JSON
 python -m cardiac_fp_analyzer.analyze /path/to/data/ --config my_config.json
@@ -200,6 +202,16 @@ Legge i file CSV prodotti dal sistema Digilent WaveForms (Analog Discovery 2). I
 **Frequenze di campionamento alte (dalla v3.8)**: le registrazioni sopra 3 kHz vengono decimate al caricamento a circa 2 kHz, con filtro anti-aliasing FIR a fase zero. In metadata restano `original_sample_rate` e `decimation_factor`; `load_csv(path, max_sample_rate=None)` lascia la frequenza originale. La pipeline è tarata su 2 kHz: le finestre sono in campioni e il passa-banda 0,5–500 Hz è progettato come coefficienti (b, a). A 20 kHz quel filtro ha un polo fuori dal cerchio unitario, il segnale filtrato diverge e non viene trovato nessun battito. Era il caso di tutti i 37 file Accelera di Exp11 del dataset Visone 2023. Decimati, combaciano con gli autori: BP 838,5 contro 838,9 ms, FPDc 532 contro 527 ms.
 
 `recording_datetime(path)` legge solo la riga `#Date Time:` dell'intestazione. Il batch la usa per scegliere il riferimento pre-dose (vedi 4.10).
+
+#### `load_recording(filepath)` e i file HDF5 di Multi Channel Systems (dalla v3.11)
+
+`load_recording` sceglie il lettore dal suffisso: `.csv` → `load_csv`; `.h5`/`.hdf5` → `mcs_hdf5.load_mcs_h5`. Il batch, la bozza di `samples.csv` e la GUI accettano entrambi (`analyze.find_recordings`: i CSV che non sono fogli campioni e i file HDF5 nel formato MCS).
+
+**Formato** (modulo `mcs_hdf5.py`): i file prodotti da Multi Channel Experimenter / DataManager nel protocollo "RawData" (definizione MCS versione 3): HDF5 standard, compressione gzip con shuffle, leggibile anche da MATLAB o HDFView. Struttura: `/Data/Recording_<r>/AnalogStream/Stream_<s>` con la matrice `ChannelData` (int32, canali × campioni), `ChannelDataTimeStamps` e la tabella `InfoChannel` (etichetta `E1`…, unità, `Exponent`, `ADZero`, `Tick` in µs, `ConversionFactor`); il valore fisico è `(codice − ADZero) · ConversionFactor · 10^Exponent`. Gli altri stream, `EventStream` (eventi digitali e dello stimolatore), `SegmentStream` (ritagli degli spike, medie) e `TimeStampStream` (tempi degli spike), vengono letti ma non usati dalla pipeline.
+
+**Caricamento**: lo stream scelto è di default quello `Electrode` con "Raw" nell'etichetta (altrimenti il primo `Electrode`); si può indicare per nome (`Stream_1`) o per parte dell'etichetta (`'Filter (1)'`). Il DataFrame ha `time` e una colonna per elettrodo, con l'etichetta MCS (`E1`…`E64`) e i valori in volt (float32). La lettura è a blocchi lungo il tempo e la decimazione (sopra 3 kHz, a circa 2 kHz) avviene blocco per blocco con un FIR a fase lineare senza ritardo: una registrazione di 64 canali × 5 minuti a 20 kHz (650 MB) si carica in circa 20 s con meno di 0,7 GB di memoria. I metadati portano `format = 'mcs_hdf5'`, `channels`, `unit`, `stream`, `conversion`, `datetime` (da `DateInTicks`), `events`, `spike_timestamps` e `paced`: vero quando c'è uno stream di eventi dello stimolatore o della porta digitale (`StgSideband`, `DigitalPort`) con almeno un evento. `inspect(path)` elenca registrazioni e stream; `read_segments(path)` restituisce i ritagli; `write_mcs_h5(...)` scrive un file minimo nello stesso formato (test, conversioni).
+
+**Canale**: `channel='auto'` valuta tutti gli elettrodi del file con `select_best_channel` e tiene il migliore; in alternativa si indica l'etichetta (`'E18'`). `file_info` riceve `electrodes` (le etichette del file), `paced` e, se il file ha eventi di stimolo, `stimulus_times_s`. La mappa elettrodi → camere, l'FPD di consenso per camera e l'analisi delle registrazioni stimolate (artefatto, cattura, latenza) non sono ancora nel software: per ora ogni file dà una misura su un elettrodo, come per i CSV.
 
 **Nota sulla nomenclatura (v3.5)**: nei nomi dei file, `ch1`/`ch2`/`ch3` indicano le *camere* (chamber) del chip. Le colonne del CSV, che rappresentano i due *elettrodi* di registrazione del Digilent, sono rinominate in `el1`/`el2` per evitare ambiguità.
 
@@ -1284,6 +1296,10 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 ---
 
 ## 11. Changelog
+
+### v3.11.0 (Ottobre 2026) — file HDF5 di Multi Channel Systems
+
+Lettore per i file HDF5 nel protocollo RawData di Multi Channel Systems (`mcs_hdf5.py`, dipendenza opzionale `h5py`, extra `mcs`): stream analogici con etichette ed unità degli elettrodi, eventi (stimolatore, porta digitale), tempi e ritagli degli spike. `load_recording` sceglie il lettore dal suffisso; batch, bozza di `samples.csv` e GUI accettano `.h5` insieme ai CSV. Lettura a blocchi con decimazione senza ritardo: 64 canali × 5 minuti a 20 kHz in circa 20 s e 0,7 GB. `channel` accetta l'etichetta di un elettrodo (`E18`); `auto` valuta tutti gli elettrodi del file. `file_info` riceve `electrodes`, `paced` e `stimulus_times_s` (§4.1).
 
 ### v3.10.0 (Ottobre 2026) — treno del ritmo per periodo e CV
 

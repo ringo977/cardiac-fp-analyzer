@@ -433,7 +433,8 @@ def draft_sample_sheet(folder, write=True, chambers_per_chip=CHAMBERS_PER_CHIP):
     from .normalization import canonical_drug_name
 
     folder = Path(folder)
-    files = sorted(p for p in folder.rglob('*.csv') if not is_sheet_file(p))
+    from .analyze import find_recordings
+    files = find_recordings(folder, is_sheet_file)
     rows = []
     for f in files:
         frows, info = _draft_rows_for_file(f, folder)

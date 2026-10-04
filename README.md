@@ -2,14 +2,14 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.10.0
+**Versione**: 3.11.0
 **Python**: ≥ 3.9
 
-Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali).
+Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali) o con sistemi **Multi Channel Systems** (file HDF5 del protocollo MCS RawData, fino a 64 elettrodi).
 
 ## Funzionalità
 
-- **Caricamento smart**: parsing header WaveForms, gestione file lunghi (fino a 360k campioni), downsampling min-max per plot
+- **Caricamento smart**: parsing header WaveForms, file HDF5 Multi Channel Systems (64 elettrodi, 20 kHz, lettura a blocchi), decimazione a 2 kHz, downsampling min-max per plot
 - **Filtraggio adattivo**: notch 50 Hz (+ armoniche), bandpass 0.5–500 Hz, smoothing Savitzky-Golay
 - **Beat detection multi-metodo**: prominenza, derivata, ampiezza — con auto-selezione del metodo migliore e **scoring configurabile via JSON**
 - **Selezione automatica canale** (el1/el2): scoring basato su regolarità, SNR e range fisiologico, con **pesi configurabili**
@@ -169,6 +169,12 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.11.0 (Ottobre 2026) — file HDF5 di Multi Channel Systems
+- **Lettore MCS-HDF5** (`mcs_hdf5.py`, extra `pip install ".[mcs]"`): i file `.h5` di Multi Channel Experimenter / DataManager (protocollo RawData) si analizzano come i CSV, da riga di comando, batch e GUI. Stream analogici con etichette (`E1`…`E64`), unità e fattore di conversione degli elettrodi; eventi dello stimolatore e della porta digitale (`paced`, `stimulus_times_s` in `file_info`); tempi e ritagli degli spike del rivelatore MCS.
+- Lettura a blocchi con decimazione a 2 kHz senza ritardo: una registrazione di 64 canali × 5 minuti a 20 kHz (650 MB) in circa 20 s e 0,7 GB di memoria.
+- `--channel` accetta l'etichetta di un elettrodo (`E18`); `auto` valuta tutti gli elettrodi del file e tiene il migliore.
+- Non ancora: mappa elettrodi → camere e FPD di consenso per camera, analisi delle registrazioni stimolate.
 
 ### v3.10.0 (Ottobre 2026) — treno del ritmo per periodo e CV
 - **Treno del ritmo** (`enable_rhythm_train`, attivo di default). Quando il CV del treno rilevato raggiunge il 25 %, periodo di battito, CV, RR locale della correzione e finestra di ripolarizzazione vengono dalla sequenza più regolare tra i rilevamenti, con le lacune riempite dal recupero guidato dalla periodicità. Segmentazione, QC, FPD e aritmie usano ancora tutti i rilevamenti.

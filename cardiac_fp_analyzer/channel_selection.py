@@ -1,8 +1,9 @@
 """
 channel_selection.py — Automatic electrode channel selection.
 
-Scores each available electrode (el1, el2) by beat quality, morphology
-correlation, amplitude and regularity, then returns the best channel.
+Scores each available electrode (el1, el2 of a CSV, or every electrode
+column of an MCS HDF5 file) by beat quality, morphology correlation,
+amplitude and regularity, then returns the best channel.
 
 All scoring weights are configurable via ChannelSelectionConfig.
 """
@@ -17,18 +18,20 @@ from .filtering import full_filter_pipeline
 logger = logging.getLogger(__name__)
 
 
-def select_best_channel(df, fs, cfg=None):
+def select_best_channel(df, fs, cfg=None, channels=None):
     """Select the best electrode based on beat detection quality.
 
     Parameters
     ----------
-    df : DataFrame with columns 'el1', 'el2', 'time'
+    df : DataFrame with 'time' and the electrode columns ('el1', 'el2', or
+        electrode labels)
     fs : sampling rate (Hz)
     cfg : AnalysisConfig or None
+    channels : list of column names to score, default all electrode columns
 
     Returns
     -------
-    best_ch : str ('el1' or 'el2')
+    best_ch : str (column name)
     details : dict  channel -> description string
     """
     if cfg is not None:
@@ -39,10 +42,12 @@ def select_best_channel(df, fs, cfg=None):
         cs = ChannelSelectionConfig()
         fc = FilterConfig()
 
-    best_ch, best_score = 'el1', -999
+    if channels is None:
+        channels = [c for c in df.columns if c != 'time']
+    best_ch, best_score = channels[0], -999
     gain = cfg.amplifier_gain if cfg is not None else 1.0
     details = {}
-    for ch in ['el1', 'el2']:
+    for ch in channels:
         try:
             raw_ch = df[ch].values
             if gain != 1.0:
