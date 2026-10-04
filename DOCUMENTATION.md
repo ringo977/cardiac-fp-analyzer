@@ -32,7 +32,8 @@
 8. [Interfaccia grafica](#8-interfaccia-grafica)
 9. [Export CDISC SEND](#9-export-cdisc-send)
 10. [Logging e diagnostica](#10-logging-e-diagnostica)
-11. [Changelog](#11-changelog)
+11. [Scheda dei parametri](#11-scheda-dei-parametri)
+12. [Changelog](#12-changelog)
 
 ---
 
@@ -240,7 +241,7 @@ Un file MCS contiene tutti gli elettrodi del chip, e un chip ospita più microte
 
 Sulle cinque piastre PHOENIX (108 registrazioni di camera) il batch con il consenso riproduce l'analisi di riferimento del report PHOENIX (stesso metodo, script separati): periodo con differenza mediana 0,1 %, FPDc di camera con differenza mediana 2,0 % (88 % entro il 5 %, 96 % entro il 10 %), contro 5,1 % (49 % e 75 %) dell'elettrodo singolo; 9 registrazioni classificate irregolari, ferme o con conduzione persa invece di ricevere un FPD.
 
-Sulle cinque piastre PHOENIX (26 registrazioni, 4 camere ciascuna, 108 misure) il batch per camera riproduce il periodo di battito dell'analisi di riferimento (mediana degli elettrodi concordi) con differenza mediana 0,1 % (95 % entro il 2 %) e l'FPDc, sui ritmi sopra 450 ms, con differenza mediana 4 % (81 % entro il 10 %); l'FPD di consenso per camera (stessa onda seguita su tutti gli elettrodi) resta da integrare.
+Prima del consenso (v3.12, solo elettrodo singolo): sulle cinque piastre PHOENIX (26 registrazioni, 4 camere ciascuna, 108 misure) il batch per camera riproduceva il periodo di battito dell'analisi di riferimento (mediana degli elettrodi concordi) con differenza mediana 0,1 % (95 % entro il 2 %) e l'FPDc, sui ritmi sopra 450 ms, con differenza mediana 4 % (81 % entro il 10 %); l'FPD di consenso per camera è stato integrato nella v3.14 (sopra).
 
 **Nota sulla nomenclatura (v3.5)**: nei nomi dei file, `ch1`/`ch2`/`ch3` indicano le *camere* (chamber) del chip. Le colonne del CSV, che rappresentano i due *elettrodi* di registrazione del Digilent, sono rinominate in `el1`/`el2` per evitare ambiguità.
 
@@ -1326,7 +1327,263 @@ Nella GUI Streamlit, il logging è configurato a livello `INFO` di default. Il p
 
 ---
 
-## 11. Changelog
+## 11. Scheda dei parametri
+
+Questa scheda dice, per ogni grandezza che il programma riporta, **su quali campioni è calcolata, con quale regola, con quali parametri di `AnalysisConfig` (e i loro valori di default) e quale alternativa è attiva quando il codice ne prevede più di una**. È stata verificata riga per riga sul codice della v3.14.0; dove un commento o una docstring dice altro, vale quanto scritto qui (§11.12 elenca le discordanze trovate). I nomi tra parentesi sono i campi di `AnalysisConfig` (`config.py`), nella forma `sezione.campo = default`.
+
+### 11.1 Ordine delle operazioni su una registrazione
+
+`analyze_single_file` (`analyze.py`) esegue nell'ordine:
+
+1. **Caricamento** (`loader.load_recording`). Se la frequenza di campionamento supera 3000 Hz la traccia è decimata a 2000 Hz (`loader.MAX_SAMPLE_RATE`, `TARGET_SAMPLE_RATE`; fattore `q = round(fs/2000)`). Per i CSV la decimazione è `scipy.signal.decimate` (FIR a fase zero); per i file MCS `.h5`/`.npz` è un FIR di Kaiser a blocchi senza ritardo (36·q+1 coefficienti, taglio a 0,45·fs_out, `mcs_hdf5._Decimator`). Tutto ciò che segue lavora a 2 kHz.
+2. **Scelta dell'elettrodo** (§11.10). Con due colonne (`el1`/`el2`) e `channel='auto'`: `select_best_channel`. Con più di due elettrodi, o con una camera indicata: `select_electrode_quick` sugli elettrodi ammessi (gli elettrodi di stimolazione non sono mai scelti).
+3. **Guadagno**: `segnale = grezzo / amplifier_gain` (`amplifier_gain = 1e4`) **solo per i CSV**; per i file MCS (`.h5`, `.npz`, già in volt) il guadagno è 1.
+4. **Filtraggio** (`filtering.full_filter_pipeline`): notch 50 Hz con 3 armoniche (Q 30), passa-banda Butterworth 0,5–500 Hz ordine 4 a fase zero (`filtfilt`), Savitzky–Golay finestra 7 ordine 3 (`filtering.*`).
+5. **Distanza minima per ritmi veloci** (solo chip, §11.3).
+6. **Rilevamento dei battiti** (§11.2) e, se servono, il secondo tentativo.
+7. **Correzioni manuali** (sidecar della GUI, se presente): sostituiscono i battiti rilevati.
+8. **Treno del ritmo** (§11.3), saltato se ci sono correzioni manuali.
+9. **Segmentazione, QC, verdetto di analizzabilità, filtri sui battiti, template, FPD, FPDc** (`_analyze_from_beats`, §11.4–11.6).
+10. **Aritmie, cessazione, spettro** (§11.8).
+11. **Misure di camera** (§11.11) quando il file ha una camera con almeno 3 elettrodi e `chamber_consensus = True`: sostituiscono periodo, CV, FPD e FPDc del singolo elettrodo.
+
+#### Quali battiti usa ogni grandezza
+
+Il programma lavora con più insiemi di battiti; sapere quale alimenta un numero evita confusioni nel confronto con misure manuali.
+
+| Insieme | Cos'è | Alimenta |
+|---|---|---|
+| `bi` (tutte le rilevazioni) | i battiti usciti dal rilevatore (dopo correzioni manuali) | verdetto di analizzabilità, `beat_periods` nel risultato, analisi aritmie, cessazione |
+| `bi_stats` | il treno del ritmo quando è applicato, altrimenti `bi` | `beat_period_ms_*`, `bpm_mean`, `stv_ms`, RR locale per l'FPDc, finestra di ricerca sul template, CV usato dai criteri di inclusione |
+| `bi_clean` | i battiti accettati dal QC | analisi dei residui (EAD), spettro, pass 2 delle aritmie nel batch |
+| `bi_fpd` | `bi_clean` dopo il filtro di ritmo e il filtro sugli RR anomali | template, FPD per battito, FPDc, ampiezza dello spike |
+| battiti comuni della camera | battiti visti da ≥ 3 elettrodi entro 60 ms (`chamber.py`) | periodo e CV di camera, che sui chip sostituiscono quelli dell'elettrodo |
+
+### 11.2 Rilevamento dei battiti (spike di depolarizzazione)
+
+**Definizione.** Un battito è il campione della depolarizzazione (lo spike) sul segnale filtrato. `beat_detection.detect_beats` con `beat_detection.method = 'auto'` prova tre rilevatori e tiene il migliore.
+
+**Distanza minima.** `beat_detection.min_distance_ms = 400` → due battiti non possono essere più vicini (parametro `distance` di `find_peaks`). Vedi §11.3 per i ritmi più veloci.
+
+**I tre rilevatori e cosa significa `threshold_factor` (= 4.0) in ciascuno.**
+
+- *Prominenza* (`_detect_prominence`): polarità = la più grande tra (99,9° percentile − mediana) e (mediana − 0,1° percentile); rumore = deviazione standard dei campioni tra il 5° e il 95° percentile; prominenza richiesta = `threshold_factor × rumore`. Se trova meno di un picco ogni 5 s e `threshold_factor > 2` riprova a metà soglia e tiene il risultato se ha più picchi.
+- *Derivata* (`_detect_derivative`): derivata (`np.gradient`) lisciata con Savitzky–Golay (`deriv_smooth_ms = 2`, ordine 2); rumore per polarità `ns = max(min(std 5–95 %, 1,4826·MAD), 0,5·std)`; altezza ≥ mediana + `threshold_factor·ns`, prominenza ≥ `ns`; vince la polarità con il CV degli intervalli più basso. Seguono tre passate di recupero: (2) soglia a 0,6·`threshold_factor` solo dentro buchi di 1,5–3,5 RR mediani con residuo di fase < 25 %; (3) fusione dei picchi di polarità opposta se interallacciati (≥ 40 % interallacciati, entro il 35 % del punto medio, ripidità ≥ 20 % del riferimento) e se il CV risultante è < 0,5 o < 1,1 × quello iniziale — allora la polarità diventa `'mixed'`; (4) riempimento guidato dal ritmo dei buchi ≥ 1,4 RR (1–5 battiti mancanti, finestra ± 30 % del RR, ripidità ≥ 15 %). Ogni battito è poi spostato sull'estremo entro ± `peak_refine_window_ms = 10`.
+- *Picco* (`_detect_peak`): altezza ≥ mediana ± `threshold_factor × std(5–95 %)`, prominenza ≥ quella std; vince la polarità con più picchi.
+
+**Scelta del rilevatore** (`_detect_auto`), punteggio per ciascuno (solo se ha trovato più di 2 intervalli, altrimenti `score_too_few = −10`):
+
+| Criterio | Punti |
+|---|---|
+| periodo medio in `bp_ideal_range_s = (0.4, 3.0)` s | `score_bp_ideal = 30`; altrimenti in (0,3, 5,0) s `score_bp_extended = 15` |
+| CV degli intervalli < `cv_good_frac = 0.15` / `cv_fair_frac = 0.30` / `cv_marginal_frac = 0.50` | 30 / 20 / 10 |
+| numero di battiti tra durata/3 e durata/0,3 (limiti fissi) | `score_rate_ok = 20`; altrimenti se > 3 battiti `score_rate_low = 10` |
+| più battiti di durata/0,3 | `score_rate_excess = −20` (in aggiunta) |
+| rilevatore a derivata con punteggio > −10 | `score_derivative_bonus = 15` |
+
+Vince il punteggio più alto; `det['method']` nel risultato dice quale.
+
+**Pulizia dopo la scelta, nell'ordine in cui il codice la esegue** (tutte dentro `_detect_auto`; i nomi sono campi di `beat_detection`):
+
+1. *Correzione del periodo bimodale* (`_fix_bimodal_bp`): con ≥ 10 battiti, se gli intervalli si separano in due gruppi con rapporto lungo/corto tra 1,4 e 3,0, gruppo minore > 15 % e separazione > 2 deviazioni, ripete il rilevamento con distanza minima al punto medio; tiene il risultato se il CV cala e restano ≥ 5 battiti. Soglie fisse.
+2. *Soglia di rumore, passata 1* (`noise_floor_*`): rumore di fondo = picco-picco mediano di finestre da `noise_floor_window_ms = 40` (servono ≥ 10 finestre); SNR del battito = picco-picco in ± `noise_floor_beat_half_window_ms = 20` / rumore; si scartano i battiti sotto `noise_floor_min_snr = 1.0`, soglia alzata alla media geometrica tra due gruppi quando esiste un gruppo basso (mediana ≤ `noise_cluster_max_median_snr = 1.35`, massimo ≤ `noise_cluster_max_snr = 3.5`, salto ≥ `noise_cluster_min_gap = 1.3`, separazione delle mediane ≥ `noise_cluster_min_separation = 3.0`). Non toglie mai tutti i battiti.
+3. *Popolazione minore* (`minor_pop_*`): con ≥ 8 battiti, separazione di Otsu sul logaritmo del picco-picco; la popolazione piccola (≥ 2 battiti) è scartata se la mediana grande/piccola ≥ `minor_pop_ratio_min = 2.5` e il CV della grande ≤ `minor_pop_cv_gain = 0.8` × CV di tutti. Non si applica se somiglia ad alternanza (fase stabile, `minor_pop_alternans_phase_std = 0.12`, conteggi entro il 30 %).
+4. *Gruppi di ampiezza* (`cluster_*`): con ≥ 5 battiti, ampiezza = max |x| in ± `cluster_window_ms = 50`; se il salto più grande tra ampiezze ordinate è ≥ `cluster_gap_ratio = 3.0` e il gruppo dominante ha ≥ `cluster_min_dominant_count = 3` battiti, tiene il gruppo alto. Non interviene se i due gruppi hanno conteggi entro ± 15 % (alternanza) o se la frazione interallacciata è < `cluster_topology_min_interlaced = 0.7`.
+5. *Classificazione della topologia del ritmo* (`topology_*`): non cambia i battiti, li etichetta — un gruppo: regolare (CV ≤ 0,15) o caotico (≥ 0,25); due gruppi: alternanza (conteggi entro ± 15 %, fase 0,5 ± 0,1), ectopici (CV di ampiezza del gruppo basso ≤ 0,25), rumore (≥ 0,40), altrimenti ambiguo; tre o più: trimodale. L'etichetta è usata dal filtro di ritmo (§11.4).
+6. *Validazione morfologica con jitter* (`morphology_*`, `jitter_*`): ampiezza ≥ `min_amplitude_ratio = 0.25` della mediana della metà alta (× 0,4 se polarità mista); con ≥ `morphology_min_beats = 5` battiti, correlazione di Pearson con il template (mediana del 50 % più ampio, finestra −20/+80 ms) cercata su spostamenti fino a `jitter_adaptive_fraction = 0.5` × semilarghezza del template (fallback `jitter_max_shift_ms = 5`): richiesto r ≥ `morphology_min_corr = 0.7` (0,245 se polarità mista); battiti invertiti accettati se r ≤ −0,7 e ampiezza ≥ 0,15. Riammissione dei battiti sul ritmo con r ≥ 0,35. Con polarità `'mixed'` la morfologia è saltata e resta solo la soglia di ampiezza al 10 %.
+7. *Recupero dei battiti mancanti* (`recovery_*`): con ≥ 4 battiti, cerca nei buchi ≤ 3,5 RR alla posizione attesa ± `recovery_search_tolerance = 0.25` RR; accetta con |r| ≥ `recovery_min_corr = 0.15`, oppure ampiezza ≥ 0,20 **e** dV/dt ≥ 0,25 del riferimento.
+8. *Soglia di rumore, passata 2*: come la 1.
+9. *Filtro adattato* (`mf_*`): solo con ≥ `mf_min_seeds = 10` battiti e SNR mediano < `mf_low_snr_regime = 3.0`; template ± `mf_half_ms = 25` dal `mf_seed_top_frac = 50 %` dei battiti più ripidi; picchi dell'uscita sopra mediana + `mf_threshold_k = 3.5` × 1,4826·MAD, refrattarietà max(250 ms, 0,5 RR). **Sostituisce** i battiti solo se il conteggio resta entro `mf_count_ratio = (0.3, 2.0)` volte.
+
+**Secondo tentativo** (`analyze.py`): se dopo tutto questo i battiti sono < 5 e la registrazione dura > 10 s, il rilevamento è rifatto con `retry_min_distance_ms = 300` e `retry_threshold_factor = 3.0`; il risultato sostituisce il primo in ogni caso. Nel secondo tentativo gli altri campi di `beat_detection` tornano ai default (non viene passata la configurazione).
+
+**Cosa riporta il risultato:** `det['method']`, `det['n_beats']`, `det['polarity']`, `det['rhythm_topology']`, `det['rhythm_train']`, e nel sommario `n_beats`, `beat_period_ms_*`.
+
+### 11.3 Periodo di battito (BP), frequenza, CV
+
+**Periodo di battito** = differenza tra battiti consecutivi di **`bi_stats`** (§11.1): `beat_period_ms_mean`, `beat_period_ms_median`, `beat_period_ms_cv` (= std di popolazione / media × 100), `bpm_mean = 60000 / media`, `stv_ms` (variabilità a breve termine di Poincaré del BP, `parameters.py`). Il vettore `beat_periods` nel risultato è invece quello di **tutte** le rilevazioni `bi`.
+
+**Treno del ritmo** (`rhythm_train`, `beat_detection.enable_rhythm_train = True`): si applica solo quando ci sono ≥ `rhythm_min_beats = 6` battiti **e** il CV di tutti gli intervalli è ≥ `rhythm_min_cv = 25 %` — quindi su una registrazione regolare `bi_stats` coincide con `bi`. Trova il periodo dominante (griglia logaritmica da 0,35 s a min(10 s, metà durata), tolleranza `rhythm_period_tol = 0.10`, primo lobo ≥ `rhythm_period_frac = 0.7` del massimo), seleziona per programmazione dinamica la sottosequenza di battiti compatibile con quel periodo (λ 0,3, σ 0,15, penalità per battito mancante 0,6, al massimo 3 di fila) e recupera i mancanti sul segnale. Se tiene meno di 5 battiti, o li tiene tutti, non si applica. Scopo: su un tessuto con battiti ectopici o rilevazioni spurie, il periodo e il CV descrivono il ritmo di fondo e non il rumore; i battiti scartati restano visibili al QC e alle aritmie.
+
+**Ritmi veloci sui chip** (`analyze.py`): quando il punteggio rapido dell'elettrodo (§11.10) dà un periodo degli spike < 1,1 × `min_distance_ms` con CV ≤ 15 %, la distanza minima (e quella del secondo tentativo) diventa `max(100 ms, 0,5 × periodo)`. Senza questo un tessuto a 350 ms perderebbe un battito su due. Non si applica ai CSV a due elettrodi.
+
+**Sui chip** (§11.11) `beat_period_ms_mean` e `beat_period_ms_median` sono entrambi sostituiti dal periodo mediano dei battiti comuni della camera e `beat_period_ms_cv` dal CV di camera; i valori dell'elettrodo restano in `beat_period_ms_median_electrode` ecc.
+
+### 11.4 Controllo qualità e analizzabilità
+
+Dentro `_analyze_from_beats`, nell'ordine.
+
+**Segmentazione.** Ogni battito è tagliato da `quality.segment_pre_ms = 50` ms prima dello spike a `post_ms = max(850, search_end_ms + 50, search_end_pct_rr × RR mediano di bi_stats + 50)` dopo; i battiti troppo vicini ai bordi sono esclusi. Se il RR mediano dei battiti buoni (`bi_fpd`) richiede una finestra più lunga di oltre 100 ms, si ri-segmenta.
+
+**QC per battito** (`quality_control.validate_beats`, campi `quality.*`):
+
+- *SNR globale*: picco-picco medio in ± 30 ms attorno agli spike / deviazione standard dei campioni fuori da quelle finestre (IQR/1,349 se sono pochi).
+- *Ampiezza*: picco-picco in ± `morphology_window_ms = 20`; scartato se < `amplitude_reject_fraction = 0.25` × mediana della metà alta.
+- *Morfologia*: template = mediana campione per campione dei `morphology_max_beats = 30` battiti più ampi; correlazione di Pearson sui primi `morphology_corr_region_ms = 150` ms del segmento (−50/+100 ms), cercando spostamenti fino a metà semilarghezza del template (valori fissi, indipendenti dal jitter del rilevatore). Soglia `morphology_threshold = 0.40`; **soglia adattiva**: se meno del 60 % dei battiti la raggiunge, la soglia scende al 5°/15°/30° percentile delle correlazioni (CV degli intervalli < 0,20 / < 0,35 / oltre), mai sotto `morphology_marginal = 0.20`.
+- *Riammissione*: con ≥ 4 accettati, un battito scartato per morfologia ma con ampiezza buona, sul ritmo (residuo < 0,3 RR) e con r ≥ 0,20 è riammesso; con residuo < `strict_rhythm_residual_ratio = 0.10` RR e ampiezza ≥ `strict_rhythm_amp_ratio = 0.50` è riammesso qualunque sia r.
+
+**Voto A–F** (`quality_control.grade`, prima condizione che vale):
+
+| Voto | Condizione |
+|---|---|
+| F | battiti accettati < `min_beats_for_analysis = 3`, oppure SNR < `snr_poor = 2` **e** scarti > 60 % |
+| D | SNR < `snr_fair = 3`, oppure scarti > `max_rejection_rate = 0.40` |
+| C | SNR < `snr_good = 5`, oppure scarti > `rejection_grade_c = 0.20`, oppure r medio < 0,40 |
+| B | SNR < `snr_excellent = 8`, oppure scarti > `rejection_grade_b = 0.05` |
+| A | altrimenti |
+
+Il voto scende di `rhythm_qc_downgrade_steps = 1` se la frazione di battiti nel gruppo "rumore" della topologia è ≥ `rhythm_qc_downgrade_threshold = 0.30`, e diventa F se la registrazione non è analizzabile.
+
+**Filtro di ritmo** (`rhythm_integration.apply_rhythm_filter`): per le topologie alternanza, ectopici, rumore e trimodale tiene solo il gruppo dominante di `bi_clean`; rinuncia se resterebbero meno di `rhythm_filter_min_retention_ratio = 0.5` dei battiti o meno di `rhythm_filter_min_retention_beats = 3`.
+
+**Filtro degli RR anomali** (`max_rr_outlier_ratio = 5`): esclude dall'FPD i battiti il cui RR precedente supera 5 volte il mediano (pause); rinuncia se resterebbero meno di max(3, n/2) battiti. Il risultato è `bi_fpd`.
+
+**Verdetto di analizzabilità** (`quality_control.assess_analysability`, su **tutte** le rilevazioni `bi`). La registrazione è **non analizzabile** se vale una qualsiasi di:
+
+- battiti < `not_analysable_min_beats = 3`;
+- SNR mediano dei battiti (picco-picco ± 20 ms / picco-picco mediano delle finestre da 40 ms) < `not_analysable_snr = 1.6`;
+- battiti < `not_analysable_sparse_beats = 16` **e** CV degli intervalli > `not_analysable_sparse_cv_pct = 40 %` (pochi battiti e sparsi: non è un ritmo).
+
+Effetto: `not_analysable = True`, `not_analysable_reason`, voto F, tutti i campi `fpd_ms*`, `fpdc_*`, `fpd_confidence`, `template_fpd*` a NaN, `fpd_reliable = False`, classe di aritmia "Not analysable" con rischio 0. Periodo, ampiezza e i valori per battito restano nel risultato a scopo diagnostico. Sui chip il verdetto può arrivare anche dalla camera (§11.11) con motivo "ritmo irregolare", "conduzione persa" o "tessuto fermo".
+
+### 11.5 FPD (durata del field potential)
+
+**Definizione.** Tempo dallo spike di depolarizzazione all'onda di ripolarizzazione. Il programma lo misura **prima sul template** (battito medio) per sapere *quale* onda seguire, poi **su ogni battito** attorno a quella posizione; il numero riportato è la mediana per battito.
+
+**Template** (`parameters.build_template`): servono ≥ 5 battiti in `bi_fpd`; fino a `repolarization.max_beats_template = 60` battiti equispaziati, allineati per correlazione dei primi `alignment_depol_region_ms = 100` ms entro ± `alignment_max_shift_ms = 50`, poi mediana campione per campione.
+
+**FPD sul template** (`repolarization.find_repolarization_on_template`):
+
+1. *Spike* = massimo di |x − media| entro ± `spike_search_window_ms = 50` dalla posizione nominale.
+2. *Finestra di ricerca*: da spike + `search_start_ms = 150` a spike + max(`search_end_ms = 900`, `search_end_pct_rr = 0.70` × RR), dove RR = max(RR mediano di `bi_stats`, RR mediano di `bi_fpd`). Se l'estensione oltre 900 ms è usata, la finestra è tagliata `next_spike_guard_margin_ms = 30` ms prima dello spike successivo (riconosciuto per correlazione ≥ 0,9 con la forma dello spike e ampiezza ≥ 50 %).
+3. *Condizionamento*: passa-basso `repol_lowpass_hz = 20` (ordine 3, fase zero) e detrend lineare ancorato al primo/ultimo 8 % della finestra.
+4. *FPD minimo*: `max(min_fpd_ms = 120, min(min_fpd_pct_rr = 0.20 × RR, max_adaptive_min_fpd_ms = 600))`.
+5. *Candidati*: picchi positivi e negativi con prominenza ≥ `peak_prominence_factor = 0.15` × std della finestra e distanza ≥ `peak_min_distance_ms = 50`.
+6. *Scelta tra i candidati* — `repol_candidate_rule = 'prefer_positive'` (attiva): tra i candidati, il picco **positivo** più prominente la cui prominenza è ≥ `repol_positive_min_rel_prom = 0.5` della prominenza massima e che sta entro `repol_positive_max_offset_ms = 400` dal candidato più prominente; se non esiste, il candidato più prominente qualunque sia il segno. Alternativa `'max_prominence'`: sempre il più prominente. Motivazione: l'onda T del field potential è di norma positiva; il negativo più grande è spesso il ritorno della depolarizzazione.
+7. *Soglia di qualità*: prominenza / std del segnale (escludendo ± 30 ms attorno al picco) < `repol_gate_min_snr = 2.0` → nessun FPD sul template.
+8. *Punto misurato* — `repolarization.fpd_method = 'peak'` (attivo): la latenza del picco dell'onda sul segnale filtrato a 20 Hz e detrendato. Alternative: `'tangent'` (dal picco cerca la massima pendenza di discesa entro `tangent_max_slope_window_ms = 300`, e prende l'intersezione della tangente con lo zero se cade entro `tangent_max_extension_ms = 400`, altrimenti il punto di massima pendenza, altrimenti il picco); `'max_slope'`, `'50pct'`, `'baseline_return'`; `'consensus'` (esegue tutti e cinque, gruppo più grande entro ± 50 ms, priorità tangent > max_slope > 50pct > baseline_return > peak — solo sul template). Il picco è il default perché è il punto più ripetibile tra battiti e tra elettrodi, e la validazione D10.1 è stata fatta così; la tangente dipende dalla pendenza di discesa, molto variabile sui tessuti µHeart.
+9. *Confidenza del template*: `0,6 × min(1, (prominenza/std)/3) + 0,4 × max(0, 1 − dispersione/300 ms)`, dove la dispersione copre picco, fine dell'onda e attraversamento dello zero.
+
+**FPD per battito** (`repolarization.find_repolarization_per_beat`), per ogni battito di `bi_fpd`:
+
+- finestra: con il picco del template, da spike + max(100 ms, picco − `per_beat_tolerance_ms = 150`) a picco + 350 ms; senza template (segnale debole), finestra non guidata da `search_start_ms` a max(900, 0,7 × RR locale);
+- FPD minimo come sopra, con il RR locale del battito;
+- rumore = max(min(1,4826·MAD, std), 0,4·std); candidati con prominenza ≥ `per_beat_prominence_factor = 0.15` × rumore e distanza `per_beat_peak_distance_ms = 30`;
+- punteggio di ogni candidato = prominenza / (1 + |distanza dalla posizione attesa| / `per_beat_distance_penalty_ms = 50`); entrambi i segni concorrono (`per_beat_prefer_template_sign = False`);
+- soglia: punteggio / std (escludendo ± 50 ms) < `repol_gate_min_snr_beat = 1.5` (guidato) o `repol_gate_min_snr_beat_unguided = 1.5` → FPD del battito = NaN;
+- battiti invertiti (correlazione dello spike con il template ≤ `inversion_corr_threshold = −0.5`): segno dell'onda invertito e guida del template abbandonata;
+- `fpd_method` si applica anche qui (`'peak'` → latenza del picco).
+
+**Quando l'FPD non viene misurato.** Segnale troppo debole (picco-picco mediano degli spike < `repolarization.min_signal_amplitude_uV = 10` µV): si salta il template e la ricerca per battito è non guidata. Nessun candidato o soglia non superata: NaN per quel battito. Registrazione non analizzabile: tutti NaN.
+
+**Campi del sommario:** `fpd_ms_median` (**il valore di riferimento**), `fpd_ms_mean/std/cv/min/max/n`, `template_fpd_ms`, `repol_window_rr_ms`, `fpd_valid_ratio` = frazione di battiti con FPD valido, `fpd_reliable` = `fpd_valid_ratio ≥ repolarization.min_valid_fpd_ratio = 0.50`, `n_beats_no_repol`, `pct_beats_no_repol`, `fpd_confidence` = `fpd_conf_weight_template = 0.5` × confidenza del template + `fpd_conf_weight_consistency = 0.5` × max(0, 1 − CV degli FPD / `fpd_cv_max_for_confidence = 0.5`) (la seconda parte vale 0 con ≤ 3 FPD validi).
+
+**Sui chip** (§11.11) `fpd_ms_median` è sostituito dal consenso di camera; `fpd_ms_median_electrode` conserva il valore dell'elettrodo e `fpd_source` dice da dove viene il numero.
+
+### 11.6 FPDc (FPD corretto per la frequenza)
+
+**Per battito** (`parameters.extract_beat_parameters`): RR locale = tempo dal battito al battito precedente di `bi_stats` (a oltre 50 ms); il primo battito non ha RR e non ha FPDc. `repolarization.correction = 'fridericia'` (attiva): `FPDc = FPD / RR^(1/3)` con RR in secondi. Alternative `'bazett'` (`FPD / RR^(1/2)`), `'none'`. Il sommario riporta anche entrambe le formule: `fpdc_fridericia_ms_*`, `fpdc_bazett_ms_*`. Fridericia è quella del lavoro di riferimento e sovracorregge meno ai periodi lunghi (1–2 s) dei tessuti µHeart (§6).
+
+**Sommario:** `fpdc_ms_mean` (**il valore usato per le variazioni e la decisione sul farmaco**), `fpdc_ms_median/std/cv/min/max/n`.
+
+**Sui chip** (§11.11) `fpdc_ms_mean` è sostituito dall'FPDc di camera = FPD di consenso / BP di camera^(1/3) (sempre Fridericia, qualunque sia `correction`); `fpdc_ms_mean_electrode` conserva il valore dell'elettrodo.
+
+### 11.7 Ampiezza dello spike, tempo di salita, dV/dt
+
+Per ogni battito di `bi_fpd`, sul segnale filtrato e corretto per il guadagno (`parameters.extract_beat_parameters`):
+
+- `spike_amplitude_mV` = picco-picco nella finestra da `spike_pre_ms = 10` prima a `spike_post_ms = 20` dopo lo spike, × 1000; sommario `spike_amplitude_mV_mean/median/cv/...` (la **media** è quella usata per `pct_amp_change`);
+- `rise_time_ms` = tempo dal 10 % al 90 % dell'escursione nella finestra dello spike (primo campione sopra ogni livello);
+- `max_dvdt` (V/s) = massimo di |derivata| nella finestra dello spike — per battito, non riassunto nel sommario;
+- `repol_amplitude_mV` = valore del segnale passa-basso al picco di ripolarizzazione.
+
+### 11.8 Aritmie, cessazione, spettro
+
+**Aritmie** (`arrhythmia.analyze_arrhythmia`, su **tutte** le rilevazioni `bi`; i residui sui battiti accettati dal QC). Flag (campi `arrhythmia.*`): tachicardia BP medio < `tachycardia_bp_ms = 300`; bradicardia > `bradycardia_bp_ms = 2500`; `rr_irregular` CV > `rr_irregularity_cv = 15 %` (critico > `rr_critical_cv = 30`); prematuri intervallo < `premature_factor = 0.7` × medio (critico se > 10 %); ritardati > `delayed_factor = 1.5`; `beat_cessation` intervallo > `cessation_factor = 3` × medio; `high_stv` STV del BP > `stv_high_risk_ms = 10`; `fpd_very_long` FPD medio > `fpd_critical_length_ms = 500`. **EAD**: statistici (FPD − mediana > `ead_mad_factor = 3` × 1,4826·MAD, con più di 5 FPD) e da residuo (`residual_analysis`: picco positivo del residuo battito − template con prominenza > max(6σ_MAD, 8 % del picco-picco del template), larghezza 8–150 ms, nella finestra 150–500 ms dall'inizio del segmento, cioè 100–450 ms dallo spike; flag critico se incidenza > 10 %). Instabilità morfologica = sigmoide(15 × (RMS medio del residuo / picco-picco del template − 0,15)).
+
+Punteggio di rischio (`risk_score_mode = 'manual'`, su 100): CV del BP fino a 18, prematuri + ritardati fino a 8, instabilità 18 × valore, incidenza EAD fino a 18, CV di ampiezza fino a 8, STV di Poincaré dell'FPDc fino a 10, pause 10, battiti senza ripolarizzazione fino a 10. Classe (prima che vale): Fibrillation-like (pause e CV > 40) › EAD with Triggered Activity (EAD > 20 %) › Proarrhythmic EAD-prone (EAD > 5 % e CV > 15) › Morphologically Unstable + Irregular › Intermittent Cessation › Highly Irregular (CV > 30) › Morphologically Unstable (> 0,6) › Frequent Premature Beats (> 10 %) › Irregular Rhythm (CV > 15) › Tachycardia / Bradycardia › Borderline › Normal Sinus Rhythm. Inoltre "Insufficient Data" (< 3 intervalli), "Not analysable", "Baseline (reference)".
+
+**Cessazione** (`cessation.detect_cessation`, sempre con i default di `CessationConfig`, non modificabili da `AnalysisConfig`): cinque sotto-punteggi — silenzio energetico (finestre da 2 s con RMS < 0,15 × mediana dei battiti per ≥ 3 s), buchi (> max(3 IBI mediani, 2 s)), decadimento di ampiezza (4 tratti, rapporto < 0,40), silenzio terminale (≥ max(5 s, 20 %)), scarti del QC (> 0,4/0,6/0,8) — combinati in una confidenza e un tipo. Usata dal TdP score (3 se confidenza > 0,5), dal `cessation_flag` del farmaco e dalla dimensione dei punti della risk map; non entra nel punteggio di aritmia.
+
+**Spettro** (`spectral.analyze_spectral`): PSD di Welch (4 s), fondamentale in 0,3–4 Hz, potenze di banda, entropia normalizzata 0,5–100 Hz, armoniche, centroide spettrale del battito medio. Nel batch ogni registrazione è confrontata con il suo baseline (`spectral_change_score`, media di fino a 4 componenti): è l'indice Y della risk map (§4.11); non influisce sulla decisione sul farmaco.
+
+### 11.9 Batch: inclusione, abbinamento, variazioni, decisione sul farmaco
+
+**Criteri di inclusione** (`inclusion.apply_inclusion_criteria`, campi `inclusion.*`): valutati **solo sui baseline**, una registrazione per volta, primo criterio che fallisce:
+
+| Criterio | Regola | Default |
+|---|---|---|
+| CV del periodo | fallisce se `beat_period_ms_cv` ≥ `max_cv_bp` **o è NaN** | 25 % |
+| intervallo FPDc | fallisce se `fpdc_ms_mean` < `fpdc_range_min` o > `fpdc_range_max` (NaN passa) | 100–1200 ms |
+| confidenza FPD | fallisce se `fpd_confidence` < `min_fpd_confidence` (NaN passa) | 0,66 |
+| FPD/RR | fallisce se `fpd_ms_median / beat_period_ms_median` > `max_fpd_rr_ratio` (la ripolarizzazione non può occupare tutto il ciclo) | 0,80 |
+
+Spenti di default: plausibilità, regola combinata, intervallo fisiologico, precisione (rSEM), outlier di popolazione. Un **tessuto è escluso** solo se **tutti** i suoi baseline falliscono; allora le sue dosi hanno `inclusion.passed = False`. In modalità `auto` il gruppo è il tessuto (qualunque elettrodo sia stato analizzato); con `el1`/`el2` espliciti è tessuto + elettrodo.
+
+**Abbinamento dose–baseline** (`normalization.pair_with_baselines`): candidati = baseline analizzabili dello stesso gruppo (in mancanza, dello stesso tessuto su qualunque elettrodo; i CTRL solo se non c'è baseline). Se tutte le registrazioni hanno un orario di acquisizione, il riferimento è **l'ultimo baseline prima della prima dose** (`last_reference_before`; a parità, voto QC migliore poi nome file). Senza orari: stessa cartella, poi `reference_kind` t0, poi voto QC, poi nome.
+
+**Variazioni** (`compute_normalized_parameters`): `pct_bp_change` da `beat_period_ms_mean`, `pct_fpdc_change` da `fpdc_ms_mean`, `pct_amp_change` da `spike_amplitude_mV_mean`, tutte `(dose − baseline) / baseline × 100`. `fpd_reliable` della coppia = baseline **e** dose affidabili; esclude la registrazione solo se `normalization.require_fpd_reliable = True` (spento). ΔFPDc **non calcolato** se il periodo mediano (o medio) di una delle due supera `normalization.max_beat_period_for_fpdc_ms = 6000` (la correzione di Fridericia non ha senso su un tessuto quasi fermo).
+
+**TdP score per registrazione** (soglie `normalization.threshold_low/mid/high = 10/15/20 %`): 3 se cessazione, o ΔFPDc ≥ 20 %, o flag EAD critico con ΔFPDc ≥ 10 %; 2 se ≥ 15 %; 1 se ≥ 10 %; −1 se ≤ −10 %; 0 altrimenti.
+
+**Decisione sul farmaco** (`classify_drug`, `normalization.classification_method = 'concentration'`, attiva):
+
+1. entrano le dosi abbinate, analizzabili, con `inclusion.passed`; washout, veicolo e controlli sono esclusi;
+2. le concentrazioni sono lette come numeri (unità dal nome file); più registrazioni dello stesso tessuto alla stessa concentrazione sono prima mediate, poi si media tra tessuti;
+3. una concentrazione conta se misurata in ≥ `classification_min_tissues = 2` tessuti;
+4. **positivo** (prolunga l'FPDc) se esistono `classification_consecutive = 2` concentrazioni adiacenti, tra quelle che contano, con media ≥ `classification_threshold = 'mid'` (= 15 %); **dati insufficienti** se contano meno di 2 concentrazioni; **negativo** altrimenti. Non esiste una classe "accorcia" a livello di farmaco: l'accorciamento compare solo nel TdP score −1 delle singole registrazioni;
+5. `decision_value` = il massimo, tra le finestre, del minimo delle medie.
+
+Alternative: `'n_above'` (positivo se almeno `classification_n_above = 2` registrazioni superano la soglia), `'majority'`, `'mean'`. La regola per concentrazione è attiva perché richiede l'effetto su più tessuti **e** su due dosi consecutive, resistendo a un singolo valore anomalo (§4.10). L'override per cessazione (`enable_cessation_override`) è spento.
+
+### 11.10 Scelta dell'elettrodo
+
+**Due colonne (`el1`/`el2`, `channel='auto'`)** — `channel_selection.select_best_channel` analizza entrambe (guadagno, filtro, rilevamento con i default) e somma: `w_bp_range = 15` se il periodo è in `bp_ideal_range_s = (0.3, 4.0)` s; `w_rate_ok = 10` se la frequenza è in (0,3, 3,5) battiti/s; fino a 40 dalla correlazione media con il template (44·r − 4, limitata a 0–40); max(0, 20 − 0,4 × CV %); fino a 15 dall'ampiezza mediana (mV/500 × 15 — con il guadagno 1e4 questo termine è di fatto nullo). Vince la colonna con più punti (i punteggi sono stampati in modalità `verbose`).
+
+**Chip a più elettrodi** (`select_electrode_quick` / `quick_electrode_scores`, 1–2 s per file): per ogni elettrodo ammesso, componente veloce = segnale filtrato − passa-basso 10 Hz; spike = picchi di |veloce| > 5 × 1,4826·MAD a ≥ 150 ms; `snr` = picco-picco mediano (± 20 ms) / rumore; `cv_pct` = 1,4826·MAD / mediana degli intervalli; `repol_snr` = picco-picco del battito mediano (20 Hz) tra 200 ms e min(0,9 × BP, 1,5 s) sul rumore del passa-basso. **Punteggio = min(snr, 30) + 1,5 × min(repol_snr, 10) − 0,4 × min(cv, 100)**; −∞ con meno di 10 spike, periodo fuori 0,2–6 s, elettrodo di stimolazione o traccia piatta. I punteggi di tutti gli elettrodi sono in `file_info['electrode_scores']` (GUI: colore della mappa del chip e suggerimento al passaggio del mouse). Nel batch l'elettrodo scelto sul baseline è mantenuto sulle dosi dello stesso tessuto (`tissue_electrode_from`); se su una dose non produce un'analisi valida si riprova con il migliore degli altri elettrodi della camera, salvo che la camera sia irregolare, con conduzione persa o ferma.
+
+### 11.11 Misure di camera (chip a più camere)
+
+`chamber.analyze_chamber` lavora su **tutti gli elettrodi di registrazione della camera** (senza guadagno; costanti in testa a `chamber.py`):
+
+1. *Elettrodi utilizzabili*: deviazione standard dei primi 60 s tra 1 µV e 100 µV, ≥ 10 spike (stesso rivelatore rapido di §11.10), periodo entro ± 20 % del periodo mediano degli elettrodi. Servono ≥ `MIN_ELECTRODES = 3`, altrimenti stato **insufficient**.
+2. *Tessuto fermo*: se al baseline c'erano ≥ 6 elettrodi con battiti e ora ne hanno meno di max(3, 30 % di quelli) → **silent**.
+3. *Battiti comuni* = battiti visti da ≥ 3 elettrodi entro `SYNC_TOL_S = 0.06` s; servono ≥ `MIN_COMMON_BEATS = 10`, altrimenti **silent**. BP di camera = intervallo mediano; `bp_cv_pct` = std/media; CV robusto = 1,4826·MAD/mediana. *Sincronia* = frazione dei battiti di ogni elettrodo che coincide con un battito comune.
+4. *Stato* (prima condizione che vale): insufficient → silent → **conduction_lost** se sincronia < `SYNC_LOST = 0.5` → **irregular** se CV robusto > `CV_IRREGULAR_PCT = 15 %` → **regular**.
+5. *FPD di consenso sul baseline*: su ogni elettrodo utilizzabile, battito mediano (passa-basso 20 Hz) e `find_repolarization_on_template` con le stesse regole di §11.5; valido se < `FPD_MAX_FRACTION_BP = 0.8` × BP; si prende il gruppo più numeroso di elettrodi che concordano entro ± `FPD_AGREE_PCT = 15 %` (a parità il più lungo) e la **mediana** di quel gruppo; servono ≥ 3 elettrodi (`fpd_method = 'consensus'`, `fpd_n`, `electrode_fpd`).
+6. *Stessa onda sulle dosi*: per ogni elettrodo il template del baseline (± `TEMPLATE_HALF_S = 0.12` s, o ± 0,06 s per ritmi veloci) è cercato per correlazione sul battito mediano della dose; accettato se r ≥ `MIN_CORR = 0.8`; poi la stessa regola di concordanza (`fpd_method = 'same wave'`, `electrode_corr`). Così la dose misura l'onda che il baseline misurava, e non un'altra deflessione che la dose ha reso più prominente.
+7. *FPDc* = FPD / BP^(1/3) (Fridericia).
+
+**Cosa cambia nel sommario** (`analyze._apply_chamber_consensus`): `beat_period_ms_mean` e `beat_period_ms_median` ← BP di camera, `beat_period_ms_cv` ← `bp_cv_pct`, `beat_period_cv_robust_pct`, `chamber_status`, `chamber_status_reason`, `chamber_electrodes`, `chamber_synchrony`; se **regular** e misurato, `fpd_ms_median` e `fpdc_ms_mean` ← camera, `fpd_source` = "chamber consensus"/"chamber same wave"; gli altri campi dell'FPD (`fpd_confidence`, `fpd_ms_mean`, `fpdc_ms_median`) restano dell'elettrodo. Ogni campo sovrascritto conserva il valore dell'elettrodo in `*_electrode`. Se lo stato non è regular: `not_analysable = True` con motivo "ritmo irregolare" / "conduzione persa" / "tessuto fermo", FPD e FPDc a NaN, `fpd_reliable = False`, flag critico nelle aritmie (il voto QC resta quello dell'elettrodo). Si disattiva con `chamber_consensus = False`: tornano i soli valori del singolo elettrodo.
+
+### 11.12 Discordanze tra commenti e codice, e campi non letti
+
+Rilevate nella verifica della v3.14.0; il comportamento documentato sopra è quello del codice.
+
+- `analyze.py` dice che il treno del ritmo è "off by default": è **attivo** (`enable_rhythm_train = True`), ma interviene solo con CV ≥ 25 %.
+- Docstring di `find_repolarization_on_template` e del preset `default` parlano di tangente: il metodo di default è **`'peak'`**; il preset `peak_method` non cambia nulla.
+- `fpd_method = 'consensus'` vale solo sul template; per battito ricade su `'tangent'`.
+- Il commento di `min_signal_amplitude_uV` dice che l'FPD diventa NaN su tutti i battiti: in realtà si salta solo il template, la ricerca per battito prosegue non guidata.
+- Il commento della soglia per battito cita 1,2 e una soglia più severa senza guida: entrambe valgono 1,5 e si applicano al punteggio penalizzato per distanza, non alla prominenza.
+- `_fix_bimodal_bp`: docstring 1,5–2,8×, codice 1,4–3,0×.
+- Il secondo tentativo di rilevamento e `select_best_channel` non ricevono la configurazione: usano i default di `BeatDetectionConfig` per tutto tranne distanza e soglia.
+- La correlazione del QC prova solo spostamenti in avanti (`quality_control.morphology_correlation`, `start = max(0, lag)`).
+- Gli indici dei gruppi della topologia sono calcolati prima della validazione morfologica, del recupero e del filtro adattato: se questi cambiano il numero di battiti, il filtro di ritmo può tenere battiti sbagliati o saltare senza avviso. Da correggere.
+- Nel batch il pass 2 delle aritmie (template dal baseline) sostituisce il report del pass 1, perdendo la classe "Not analysable" e i flag di camera.
+- `fpd_prolongation` nelle aritmie non scatta mai (`baseline_summary` non viene passato).
+- L'abbinamento con orari non esclude un baseline che ha fallito l'inclusione, contrariamente alla docstring.
+- Il commento di `amplifier_gain` dice che la scelta dell'elettrodo lavora in unità grezze: divide invece per il guadagno (il termine di ampiezza del punteggio è quindi ≈ 0 sui CSV).
+- Campi mai letti: `filtering.highpass_*`, `filtering.lowpass_*`, `beat_detection.topology_noise_gap_ratio`, `arrhythmia.ead_critical_count`, `arrhythmia.premature_count_threshold`, `arrhythmia.tdp_require_severe_only`, `channel_selection.snr_good/snr_fair`. `CessationConfig` e `SpectralConfig` non fanno parte di `AnalysisConfig`.
+- Soglie fisse nel codice (non configurabili): finestra ± 30 ms dell'SNR globale, 60 % di scarti per il voto F, limiti di frequenza del punteggio `auto`, refrattarietà 250 ms del filtro adattato, 10 %/5 % di severità delle aritmie, livelli dei sotto-punteggi di cessazione.
+
+---
+
+
+## 12. Changelog
+
+### Documentazione (4 ottobre 2026)
+
+Scheda dei parametri (§11): per ogni grandezza i campioni usati, la regola, i campi di `AnalysisConfig` con i default, l'alternativa attiva e le decisioni automatiche, verificata sul codice della v3.14.0; §11.12 elenca le discordanze tra commenti e codice e i campi mai letti. Manuale utente riscritto alla v3.14 (`docs/MANUALE_Cardiac_FP_Analyzer.md`, sorgente; il `.docx` si genera con `python docs/build_manual.py`).
 
 ### v3.14.0 (Ottobre 2026) — misure di camera: consenso per l'FPD e stato del ritmo
 

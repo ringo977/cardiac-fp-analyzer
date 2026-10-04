@@ -118,7 +118,7 @@ pip install ".[gui,reports]"
 cardiac-fp-gui                       # oppure: python -m pyside_app.main
 ```
 
-File → Apri CSV per un singolo file; il pannello **Studi** gestisce cartelle intere
+File → Apri registrazione (CSV, MCS `.h5` o `.npz`) per un singolo file; il pannello **Studi** gestisce cartelle intere
 organizzate in Studio → Gruppo (farmaco) → File (concentrazione), con analisi batch,
 metriche per gruppo, curve dose-risposta ed export CDISC SEND.
 
@@ -139,6 +139,11 @@ config = AnalysisConfig()          # amplifier_gain = 1e4 di default (µECG-Phar
 
 results = batch_analyze('/path/to/data/', config=config)
 ```
+
+## Documentazione
+
+- `DOCUMENTATION.md`: documentazione tecnica; il §11 è la **scheda dei parametri** (come si ottiene ogni numero, con i campi di `AnalysisConfig` e i default).
+- `docs/MANUALE_Cardiac_FP_Analyzer.md` / `.docx`: manuale utente v3.14 (il `.docx` si genera con `python docs/build_manual.py`).
 
 ## Stato della validazione
 
