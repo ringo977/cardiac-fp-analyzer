@@ -87,3 +87,35 @@ def test_per_beat_window_stops_before_the_beats_own_next_spike():
                                            beat_period_s=1.4, next_rr_s=1.15)
     assert bounded[0] is not None and bounded[0] * 1000 == pytest.approx(900, abs=15)
     assert unbounded[0] is None or abs(unbounded[0] * 1000 - 900) > 100
+
+
+def test_diastolic_baseline_is_the_resting_level_and_window_independent():
+    """'diastolic': the segment is referred to the pre-spike resting level
+    (constant), so the values on the part shared by two windows are the
+    same whatever the window end; the window-ends line is not."""
+    from scipy import signal as sig
+
+    from cardiac_fp_analyzer.repolarization import diastolic_detrend, linear_detrend_endpoints
+    rc = AnalysisConfig().repolarization
+    fs = FS
+    n = int(1.4 * fs)
+    t = np.arange(n) / fs * 1000 - 50                                  # spike at 0, 50 ms of pre-spike
+    x = 5e-6 + 60e-6 * np.exp(-0.5 * (t / 1.0) ** 2) + 10e-6 * np.exp(-0.5 * ((t - 600) / 25) ** 2) \
+        + 6e-6 * np.exp(-0.5 * ((t - 1000) / 60) ** 2)                 # resting level 5 µV, T-wave, late dome
+    spike = int(0.05 * fs)
+    start = spike + int(0.150 * fs)
+    b, a = sig.butter(rc.repol_filter_order, rc.repol_lowpass_hz / (0.5 * fs), btype='low')
+    outs = {}
+    for end_ms in (980, 1190):
+        end = spike + int(end_ms / 1000 * fs)
+        seg = sig.filtfilt(b, a, x[start:end])
+        outs[end_ms] = (diastolic_detrend(x, fs, spike, start, end, seg, rc),
+                        linear_detrend_endpoints(seg, rc.detrend_margin_frac))
+    m = int(0.7 * min(len(v[0]) for v in outs.values()))             # shared part, away from the filter's end effects
+    dia_a, dia_b = outs[980][0][:m], outs[1190][0][:m]
+    win_a, win_b = outs[980][1][:m], outs[1190][1][:m]
+    assert np.allclose(dia_a, dia_b, atol=2e-8)                       # same values on the shared part (< 0.2 % of the T-wave)
+    assert np.abs(win_a - win_b).max() > 5e-7                         # the line through the ends depends on the end (> 5 % of it)
+    # referred to the resting level: the T-wave peak reads ~10 µV, the resting level ~0
+    assert abs(dia_b[int(0.45 * fs)] * 1e6 - 10) < 1.5                # 600 ms after the spike = 450 ms into the segment
+    assert abs(dia_b[int(0.2 * fs)]) * 1e6 < 1.0                        # 350 ms: between the waves

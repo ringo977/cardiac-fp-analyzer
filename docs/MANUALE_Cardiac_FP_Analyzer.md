@@ -1,6 +1,6 @@
 ---
 title: "Cardiac FP Analyzer — Manuale utente"
-subtitle: "Versione 3.15.0 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
+subtitle: "Versione 3.16.0 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
 author: "Marco Rasponi · github.com/ringo977/cardiac-fp-analyzer"
 date: "4 ottobre 2026"
 lang: it
@@ -337,7 +337,7 @@ Per battito: ampiezza ≥ 25 % della mediana (`amplitude_reject_fraction`), corr
 
 ## 8.5 FPD
 
-Prima **sul template** (battito mediano di fino a 60 battiti allineati): finestra da 150 ms dopo lo spike a max(900 ms, 70 % del RR, min(85 % del RR, inizio del battito più precoce − 60 ms)): su un ritmo regolare la ricerca arriva all'85 % del ciclo, su uno irregolare si ferma prima di dove può cominciare il battito successivo; passa-basso 20 Hz e detrend; FPD minimo max(120 ms, 20 % RR, ≤ 600 ms); candidati = picchi positivi e negativi con prominenza ≥ 15 % della deviazione; **scelta dell'onda** `prefer_positive` (attiva): il picco positivo più prominente, purché abbia almeno metà della prominenza massima e stia entro 400 ms dal candidato più prominente, altrimenti il più prominente (alternativa `max_prominence`); soglia di qualità prominenza/rumore ≥ 2. **Punto misurato** (`fpd_method`): `peak` (attivo) = latenza del picco dell'onda; alternative `tangent` (intersezione della tangente di discesa con lo zero), `max_slope`, `50pct`, `baseline_return`, `consensus`. Il picco è il punto più ripetibile tra battiti ed elettrodi, ed è quello con cui è stata fatta la validazione sul report PHOENIX D10.1.
+Prima **sul template** (battito mediano di fino a 60 battiti allineati): finestra da 150 ms dopo lo spike a max(900 ms, 70 % del RR, min(85 % del RR, inizio del battito più precoce − 60 ms)): su un ritmo regolare la ricerca arriva all'85 % del ciclo, su uno irregolare si ferma prima di dove può cominciare il battito successivo; passa-basso 20 Hz e segmento riferito al livello di riposo del battito (50–15 ms prima dello spike), così la prominenza dei candidati non dipende dalla finestra; FPD minimo max(120 ms, 20 % RR, ≤ 600 ms); candidati = picchi positivi e negativi con prominenza ≥ 15 % della deviazione; **scelta dell'onda** `prefer_positive` (attiva): il picco positivo più prominente, purché abbia almeno metà della prominenza massima e stia entro 400 ms dal candidato più prominente, altrimenti il più prominente (alternativa `max_prominence`); soglia di qualità prominenza/rumore ≥ 2. **Punto misurato** (`fpd_method`): `peak` (attivo) = latenza del picco dell'onda; alternative `tangent` (intersezione della tangente di discesa con lo zero), `max_slope`, `50pct`, `baseline_return`, `consensus`. Il picco è il punto più ripetibile tra battiti ed elettrodi, ed è quello con cui è stata fatta la validazione sul report PHOENIX D10.1.
 
 Poi **per battito**, attorno alla posizione trovata sul template (± 150 ms), con soglia 1,5 × rumore; i battiti senza onda hanno FPD NaN. `fpd_ms_median` è la mediana; `fpd_reliable` richiede ≥ 50 % di battiti validi; `fpd_confidence` = metà qualità del template, metà coerenza tra battiti.
 

@@ -43,6 +43,31 @@ def linear_detrend_endpoints(segment, margin_frac=0.08):
     return segment - baseline
 
 
+def diastolic_detrend(template, fs, spike_idx, search_start, search_end, seg_smooth, rc):
+    """Search segment minus the resting level: the median of the low-passed
+    template over ``baseline_pre_spike_ms`` before the spike (the diastole
+    of this beat), constant over the segment. Peak prominences are then
+    those of the wave shape itself and do not change with the window
+    length (a sloped baseline through the window ends adds slope × distance
+    to every prominence). Falls back to the window-ends detrend when the
+    template does not reach far enough before the spike."""
+    pre_from, pre_to = getattr(rc, 'baseline_pre_spike_ms', (50.0, 15.0))
+    a = spike_idx - int(pre_from / 1000 * fs)
+    b = spike_idx - int(pre_to / 1000 * fs)
+    if a < 0 or b - a < 3:
+        return linear_detrend_endpoints(seg_smooth, margin_frac=rc.detrend_margin_frac)
+    x = np.asarray(template, dtype=float)
+    nyq = 0.5 * fs
+    cutoff = min(rc.repol_lowpass_hz, nyq * 0.8)
+    try:
+        bb, aa = sig.butter(rc.repol_filter_order, cutoff / nyq, btype='low')
+        pre_lp = sig.filtfilt(bb, aa, x[max(0, a - int(0.1 * fs)):b + int(0.1 * fs)])
+        y0 = float(np.median(pre_lp[a - max(0, a - int(0.1 * fs)):b - max(0, a - int(0.1 * fs))]))
+    except (ValueError, np.linalg.LinAlgError):
+        y0 = float(np.median(x[a:b]))
+    return seg_smooth - y0
+
+
 def search_window_end_ms(rc, rr_s=None, rr_low_s=None):
     """End of the repolarisation search window, in ms after the spike.
 
@@ -358,7 +383,10 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None,
         seg_smooth = segment
 
     # LINEAR detrend (preserves repolarization bump)
-    seg_det = linear_detrend_endpoints(seg_smooth, margin_frac=rc.detrend_margin_frac)
+    if getattr(rc, 'baseline_mode', 'window_ends') == 'diastolic':
+        seg_det = diastolic_detrend(template, fs, spike_idx, search_start, search_end, seg_smooth, rc)
+    else:
+        seg_det = linear_detrend_endpoints(seg_smooth, margin_frac=rc.detrend_margin_frac)
 
     # ─── Step 1: Find the repolarization peak ───
     # Minimum FPD constraint: exclude peaks that would yield FPD below

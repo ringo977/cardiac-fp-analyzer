@@ -540,6 +540,23 @@ class RepolarizationConfig:
     repol_lowpass_hz: float = 20.0       # low-pass cutoff for repol region
     repol_filter_order: int = 3
     detrend_margin_frac: float = 0.08    # linear detrend: use first/last 8%
+    # --- Baseline of the template search segment ---
+    # 'window_ends': straight line through the mean of the first and last
+    #   detrend_margin_frac of the search window (the start anchor sits on
+    #   the early plateau, 150 ms after the spike, so the line tilts the
+    #   segment and the relative prominence of the candidates changes with
+    #   the window length).
+    # 'diastolic': the resting level of this beat (median of the low-passed
+    #   template between baseline_pre_spike_ms before the spike), constant
+    #   over the segment: no slope, so the candidates' prominences are those
+    #   of the wave shape and do not depend on the window length.
+    #   Default since v3.16 (Oct 2026): on the GG gold standard the tail
+    #   of the FPD error halves on the electrodes with a correct period
+    #   (90th percentile 30 → 17 %, development split), the held-out split
+    #   is unchanged; PHOENIX chamber FPDc median error 2.0 → 1.5 %;
+    #   Visone 2023 unchanged. See DOCUMENTATION §11.5.
+    baseline_mode: str = 'diastolic'
+    baseline_pre_spike_ms: tuple[float, float] = (50.0, 15.0)   # window before the spike, ms (from, to)
 
     # --- Peak detection ---
     peak_prominence_factor: float = 0.15  # min prominence = factor × std(segment)

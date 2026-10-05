@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.15.0
+**Versione**: 3.16.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali) o con sistemi **Multi Channel Systems** (file HDF5 del protocollo MCS RawData, fino a 64 elettrodi).
@@ -174,6 +174,10 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.16.0 (Ottobre 2026) — linea di base diastolica per la ricerca dell'onda
+
+Il segmento in cui si cercano i candidati dell'onda di ripolarizzazione è riferito al livello di riposo del battito (50–15 ms prima dello spike) invece che a una retta tra gli estremi della finestra, che cadeva sul plateau e inclinava il segmento: la scelta dell'onda non dipende più dalla lunghezza della finestra (`repolarization.baseline_mode`). GG sviluppo: coda dell'errore FPD dimezzata sugli elettrodi con periodo corretto (90° percentile 30 → 17 %), test identico; PHOENIX differenza mediana 2,0 → 1,5 %; Visone invariato.
 
 ### v3.15.0 (Ottobre 2026) — finestra di ricerca della ripolarizzazione fino all'85 % del ciclo
 

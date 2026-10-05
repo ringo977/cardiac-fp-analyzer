@@ -96,3 +96,16 @@ La finestra finiva al 70 % del RR; 5 elettrodi su 271 (4 DEV, 1 TEST) hanno l'FP
 | elettrodi con BP corretto: 90° percentile dell'errore | 35 → 30 % | 10,6 → 10,2 % |
 
 Dei 4 FPD DEV oltre il 70 %: `Exp10_ChipE_ch2_TI12_…_A el1` da −49 % a +1,6 %; `Exp5_chipF_ch3_Ti02_…_C el1` da −61 % a +23 % e `Exp8_ChipE_…_C_post_rec el2` da −76 % a −64 % (periodo sbagliato in entrambi); `Exp8_ChipE_…_C el2` invariato (nessun FPD). Gli altri elettrodi che cambiano (70 DEV, 25 TEST) hanno quasi tutti il periodo sbagliato per sovra-rilevazione: lì la finestra, vecchia o nuova, misura un template senza senso. Due regressioni con periodo corretto: `Exp5_chipE_ch2_chipA_ch2_baseline el1` (1522 → 1060 ms, analista 1521: un plateau positivo e una deflessione negativa di prominenza quasi uguale, la regola `prefer_positive` cambia scelta con la pendenza del detrend) e `Exp7_ChipC_ch1_Ti01_…_C el1` (TEST, 18 → 38 %). È la fragilità già nota del §7, non della finestra.
+
+## Parte IV — Linea di base diastolica (5 ottobre, v3.16.0)
+
+La retta tra gli estremi della finestra di ricerca aveva il primo ancoraggio sul plateau (150 ms dopo lo spike): inclinava il segmento e la prominenza relativa di due candidati cambiava con la lunghezza della finestra (è la fragilità del §7 vista da un altro lato). Ora il segmento è riferito al livello di riposo del battito, la mediana del template filtrato nei 50–15 ms prima dello spike, costante (`repolarization.baseline_mode = 'diastolic'`).
+
+| | DEV | TEST (una esecuzione) |
+|---|---|---|
+| FPD entro ±10 % (riportati) | 95 → 97 su 145 | 46 → 46 su 63 |
+| FPD entro ±20 % | 106 → 107 | 52 → 52 |
+| elettrodi con BP corretto: entro ±5 / ±10 / ±20 % | 61 → 62 / 72 → 74 / 74 → 76 su 84 | 33 / 38 / 42 su 44, invariati |
+| elettrodi con BP corretto: 90° percentile dell'errore | 30 → 16,5 % | 10,2 → 10,2 % |
+
+DEV: 22 elettrodi cambiano, 11 meglio e 10 peggio; i recuperi con periodo corretto sono `Exp5_chipE_ch2_Ti04_…_vehicle_B el1` (501 → 1279 ms, analista 1242), `Exp8_ChipB_ch2_ChipC_ch2_baseline el1` (1688 → 1392, analista 1430) e `Exp5_chipE_ch2_chipA_ch2_baseline el1` (1060 → 1322, analista 1521: meglio, non giusto); la perdita `Exp5_chipE_ch2_Ti04_…_vehicle_B el2` (1550 → 1283, analista 1560). TEST: 7 cambiano, quasi tutti con periodo sbagliato, saldo nullo. Sul caso E37 di PM01001 (plateau positivo e deflessione negativa) la linea di base non cambia la scelta: con la finestra all'85 % le prominenze erano già quelle della forma (1,77 contro 3,48, rapporto 0,51), e la regola `prefer_positive` prende il plateau. Resta il §7.

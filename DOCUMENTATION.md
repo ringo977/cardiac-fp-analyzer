@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.15.0
+**Versione**: 3.16.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1456,7 +1456,7 @@ Effetto: `not_analysable = True`, `not_analysable_reason`, voto F, tutti i campi
 
 1. *Spike* = massimo di |x − media| entro ± `spike_search_window_ms = 50` dalla posizione nominale.
 2. *Finestra di ricerca* (`search_window_end_ms`): da spike + `search_start_ms = 150` a spike + **max(`search_end_ms = 900`, `search_end_pct_rr_safe = 0.70` × RR, min(`search_end_pct_rr = 0.85` × RR, RR₁₀ − `search_end_next_beat_margin_ms = 60`))**, dove RR = max(RR mediano di `bi_stats`, RR mediano di `bi_fpd`) e RR₁₀ è il `search_end_next_beat_pct = 10`° percentile degli intervalli di `bi_stats`, cioè dove può cominciare il battito successivo. Su un ritmo regolare la ricerca arriva all'85 % del ciclo; su uno irregolare si ferma prima del battito più precoce e comunque non sotto il 70 %. Fino alla v3.14.1 la finestra finiva al 70 % del RR: un'onda tra il 71 e l'80 % del ciclo (nel gold standard GG 5 elettrodi su 271; un bloccante hERG forte su un tessuto lento) era fuori portata (v3.15). Se la finestra viene allungata perché i battiti del template hanno un RR più lungo di quello del treno (`window_rr_from_template_beats`), l'estensione è tagliata `next_spike_guard_margin_ms = 30` ms prima di uno spike successivo riconosciuto nel template (correlazione ≥ 0,9 con la forma dello spike e ampiezza ≥ 50 %).
-3. *Condizionamento*: passa-basso `repol_lowpass_hz = 20` (ordine 3, fase zero) e detrend lineare ancorato al primo/ultimo 8 % della finestra.
+3. *Condizionamento*: passa-basso `repol_lowpass_hz = 20` (ordine 3, fase zero); poi la linea di base (`baseline_mode`): con `'diastolic'` (default dalla v3.16) il segmento è riferito al **livello di riposo di questo battito**, la mediana del template filtrato tra `baseline_pre_spike_ms = (50, 15)` ms prima dello spike, costante sul segmento, così le prominenze dei candidati sono quelle della forma d'onda e non dipendono dalla lunghezza della finestra; con `'window_ends'` (fino alla v3.15) una retta per la media del primo e dell'ultimo `detrend_margin_frac = 8 %` della finestra, il cui primo ancoraggio cade sul plateau (150 ms dopo lo spike) e inclina il segmento: la stessa onda cambiava prominenza relativa al variare della finestra (PM01001 B E37: picco positivo del plateau 1,30 contro 1,77 con la finestra al 70 e all'85 %). La ricerca per battito usa ancora la retta tra gli estremi della sua finestra (guidata dal picco del template, la pendenza conta poco).
 4. *FPD minimo*: `max(min_fpd_ms = 120, min(min_fpd_pct_rr = 0.20 × RR, max_adaptive_min_fpd_ms = 600))`.
 5. *Candidati*: picchi positivi e negativi con prominenza ≥ `peak_prominence_factor = 0.15` × std della finestra e distanza ≥ `peak_min_distance_ms = 50`.
 6. *Scelta tra i candidati* — `repol_candidate_rule = 'prefer_positive'` (attiva): tra i candidati, il picco **positivo** più prominente la cui prominenza è ≥ `repol_positive_min_rel_prom = 0.5` della prominenza massima e che sta entro `repol_positive_max_offset_ms = 400` dal candidato più prominente; se non esiste, il candidato più prominente qualunque sia il segno. Alternativa `'max_prominence'`: sempre il più prominente. Motivazione: l'onda T del field potential è di norma positiva; il negativo più grande è spesso il ritorno della depolarizzazione.
@@ -1575,6 +1575,10 @@ Restano fissi nel codice (non configurabili): finestra ± 30 ms dell'SNR globale
 
 
 ## 12. Changelog
+
+### v3.16.0 (Ottobre 2026) — linea di base diastolica per la ricerca dell'onda
+
+Il segmento in cui si cercano i candidati dell'onda di ripolarizzazione è riferito al livello di riposo del battito (mediana del template filtrato nei 50–15 ms prima dello spike), costante, invece che a una retta tra gli estremi della finestra (`repolarization.baseline_mode = 'diastolic'`; `'window_ends'` resta disponibile). Motivo: il primo ancoraggio della retta cadeva sul plateau e inclinava il segmento, così la prominenza relativa di due candidati — e con essa la scelta dell'onda — cambiava con la lunghezza della finestra (visto allargando la finestra nella v3.15: PM01001 B E37, GG Exp5 chipE_ch2). Con il livello di riposo le prominenze sono quelle della forma d'onda e i candidati entro la finestra non cambiano se la finestra si allunga. Verifica: GG sviluppo, sugli 84 elettrodi con periodo corretto, entro ±10 % 72 → 74, 90° percentile dell'errore 30 → 17 %, tutti i riportati entro ±10 % 95 → 97 su 145; GG test (una esecuzione) identico; PHOENIX 5 piastre, 50 FPDc di camera contro il riferimento, differenza mediana 1,96 → 1,50 %, entro il 10 % 46/50 (prima 50/52), con due dosi veloci di PM01001 che si spostano; Visone 2023 decisioni 8/12, 191 coppie comuni con gli autori 62 → 61 % entro ±10 punti (rumore). Tolte dal disegno PHOENIX le registrazioni `D_heater` di PM01005 (piastra riscaldante fuori incubatore, laboratorio 5 ottobre).
 
 ### v3.15.0 (Ottobre 2026) — finestra di ricerca della ripolarizzazione fino all'85 % del ciclo
 
