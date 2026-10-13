@@ -59,6 +59,13 @@ class TestNames:
         assert info['concentration'] == 'D_heater'
         d = describe_recording('/data/Exp7/' + NAME.format('A'))
         assert d['experiment'] == 'Exp7' and d['chip'] == 'PM01001' and 'tissue' not in d
+        # native names of the MCS HDF5 files (DataManager): no '_Recording-N' part
+        for name, cond, base in (('2026-01-26T14-42-15McsRecording_PM01005_baseline.h5', '0', True),
+                                 ('2026-01-26T15-04-21McsRecording_PM01005_D.h5', 'D', False),
+                                 ('2026-01-26T19-36-01McsRecording_PM01005_D_heater.h5', 'D_heater', False)):
+            info = parse_filename(name)
+            assert info['chip'] == 'PM01005' and info['format'] == 'mcs_hdf5' and info['mcs_recording'] == 0
+            assert info['concentration'] == cond and info['is_baseline'] is base
 
     def test_tissue_key_letters(self):
         assert tissue_key('Exp 5', 'Day7', 'B', 1) == 'exp5/day7/chipB_ch1'

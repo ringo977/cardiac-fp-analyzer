@@ -261,6 +261,9 @@ _TISSUE_IN_NAME = re.compile(r'chip[\s_-]*[A-Za-z0-9]+?[\s_-]*ch[\s_-]*\d+[\s_-]
 # (chambers.py) or from samples.csv, not from the name.
 _MCS_NAME = re.compile(r'McsRecording_(?P<plate>[A-Za-z0-9]+)_(?P<cond>[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*?)_Recording-?(?P<rec>\d+)',
                        re.IGNORECASE)
+# Native names of the MCS HDF5 files (DataManager, Oct 2026): no '_Recording-N' part,
+# the condition runs to the end ('…McsRecording_PM01005_baseline', '…_PM01005_D_heater').
+_MCS_NAME_SHORT = re.compile(r'McsRecording_(?P<plate>[A-Za-z0-9]+)_(?P<cond>[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*)$', re.IGNORECASE)
 
 
 def _conc_value(num):
@@ -290,10 +293,11 @@ def parse_filename(filename):
     info = {'chip': None, 'channel': None, 'drug': None,
             'concentration': None, 'is_baseline': False}
     stem = Path(filename).stem
-    mcs = _MCS_NAME.search(stem)
+    mcs = _MCS_NAME.search(stem) or _MCS_NAME_SHORT.search(stem)
     if mcs:
         cond = mcs.group('cond')
-        info.update({'chip': mcs.group('plate'), 'mcs_recording': int(mcs.group('rec')), 'format': 'mcs_hdf5'})
+        rec = mcs.groupdict().get('rec')
+        info.update({'chip': mcs.group('plate'), 'mcs_recording': int(rec) if rec is not None else 0, 'format': 'mcs_hdf5'})
         if _BASELINE_WORD.search(cond) or _T0_TOKEN.search(cond):
             info.update({'is_baseline': True, 'drug': 'baseline', 'concentration': '0',
                          'reference_kind': 't0' if _T0_TOKEN.search(cond) else 'baseline'})
