@@ -325,6 +325,14 @@ def parse_filename(filename):
     # 'Exp10_ChipF_ch2_Ti07_A(_v2|_only)': experiment prefix, then a test-item
     # code and the dose condition letter (the folder A/B/C holds the files).
     remainder = re.sub(r'^exp[\s_-]*\d+[\s_]*', '', remainder, flags=re.IGNORECASE)
+    if len(_TISSUE_IN_NAME.findall(name)) >= 2:
+        # two-tissue name: drop the input colours; one dose letter written
+        # once per tissue ('A_A') is the condition, not a test item
+        remainder = re.sub(r'_+', '_', _INPUT_COLOUR.sub('', '_' + remainder + '_')).strip('_')
+        tokens = [t for t in remainder.split('_') if t]
+        if tokens and len(set(tokens)) == 1 and re.fullmatch(r'[A-Z]', tokens[0]):
+            info['concentration'] = tokens[0]
+            return info
     cond = re.search(r'_([A-Z])(?:_(?:v\d+|only|bis))*$', remainder)
     if cond:
         info['drug'] = remainder[:cond.start()].replace('_', ' ').strip() or None
@@ -493,7 +501,13 @@ _INPUT_TOKEN = re.compile(
     r'|(?:(?<=[\s_-])|^)(?P<bare>na)(?=$|[\s_-])',
     re.IGNORECASE)
 _CODE_WORD = re.compile(r'^([A-Za-z]{1,3}\d+)')          # 'K01bis' → 'K01', 'E4031'
-_NOISE_WORD = re.compile(r'^(?:v\d+|\d+|only|bis|sx|dx|baseline|basline|base)$', re.IGNORECASE)
+_NOISE_WORD = re.compile(r'^(?:v\d+|\d+|only|bis|sx|dx|baseline|basline|base|arancione|arancio|orange|blu|blue)$',
+                         re.IGNORECASE)
+# WaveForms colours of the two oscilloscope inputs (channel 1 orange, channel
+# 2 blue), written before each tissue in some two-tissue names (Oct 2026:
+# 'Exp1_arancione_CHIPA_Ch1_A_blu_CHIPD_Ch1_A'): they mark the input, not a
+# test item.
+_INPUT_COLOUR = re.compile(r'(?<=_)(?:arancione|arancio|orange|blu|blue)(?=_)', re.IGNORECASE)
 
 
 def _item_and_conc(tail):

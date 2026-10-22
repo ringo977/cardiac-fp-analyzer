@@ -44,9 +44,22 @@ def _tissues(entries):
     # one tissue: 'na' after an item, or a word 'Na', is not an empty input
     ('Exp1_ChipP_ch3_K08_na_A', [('P', 3, 'K08', 'A')]),
     ('chipA_ch1_Na_blocker_1uM', [('A', 1, 'Na', '1 uM')]),
+    # WaveForms input colours before each tissue (orange = input 1, blue = input 2)
+    ('Exp1_arancione_CHIPA_Ch1_A_blu_CHIPD_Ch1_A', [('A', 1, None, 'A'), ('D', 1, None, 'A')]),
+    ('Exp1_arancione_CHIPF_Ch2_baseline_blu_CHIPF_Ch1_baseline', [('F', 2, None, None), ('F', 1, None, None)]),
 ])
 def test_tissues_are_read_in_input_order(name, expected):
     assert _tissues(parse_inputs(name)) == expected
+
+
+def test_input_colours_are_not_a_test_item():
+    from cardiac_fp_analyzer.loader import parse_filename
+    info = parse_filename('Exp1_arancione_CHIPB_Ch1_C_blu_CHIPB_Ch2_C.csv')
+    assert info['drug'] is None and info['concentration'] == 'C' and not info['is_baseline']
+    info = parse_filename('Exp1_arancione_CHIPA_Ch1_baseline_blu_CHIPD_Ch1_baseline.csv')
+    assert info['is_baseline']
+    # a single-tissue name keeps a colour word as it is
+    assert parse_filename('chipA_ch1_methylene_blue_1uM.csv')['drug'] == 'methylene blue'
 
 
 def test_tissue_key_matches_the_folder_rule():
