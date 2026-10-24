@@ -82,6 +82,18 @@ def is_mcs_hdf5(filepath):
         return False
 
 
+def _device_filters(info):
+    """Acquisition-side filters of a channel as written by the MCS software (InfoChannel), or None."""
+    out = {}
+    for side, pre in (('passa-alto', 'HighPass'), ('passa-basso', 'LowPass')):
+        typ = info.get(pre + 'FilterType')
+        cut = info.get(pre + 'FilterCutOffFrequency')
+        order = info.get(pre + 'FilterOrder')
+        if typ or cut:
+            out[side] = ' '.join(str(v) for v in (typ, cut and f'{cut} Hz', order and f'ordine {order}') if v)
+    return out or None
+
+
 def _info_rows(ds):
     """Rows of an Info* compound dataset as dicts of clean values."""
     out = []
@@ -300,6 +312,7 @@ def load_mcs_h5(filepath, stream=None, channels=None, recording=0, max_sample_ra
             'events': events, 'spike_timestamps': spikes,
             'paced': any(e['subtype'] in STIMULUS_SUBTYPES and len(e['times_s']) > 0 for e in events),
         }
+        metadata['device_filters'] = _device_filters(sel[0])
         if q > 1:
             metadata['original_sample_rate'] = fs
             metadata['decimation_factor'] = q

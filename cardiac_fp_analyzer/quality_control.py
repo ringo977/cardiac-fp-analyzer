@@ -265,6 +265,37 @@ def morphology_correlation(beat_data, template, max_samples=0, jitter_max=0):
     return best_corr if best_corr > -1.0 else 0.0
 
 
+def common_period(rr, tol=0.15, kmax=4, min_explained=0.7, min_observed=0.5):
+    """Is a beat train a regular rhythm with missing beats?
+
+    ``rr``: intervals in seconds. Returns ``(P, folded, info)``: the largest
+    period P (candidates: every interval and its halves and thirds, 0.25–10 s)
+    such that at least ``min_explained`` of the intervals lie within ±``tol``
+    of k × P for some k = 1..``kmax``, at least two intervals have k = 1 and
+    the observed beats are at least ``min_observed`` of those expected;
+    ``folded`` are the explained intervals divided by their k and P their
+    median. ``(None, rr, {})`` when there is no such period.
+    """
+    rr = np.asarray(rr, dtype=float)
+    if len(rr) < 3:
+        return None, rr, {}
+    cands = np.unique(np.r_[rr, rr / 2, rr / 3])
+    cands = cands[(cands >= 0.25) & (cands <= 10)]
+    for P in sorted(cands, reverse=True):
+        k = np.round(rr / P)
+        ok = (k >= 1) & (k <= kmax) & (np.abs(rr / np.maximum(k, 1) / P - 1) <= tol)
+        if ok.mean() < min_explained or (ok & (k == 1)).sum() < 2:
+            continue
+        expected = np.sum(np.where(ok, k, 1))
+        if len(rr) / expected < min_observed:
+            continue
+        folded = rr[ok] / k[ok]
+        return float(np.median(folded)), folded, {
+            'frac_explained': float(ok.mean()), 'missing': int(np.sum(k[ok] - 1)),
+            'cv_folded': float(np.std(folded) / np.mean(folded) * 100)}
+    return None, rr, {}
+
+
 def assess_analysability(filtered, fs, beat_indices, cfg=None):
     """Decide whether this recording can be analysed by the pipeline at all.
 
@@ -309,6 +340,17 @@ def assess_analysability(filtered, fs, beat_indices, cfg=None):
         out['rr_cv_pct'] = round(cv, 1)
         sparse_n = int(getattr(c, 'not_analysable_sparse_beats', 16))
         sparse_cv = float(getattr(c, 'not_analysable_sparse_cv_pct', 40.0))
+        if len(bi) < sparse_n and cv > sparse_cv and getattr(c, 'not_analysable_gap_tolerant', False):
+            P, _folded, info = common_period(
+                rr, tol=float(getattr(c, 'gap_period_tolerance', 0.15)),
+                kmax=int(getattr(c, 'gap_max_multiple', 4)),
+                min_explained=float(getattr(c, 'gap_min_explained', 0.7)),
+                min_observed=float(getattr(c, 'gap_min_observed', 0.5)))
+            if P is not None and info['cv_folded'] <= sparse_cv:
+                out['common_period_ms'] = round(P * 1000, 1)
+                out['rr_cv_folded_pct'] = round(info['cv_folded'], 1)
+                out['missing_beats'] = info['missing']
+                return out
         if len(bi) < sparse_n and cv > sparse_cv:
             out.update(not_analysable=True,
                        reason=f'only {len(bi)} depolarisations with RR CV {cv:.0f} % '

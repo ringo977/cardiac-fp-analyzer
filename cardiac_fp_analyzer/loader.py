@@ -196,6 +196,8 @@ def load_csv(filepath, max_sample_rate=MAX_SAMPLE_RATE):
                 m_o = re.search(r'Offset:\s*([-\d.]+)\s*(?:m)?V', line)
                 if m_r: metadata['ch1_range'] = float(m_r.group(1))
                 if m_o: metadata['ch1_offset'] = float(m_o.group(1))
+                m_s = re.search(r'Sample Mode:\s*(\w+)', line)
+                if m_s: metadata['sample_mode'] = m_s.group(1)
             elif line.startswith('Channel 2:'):
                 m_r = re.search(r'Range:\s*([\d.]+)\s*mV/div', line)
                 m_o = re.search(r'Offset:\s*([-\d.]+)\s*(?:m)?V', line)

@@ -28,7 +28,8 @@ from cardiac_fp_analyzer.channel_selection import (
     select_best_channel,
     select_electrode_quick,
 )
-from cardiac_fp_analyzer.filtering import full_filter_pipeline
+from cardiac_fp_analyzer.detection_vetoes import apply_post_detection_vetoes
+from cardiac_fp_analyzer.filtering import describe_filtering, full_filter_pipeline
 from cardiac_fp_analyzer.inclusion import apply_inclusion_criteria
 from cardiac_fp_analyzer.loader import (
     describe_recording,
@@ -733,6 +734,8 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
         raw_signal = raw.copy()  # keep unfiltered signal for display
         filtered = full_filter_pipeline(raw, fs, cfg=config.filtering)
         if verbose: print(f"  Filtered ({actual_ch})")
+        metadata['processing'] = describe_filtering(config, fs, metadata)
+        if verbose: print(f"  {metadata['processing']['testo']}")
 
         bd_cfg = config.beat_detection
         # Fast rhythms (verapamil at high dose: periods of 250-350 ms) are
@@ -743,7 +746,7 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
         fast = file_info.get('spike_period_ms')
         if fast and fast < 1.1 * bd_cfg.min_distance_ms and (file_info.get('spike_cv_pct') or 0) <= 15.0:
             import dataclasses
-            md = max(100.0, 0.5 * fast)
+            md = max(float(getattr(bd_cfg, 'min_distance_floor_ms', 100.0)), 0.5 * fast)
             bd_cfg = dataclasses.replace(bd_cfg, min_distance_ms=md, retry_min_distance_ms=md)
             file_info['min_distance_ms'] = md
             if verbose: print(f"  Fast rhythm (spike period {fast:.0f} ms): minimum beat spacing {md:.0f} ms")
@@ -760,6 +763,17 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
             bi, bt, det = detect_beats(filtered, fs, cfg=retry_cfg)
             det['retry'] = True
             if verbose: print(f"  Retry: {det['n_beats']} beats")
+
+        # Opt-in vetoes on the detections (v3.17): weak-population split and
+        # burst veto, see detection_vetoes.py. They only remove detections.
+        if (getattr(bd_cfg, 'enable_weak_population_split', False) or getattr(bd_cfg, 'enable_burst_veto', False)
+                or (getattr(bd_cfg, 'min_rr_physiological_ms', 0.0) or 0.0) > 0):
+            bi, _veto_info = apply_post_detection_vetoes(filtered, fs, bi, bd_cfg)
+            det = dict(det)
+            det['post_detection_vetoes'] = _veto_info
+            det['n_beats'] = int(len(bi))
+            if verbose and _veto_info['n_output'] != _veto_info['n_input']:
+                print(f"  Detection vetoes: {_veto_info['n_input']} → {_veto_info['n_output']} beats")
 
         # Snapshot the pure (pre-override) detection so the PySide UI can
         # reconstruct the "automatic" baseline when writing a new sidecar

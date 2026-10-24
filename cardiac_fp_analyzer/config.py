@@ -63,6 +63,19 @@ class BeatDetectionConfig:
     retry_min_distance_ms: float = 300.0
     retry_threshold_factor: float = 3.0
 
+    # ── Physiological limits on the spacing of depolarisations (v3.17) ──
+    # ``min_distance_floor_ms``: the lowest spacing the fast-rhythm rule may
+    # set (on a regular rhythm faster than ``min_distance_ms`` the spacing
+    # follows half the measured spike period; this floor bounds it; 100 ms
+    # is the value hard-coded until v3.16).
+    # ``min_rr_physiological_ms``: a final guard on the beat train after
+    # detection and vetoes — two detections closer than this cannot both be
+    # depolarisations, the one with the smaller spike is dropped. 0 = off
+    # (default, behaviour unchanged); the lab's physiological value is
+    # 250 ms (fastest rhythms seen: verapamil at high dose, 250–350 ms).
+    min_distance_floor_ms: float = 100.0
+    min_rr_physiological_ms: float = 0.0
+
     # Physiological plausibility scoring (thresholds)
     bp_ideal_range_s: tuple[float, float] = (0.4, 3.0)
     bp_extended_range_s: tuple[float, float] = (0.3, 5.0)
@@ -402,6 +415,42 @@ class BeatDetectionConfig:
     rhythm_miss_penalty: float = 0.6
     rhythm_min_beats: int = 6
 
+    # ── Post-detection vetoes (opt-in, v3.17, Oct 2026) ──
+    # Applied to the detections leaving detect_beats (after the retry), in
+    # this order; they only remove detections and abstain when fewer than
+    # ``post_veto_min_kept`` would remain. See detection_vetoes.py.
+    # Weak-population split: per recording, score = log(local SNR) +
+    # ``weak_split_corr_weight`` × correlation with the strongest half;
+    # Otsu split; the lower group is dropped only if Cohen's d ≥
+    # ``weak_split_min_separation``, the upper group has ≥
+    # ``weak_split_min_strong`` detections and the lower group's median local
+    # SNR < ``weak_split_max_weak_snr`` (repolarisation waves and noise peaks
+    # taken for beats on slow, noisy recordings).
+    # Burst veto: detections inside the 10-s incubator noise bursts or within
+    # ``burst_veto_edge_s`` of a burst border (switching transient) are
+    # removed when, on a 30 Hz low-pass copy, their shape correlation with
+    # the clean beats is < ``burst_veto_corr`` or their slope / amplitude is
+    # below the given fraction of the clean beats'.
+    # GG gold standard, held-out Exp6/7/9 (with
+    # QualityConfig.not_analysable_gap_tolerant): beat period within ±10 % of
+    # the operator 65 → 79 %, FPD within ±10 % 74 → 74 %, false detections
+    # −42 %, missed beats +13 %. Off by default until seen on other data.
+    enable_weak_population_split: bool = False
+    weak_split_corr_weight: float = 1.0
+    weak_split_min_separation: float = 3.0
+    weak_split_min_strong: int = 8
+    weak_split_max_weak_snr: float = 5.0
+    enable_burst_veto: bool = False
+    burst_band_hz: tuple = (100.0, 450.0)
+    burst_window_ms: float = 50.0
+    burst_min_ratio: float = 2.0
+    burst_min_duration_s: float = 1.0
+    burst_veto_corr: float = 0.7
+    burst_veto_slope: float = 0.5
+    burst_veto_amp: float = 0.5
+    burst_veto_edge_s: float = 0.2
+    post_veto_min_kept: int = 5
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #   REPOLARIZATION / FPD MEASUREMENT
@@ -715,6 +764,22 @@ class QualityConfig:
     not_analysable_min_beats: int = 3     # fewer detections → verdict by count, not SNR
     not_analysable_sparse_beats: int = 16
     not_analysable_sparse_cv_pct: float = 40.0
+    # Gap-tolerant rhythm criterion (opt-in, v3.17): a sparse, irregular train
+    # stays analysable when it is a regular rhythm with missing beats — the
+    # largest period P such that ≥ ``gap_min_explained`` of the intervals lie
+    # within ±``gap_period_tolerance`` of k × P (k = 1..``gap_max_multiple``),
+    # at least two intervals have k = 1 and the observed beats are ≥
+    # ``gap_min_observed`` of those expected over the span; the CV of the
+    # intervals divided by k must then be ≤ ``not_analysable_sparse_cv_pct``.
+    # Removing false detections leaves gaps; without this the recording would
+    # be declared too irregular. GG DEV: 10 of 16 analyst-analysed recordings
+    # flagged by the sparse rule are rescued (9 with the right period), 1 of
+    # 10 analyst not-analysable ones is.
+    not_analysable_gap_tolerant: bool = False
+    gap_period_tolerance: float = 0.15
+    gap_max_multiple: int = 4
+    gap_min_explained: float = 0.7
+    gap_min_observed: float = 0.5
 
     # Rejection rate thresholds for grade downgrade
     max_rejection_rate: float = 0.40      # above → Grade D

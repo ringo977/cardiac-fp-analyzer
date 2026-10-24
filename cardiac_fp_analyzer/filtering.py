@@ -121,3 +121,54 @@ def full_filter_pipeline(data, fs, cfg=None):
     y = smooth_savgol(y, window_length=cfg.savgol_window,
                       polyorder=cfg.savgol_polyorder)
     return y
+
+
+def describe_filtering(config, fs, metadata=None):
+    """What was done to the signal before beat detection, as data and as one line of text.
+
+    Returns a dict with ``dispositivo`` (acquisition-side filters and sample mode, when the file says so),
+    ``decimazione`` (loader anti-alias decimation, if any), ``software`` (the steps of ``full_filter_pipeline``
+    with their parameters at this sample rate), ``guadagno`` and ``testo`` (Italian summary). Stored in
+    ``result['metadata']['processing']`` by ``analyze_single_file``.
+    """
+    md = metadata or {}
+    fc = config.filtering
+    dev = {}
+    if md.get('device'):
+        dev['strumento'] = md['device']
+    if md.get('sample_mode'):
+        dev['modalita_campionamento'] = md['sample_mode']
+    if md.get('device_filters'):
+        dev['filtri'] = md['device_filters']
+    dec = None
+    if md.get('decimation_factor') and md.get('decimation_factor') > 1:
+        dec = {'fattore': int(md['decimation_factor']), 'da_hz': float(md.get('original_sample_rate') or 0),
+               'a_hz': float(fs), 'metodo': 'FIR anti-alias, fase zero'}
+    steps = []
+    if fc.notch_freq_hz and fc.notch_freq_hz > 0:
+        freqs = [fc.notch_freq_hz * (k + 1) for k in range(int(fc.notch_harmonics))]
+        steps.append({'passo': 'notch', 'frequenze_hz': freqs, 'q': fc.notch_q})
+    steps.append({'passo': 'passa-banda', 'basso_hz': fc.bandpass_low_hz, 'alto_hz': min(fc.bandpass_high_hz, 0.49 * fs),
+                  'ordine': fc.bandpass_order, 'tipo': 'Butterworth, fase zero (avanti e indietro)'})
+    steps.append({'passo': 'Savitzky-Golay', 'finestra_campioni': fc.savgol_window,
+                  'finestra_ms': round(fc.savgol_window / fs * 1000, 2), 'grado': fc.savgol_polyorder})
+    gain = float(getattr(config, 'amplifier_gain', 1.0) or 1.0)
+    parts = []
+    if dev.get('filtri'):
+        parts.append('strumento: ' + dev['filtri'] if isinstance(dev['filtri'], str) else 'strumento: ' + ', '.join(
+            f"{k} {v}" for k, v in dev['filtri'].items()))
+    if dev.get('modalita_campionamento'):
+        parts.append(f"campionamento {dev['modalita_campionamento']}")
+    if dec:
+        parts.append(f"decimazione ×{dec['fattore']} ({dec['da_hz']:.0f} → {dec['a_hz']:.0f} Hz, FIR fase zero)")
+    for st in steps:
+        if st['passo'] == 'notch':
+            parts.append('notch ' + '/'.join(f'{f:g}' for f in st['frequenze_hz']) + f" Hz (Q {st['q']:g})")
+        elif st['passo'] == 'passa-banda':
+            parts.append(f"passa-banda {st['basso_hz']:g}–{st['alto_hz']:g} Hz Butterworth ordine {st['ordine']} fase zero")
+        else:
+            parts.append(f"Savitzky–Golay {st['finestra_campioni']} campioni ({st['finestra_ms']:g} ms) grado {st['grado']}")
+    if gain != 1.0:
+        parts.append(f'guadagno ÷{gain:g}')
+    return {'dispositivo': dev, 'decimazione': dec, 'software': steps, 'guadagno': gain,
+            'frequenza_campionamento_hz': float(fs), 'testo': 'Filtraggio: ' + '; '.join(parts)}

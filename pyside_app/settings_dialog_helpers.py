@@ -191,6 +191,51 @@ SPEC: tuple[FieldSpec, ...] = (
             "segnali con T-wave residua mascherata da battito)."
         ),
     ),
+    FieldSpec(
+        attr="min_distance_floor_ms", section="beat_detection", kind="float",
+        page=PAGE_DETECTION, label="Distanza minima — limite inferiore (ritmi veloci)",
+        tooltip=(
+            "Su un ritmo regolare più veloce della distanza minima il software "
+            "abbassa la distanza a metà del periodo misurato; non scende mai "
+            "sotto questo valore (100 ms = comportamento fino alla v3.16)."
+        ),
+        minimum=50.0, maximum=1000.0, step=10.0, decimals=0, suffix=" ms",
+    ),
+    FieldSpec(
+        attr="min_rr_physiological_ms", section="beat_detection", kind="float",
+        page=PAGE_DETECTION, label="Intervallo minimo fisiologico tra depolarizzazioni",
+        tooltip=(
+            "Controllo finale sul treno dei battiti: due rilevamenti più vicini "
+            "di così non possono essere entrambi depolarizzazioni, resta quello "
+            "con lo spike più grande. 0 = disattivo. Valore fisiologico del "
+            "laboratorio: 250 ms (ritmi più veloci osservati: verapamil ad alta "
+            "dose, 250–350 ms)."
+        ),
+        minimum=0.0, maximum=2000.0, step=10.0, decimals=0, suffix=" ms",
+    ),
+    FieldSpec(
+        attr="enable_weak_population_split", section="beat_detection",
+        kind="bool", page=PAGE_DETECTION,
+        label="Togli i rilevamenti deboli (sperimentale)",
+        tooltip=(
+            "Su registrazioni lente e rumorose il rilevatore prende anche "
+            "onde di ripolarizzazione e picchi di rumore. Separa i "
+            "rilevamenti in due gruppi (rapporto col rumore locale e forma) "
+            "e toglie il gruppo debole solo se i gruppi sono ben distinti. "
+            "Disattivo di default (v3.17)."
+        ),
+    ),
+    FieldSpec(
+        attr="enable_burst_veto", section="beat_detection",
+        kind="bool", page=PAGE_DETECTION,
+        label="Togli i falsi nei burst dell'incubatore (sperimentale)",
+        tooltip=(
+            "Trova i burst di rumore (ciclo di 10 s dell'incubatore) e "
+            "toglie i rilevamenti dentro i burst e ai loro bordi che non "
+            "somigliano ai battiti puliti (forma, pendenza, ampiezza su un "
+            "passa-basso a 30 Hz). Disattivo di default (v3.17)."
+        ),
+    ),
 
     # ── Repolarizzazione ────────────────────────────────────────────
     FieldSpec(
@@ -314,6 +359,17 @@ SPEC: tuple[FieldSpec, ...] = (
         page=PAGE_QC, label="Battiti minimi per analisi",
         tooltip="Meno di N battiti accettati → grade F.",
         minimum=1, maximum=50, step=1,
+    ),
+    FieldSpec(
+        attr="not_analysable_gap_tolerant", section="quality",
+        kind="bool", page=PAGE_QC,
+        label="Ritmo con battiti mancanti resta analizzabile (sperimentale)",
+        tooltip=(
+            "Una registrazione con meno di 16 battiti e CV > 40 % resta "
+            "analizzabile se gli intervalli sono multipli di un periodo "
+            "comune (battiti mancanti, non ritmo irregolare). Da usare con "
+            "le due opzioni sui rilevamenti. Disattivo di default (v3.17)."
+        ),
     ),
 
     # ── Inclusione ─────────────────────────────────────────────────
