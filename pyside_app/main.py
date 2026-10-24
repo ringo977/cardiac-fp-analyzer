@@ -56,6 +56,7 @@ from cardiac_fp_analyzer.template_quality import (
     TEMPLATE_RISKY_RHYTHM_TYPES,
     template_representativity,
 )
+from pyside_app import dialogs as _dialogs
 from pyside_app import theme
 from pyside_app.chip_map import ChipMapWidget
 from pyside_app.review_panel import ReviewPanel
@@ -64,6 +65,7 @@ from pyside_app.signal_viewer import SignalViewer
 from pyside_app.study_panel import StudyPanel
 
 logger = logging.getLogger(__name__)
+_dialogs.install()        # Qt-drawn message boxes: the native macOS alert crashed (see dialogs.py)
 
 # ═══════════════════════════════════════════════════════════════════════
 #   Template representativity constants

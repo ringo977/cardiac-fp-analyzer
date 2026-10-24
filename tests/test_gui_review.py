@@ -279,3 +279,22 @@ def test_worker_pools_have_large_stacks(app):
     q = ReviewQueue(lambda: AnalysisConfig())
     assert q._pool.stackSize() == WORKER_STACK_BYTES == 16 * 1024 * 1024
     assert analysis_pool(max_threads=2).maxThreadCount() == 2
+
+
+def test_message_boxes_are_qt_drawn(app):
+    """The native macOS alert aborted the process (24 Oct 2026): the static helpers are replaced by Qt boxes."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from pyside_app import dialogs
+    assert QMessageBox.question is not dialogs._NATIVE.get("question") and dialogs._NATIVE
+    answers = []
+
+    def _click():
+        for w in QApplication.topLevelWidgets():
+            if isinstance(w, QMessageBox) and w.isVisible():
+                assert w.testOption(QMessageBox.Option.DontUseNativeDialog)
+                w.button(QMessageBox.Yes).click()
+    QTimer.singleShot(50, _click)
+    answers.append(QMessageBox.question(None, "t", "q", QMessageBox.Yes | QMessageBox.No, QMessageBox.No))
+    assert answers == [QMessageBox.Yes]
