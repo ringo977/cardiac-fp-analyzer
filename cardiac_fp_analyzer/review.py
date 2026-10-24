@@ -60,6 +60,7 @@ class _Snapshot:
     vetoed: list
     polarity: int | None
     criterion: dict | None
+    removed: list
 
 
 class ReviewState:
@@ -75,6 +76,7 @@ class ReviewState:
         self.gain = float(gain)
         self.source_file = str(source_file)
         self.beats: list[BeatMark] = []
+        self.removed: list[int] = []                # software detections the operator removed (sample indices)
         self.polarity: int | None = None            # repolarisation polarity chosen by the operator (+1 / -1)
         self.criterion: dict | None = None          # last propagated criterion
         self.notes = ''
@@ -118,10 +120,12 @@ class ReviewState:
     # ── undo / redo ────────────────────────────────────────────────────────
 
     def _snapshot(self):
-        return _Snapshot(copy.deepcopy(self.beats), list(self.vetoed), self.polarity, copy.deepcopy(self.criterion))
+        return _Snapshot(copy.deepcopy(self.beats), list(self.vetoed), self.polarity, copy.deepcopy(self.criterion),
+                         list(self.removed))
 
     def _restore(self, s):
         self.beats, self.vetoed, self.polarity, self.criterion = copy.deepcopy(s.beats), list(s.vetoed), s.polarity, copy.deepcopy(s.criterion)
+        self.removed = list(s.removed)
 
     def _begin(self):
         self._history.append(self._snapshot())
@@ -203,7 +207,23 @@ class ReviewState:
 
     def remove_beat(self, k):
         self._begin()
+        if self.beats[k].source == 'auto':
+            self.removed.append(self.beats[k].dep)
         del self.beats[k]
+
+    def changes(self):
+        """What the operator changed with respect to the software proposal: counts of removed, added,
+        moved and restored depolarisations, corrected and propagated repolarisations, the chosen polarity,
+        and ``corrected`` (True when anything differs)."""
+        c = {'tolti': len(self.removed),
+             'aggiunti': sum(1 for b in self.beats if b.source == 'aggiunto'),
+             'spostati': sum(1 for b in self.beats if b.source == 'corretto'),
+             'ripristinati': sum(1 for b in self.beats if b.source == 'ripristinato'),
+             'ripol_corrette': sum(1 for b in self.beats if b.repol_source == 'corretto'),
+             'ripol_propagate': sum(1 for b in self.beats if b.repol_source == 'propagato'),
+             'polarita': self.polarity}
+        c['corrected'] = any(v for k, v in c.items() if k != 'polarita') or self.polarity is not None
+        return c
 
     def move_beat(self, k, sample, *, snap=True):
         sample = int(sample)
@@ -474,6 +494,7 @@ class ReviewState:
                 'battiti': [{'dep_s': b.dep / self.fs, 'rep_s': b.repol / self.fs if b.repol is not None else None,
                              'stato': b.source, 'stato_rip': b.repol_source, 'nota': b.note} for b in self.beats],
                 'tolti_dai_veti_s': [v / self.fs for v in self.vetoed],
+                'tolti_s': [v / self.fs for v in self.removed],
                 'burst_s': [[s / self.fs, e / self.fs] for s, e in self.bursts]}
 
     def apply_dict(self, d):
@@ -483,6 +504,7 @@ class ReviewState:
                                b.get('stato', 'auto'), b.get('stato_rip', 'auto'), b.get('nota', '')) for b in d.get('battiti', [])]
         self.beats.sort(key=lambda b: b.dep)
         self.vetoed = sorted(int(round(v * fs)) for v in d.get('tolti_dai_veti_s', []))
+        self.removed = [int(round(v * fs)) for v in d.get('tolti_s', [])]
         self.polarity = d.get('polarita')
         self.criterion = d.get('criterio')
         self.notes = d.get('note', '')

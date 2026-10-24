@@ -64,11 +64,13 @@ def inputs_of(path):
         return [('auto', None)]
 
 
-def queue_entry(path, channel, chamber, result, error=None):
-    """One row of the review queue from an analysis result (or an error)."""
+def queue_entry(path, channel, chamber, result, error=None, record=None):
+    """One row of the review queue from an analysis result (or an error). With ``record`` (the export
+    record of the recording, ``results_export.record_from_state``) the measures shown are the review
+    model's — the same the operator sees in the panel and that the Results export writes."""
     e = {'file': str(path), 'nome': Path(path).name, 'ingresso': channel, 'camera': chamber, 'errore': error,
          'livello': 'rosso', 'titolo': 'Errore', 'riassunto': error or '', 'problemi': [], 'bp_s': None, 'fpd_s': None,
-         'n_battiti': 0, 'analizzato': None, 'rivista': False}
+         'n_battiti': 0, 'analizzato': None, 'rivista': False, 'record': record, 'condizione': ''}
     if result is None:
         return e
     q = summarise_quality(result)
@@ -80,6 +82,11 @@ def queue_entry(path, channel, chamber, result, error=None):
              fpd_s=fpd / 1000 if fpd is not None and np.isfinite(fpd) else None,
              n_battiti=int(len(result.get('beat_indices_raw', []))), analizzato=fi.get('analyzed_channel'),
              chip=fi.get('chip'), camera=chamber or fi.get('chamber'))
+    if record:
+        m = record.get('measures') or {}
+        e.update(bp_s=m.get('bp_s'), fpd_s=m.get('fpd_s'), n_battiti=m.get('n_battiti', e['n_battiti']),
+                 chip=record.get('chip', e['chip']), camera=record.get('chamber', e['camera']),
+                 item=record.get('item'), condizione=record.get('condition', ''))
     return e
 
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cardiac-fp-analyzer"
-version = "3.17.0"
+version = "3.18.0"
 description = "Field Potential analysis pipeline for hiPSC-CM micro-ECG recordings"
 readme = "README.md"
 license = "MIT"
@@ -67,6 +67,7 @@ dev = [
     "cardiac-fp-analyzer[all]",
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "openpyxl>=3.0",          # reads the exported workbooks back in the tests
     "ruff>=0.1.0",
 ]
 
@@ -76,6 +77,7 @@ Repository = "https://github.com/ringo977/cardiac-fp-analyzer"
 [project.scripts]
 cardiac-fp = "cardiac_fp_analyzer.analyze:main"
 cardiac-fp-gui = "pyside_app.main:main"
+cardiac-fp-results = "cardiac_fp_analyzer.results_export:main"
 
 [tool.setuptools.packages.find]
 include = ["cardiac_fp_analyzer*", "pyside_app*", "ui*"]

@@ -2351,7 +2351,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, self.tr("Salvataggio correzioni"), str(exc))
             return
         fi = (self._current_result or {}).get("file_info") or {}
-        self._review_queue.mark_reviewed(str(self._current_csv_path), st.channel, fi.get("chamber"))
+        # the queue's record (used by the Results export) follows the saved corrections
+        self._review_queue.mark_reviewed(str(self._current_csv_path), st.channel, fi.get("chamber"),
+                                         state=st, result=self._current_result)
         self.statusBar().showMessage(self.tr("Correzioni salvate in {0}").format(p.name), 5000)
 
     def _open_from_queue(self, path: str, channel: str, chamber) -> None:

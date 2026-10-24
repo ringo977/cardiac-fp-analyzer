@@ -101,7 +101,7 @@ def test_review_state_and_panel_after_open(app, csv_path):
     w.close()
 
 
-def test_review_queue_lists_both_inputs(app, csv_path):
+def test_review_queue_lists_both_inputs(app, csv_path, tmp_path):
     q = ReviewQueue(lambda: AnalysisConfig())
     n = q.add_paths([csv_path.parent])
     assert n == 2
@@ -113,11 +113,28 @@ def test_review_queue_lists_both_inputs(app, csv_path):
     entries = q.entries()
     assert len(entries) == 2 and all(e["livello"] in ("verde", "giallo", "rosso") for e in entries)
     assert {e["ingresso"] for e in entries} == {"el1", "el2"}
-    assert q._tree.topLevelItemCount() == 2
-    q.mark_reviewed(str(csv_path), "el1")
-    assert any(e["rivista"] for e in q._entries.values())
+    assert q._tree.topLevelItemCount() == 2 and q._tree.columnCount() == 8
+    # every row carries its export record (identity from the two-tissue name) and the measures of the review model
+    recs = q.records()
+    assert len(recs) == 2 and {(r["chip"], r["chamber"]) for r in recs} == {("A", 1), ("B", 1)}
+    assert all(r["condition"] == "baseline" and r["measures"]["n_battiti"] >= 25 for r in recs)
+    el1 = next(e for e in entries if e["ingresso"] == "el1")
+    assert el1["bp_s"] == pytest.approx(el1["record"]["measures"]["bp_s"])
+    # saving corrections refreshes the record from the state
+    from cardiac_fp_analyzer.analyze import analyze_single_file
+    from cardiac_fp_analyzer.review import ReviewState
+    result = analyze_single_file(str(csv_path), channel="el1", verbose=False)
+    st = ReviewState.from_result(result)
+    st.remove_beat(0)
+    q.mark_reviewed(str(csv_path), "el1", state=st, result=result)
+    el1 = next(e for e in q.entries() if e["ingresso"] == "el1")
+    assert el1["rivista"] and el1["record"]["changes"]["corrected"] and el1["record"]["chip"] == "A"
+    assert el1["record"]["measures"]["n_battiti"] == st.n_beats()
+    # export of the queue
+    out = tmp_path / "Results.xlsx"
+    assert q.export_results(out) == 2 and out.exists() and out.stat().st_size > 5000
     q.clear()
-    assert q._tree.topLevelItemCount() == 0
+    assert q._tree.topLevelItemCount() == 0 and not q._btn_export.isEnabled()
 
 
 def test_open_from_queue(app, csv_path):

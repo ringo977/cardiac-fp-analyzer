@@ -198,3 +198,23 @@ def test_review_default_config_flags_unchanged():
     assert BeatDetectionConfig().min_rr_physiological_ms == 0.0
     assert BeatDetectionConfig().min_distance_floor_ms == 100.0
     assert dataclasses.replace(BeatDetectionConfig(), min_rr_physiological_ms=250.0).min_rr_physiological_ms == 250.0
+
+
+def test_removed_beats_are_tracked_and_saved(tmp_path):
+    st, beats, reps = _state()
+    n = st.n_beats()
+    st.remove_beat(2)
+    st.add_beat(int(beats[3]) + int(1.0 * FS))
+    k = st.beat_near(int(beats[4]))
+    st.move_beat(k, int(beats[4]) + 4)
+    c = st.changes()
+    assert c['tolti'] == 1 and c['aggiunti'] == 1 and c['spostati'] == 1 and c['corrected']
+    st.undo(); st.undo(); st.undo()
+    assert st.changes()['corrected'] is False and st.removed == [] and st.n_beats() == n
+    st.redo()
+    assert st.removed == [int(beats[2])]
+    st.source_file = str(tmp_path / 'rec.csv')
+    st.save()
+    other, _, _ = _state()
+    other.source_file = st.source_file
+    assert ReviewState.load_into(other) and other.removed == [int(beats[2])] and other.n_beats() == n - 1

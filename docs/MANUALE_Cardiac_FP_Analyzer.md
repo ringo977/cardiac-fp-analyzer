@@ -1,8 +1,8 @@
 ---
 title: "Cardiac FP Analyzer — Manuale utente"
-subtitle: "Versione 3.16.0 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
+subtitle: "Versione 3.18.0 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
 author: "Marco Rasponi · github.com/ringo977/cardiac-fp-analyzer"
-date: "4 ottobre 2026"
+date: "24 ottobre 2026"
 lang: it
 ---
 
@@ -264,7 +264,9 @@ La revisione è il flusso dell'operatore: il software propone depolarizzazioni e
 
 **Salvataggio.** *Salva correzioni* (Ctrl+S) scrive `<registrazione>.review.json` accanto al file, una voce per ingresso (el1/el2) o elettrodo; riaprendo il file le correzioni vengono ricaricate. *Ricalcola* rilancia la pipeline sui battiti correnti conservando le ripolarizzazioni corrette.
 
-**Coda di revisione** (a sinistra, Revisione ▸ Coda di revisione, Ctrl+Shift+R). *Aggiungi file…* o *Aggiungi cartella…*: ogni ingresso di un CSV a due tessuti e ogni camera di un chip viene analizzato in background con le impostazioni correnti e messo in lista con giudizio, periodo, FPD e problemi, prima le registrazioni con problemi; doppio clic per aprirla; dopo il salvataggio la riga è marcata *rivista*.
+**Coda di revisione** (a sinistra, Revisione ▸ Coda di revisione, Ctrl+Shift+R). *Aggiungi file…* o *Aggiungi cartella…*: ogni ingresso di un CSV a due tessuti e ogni camera di un chip viene analizzato in background con le impostazioni correnti e messo in lista con tessuto (chip, camera, test item), condizione, giudizio, periodo, FPD e problemi, prima le registrazioni con problemi; doppio clic per aprirla; dopo il salvataggio la riga è marcata *rivista*. Le identità seguono le regole del batch (§3.4, §3.5): se l'esperimento ha una `samples.csv`, anche in una cartella sopra a quella aperta, è lei a dire chip, camera, test item e dose di ogni ingresso.
+
+**Esporta Results…** (nella coda, dalla v3.18) scrive il foglio Excel nel formato con cui il laboratorio registra i risultati: un foglio `CHIP X` per chip con, per ogni canale, la baseline e le dosi (Beating Period, St. dev., CV, Field Potential Duration, FPD Fridericia, Dep. Amplitude, percentuali e variazioni rispetto alla baseline come formule), una nota che dice se la riga è automatica o corretta dall'operatore e quali problemi ha, il file e l'ingresso; un foglio `CHIP X raw` con i battiti di ogni condizione (tempo di depolarizzazione, periodo, tempo di ripolarizzazione, FPD, tensioni all'amplificatore, ampiezza in µV, con le formule e le righe Mean / St. dev); un foglio `samples` con tutte le registrazioni. Le misure sono quelle del pannello Revisione, correzioni comprese; una ripetizione della stessa condizione resta fuori dal foglio del chip (vince la registrazione corretta, poi il giudizio migliore) ed è citata nella nota. Da terminale: `cardiac-fp-results <cartella> -o file.xlsx` (analizza tutto, applica i `.review.json` salvati).
 
 Le tre opzioni della v3.17 (rilevamenti deboli, burst, ritmo con battiti mancanti) e l'intervallo minimo fisiologico tra depolarizzazioni sono in Impostazioni ▸ Detection e QC, disattivi di default.
 

@@ -67,7 +67,7 @@ jobs:
       - name: Install package (core + desktop GUI + reports) and test tools
         run: |
           pip install -e ".[gui,reports,mcs]"
-          pip install pytest pytest-cov
+          pip install pytest pytest-cov openpyxl
       - name: Run tests
         run: pytest tests/ -v --tb=short -rs --junitxml=pytest.xml
       - name: Skip budget (GUI tests must actually run)
