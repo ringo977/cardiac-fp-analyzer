@@ -416,6 +416,22 @@ def _analyze_from_beats(
     if verbose and len(bp) > 0:
         print(f"  BP: {np.mean(bp)*1000:.0f}ms ({60/np.mean(bp):.1f} BPM)")
 
+    # Drift of the rate (and FPD) within the recording — temperature, run-down (drift.rate_drift):
+    # from the raw detections (gaps and detections in excess are left out of the fit).
+    try:
+        from .drift import rate_drift
+        fpd_by_beat = {int(b): p.get('fpd_ms') for b, p in zip(bi_fpd, all_p)}
+        fpd_s = [((fpd_by_beat.get(int(b)) or np.nan) / 1000.0) for b in bi]
+        drift = rate_drift(np.asarray(bi, dtype=float) / fs, fpd_s)
+    except Exception as exc:    # noqa: BLE001 — a diagnostic must never stop the analysis
+        logger.warning('drift estimate failed: %s', exc)
+        drift = None
+    summary['drift'] = drift
+    summary['rate_drift_pct'] = drift['variazione_pct'] if drift and drift.get('affidabile') else np.nan
+    summary['rate_drift_bpm_per_min'] = drift['pendenza_bpm_min'] if drift and drift.get('affidabile') else np.nan
+    summary['fpd_drift_pct'] = (drift['fpd']['variazione_pct'] if drift and drift.get('fpd') and drift['fpd'].get('affidabile')
+                                else np.nan)
+
     ar = analyze_arrhythmia(bi, bp, all_p, summary, fs,
                            cfg=config.arrhythmia, beats_data=bd_clean)
     if summary.get('not_analysable'):

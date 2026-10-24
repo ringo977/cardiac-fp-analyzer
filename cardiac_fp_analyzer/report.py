@@ -56,6 +56,8 @@ def generate_excel_report(results_list, output_path):
                 'Chip': fi.get('chip',''), 'Electrode': fi.get('analyzed_channel',''),
                 'Drug': fi.get('drug',''), 'Concentration': fi.get('concentration',''),
                 'QC Grade': qc.grade if qc else '',
+                'Rate drift [%]': s.get('rate_drift_pct', np.nan),
+                'Rate drift [bpm/min]': s.get('rate_drift_bpm_per_min', np.nan),
                 'Global SNR': qc.global_snr if qc else np.nan,
                 'Beats Raw': qc.n_beats_input if qc else 0,
                 'Beats Accepted': s.get('beat_period_ms_n',0),

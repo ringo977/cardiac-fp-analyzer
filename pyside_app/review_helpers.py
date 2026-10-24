@@ -112,6 +112,21 @@ def format_measures(m, reference=None):
         txt = fmt.format(v) if v is not None and not (isinstance(v, float) and math.isnan(v)) else '—'
         pct = m.get(key + '_pct'); var = m.get(key + '_var')
         rows.append((label, txt, f'{pct:.1f}' if pct is not None else '', f'{var:+.1f}' if var is not None else ''))
+    d = m.get('drift') or {}
+    if m.get('drift_pct') is not None:
+        txt = f"{m['drift_pct']:+.1f} % ({m['drift_bpm_min']:+.2f} bpm/min)"
+        note = '' if d.get('affidabile') else 'stima incerta'
+        if d.get('affidabile') and not d.get('significativa'):
+            note = '≈ 0'
+        rows.append(('Deriva frequenza nella registrazione', txt, note, ''))
+    else:
+        rows.append(('Deriva frequenza nella registrazione', '—', '', ''))
+    if m.get('fpd_drift_pct') is not None:
+        f = d.get('fpd') or {}
+        rows.append(('Deriva FPD nella registrazione', f"{m['fpd_drift_pct']:+.1f} % ({f.get('pendenza_ms_min', 0):+.1f} ms/min)",
+                     '' if f.get('affidabile') else 'stima incerta', ''))
+    else:
+        rows.append(('Deriva FPD nella registrazione', '—', '', ''))
     extra = [('Battiti', f"{m.get('n_battiti', 0)}", '', ''),
              ('Intervalli esclusi dal BP', f"{m.get('intervalli_esclusi', 0)}", '', ''),
              ('Battiti con FPD', f"{m.get('n_fpd', 0)}", '', ''),

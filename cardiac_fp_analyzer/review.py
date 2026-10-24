@@ -514,6 +514,12 @@ class ReviewState:
                          'v_up': up, 'v_down': dn, 'amp_uV': amp, 'stato': b.source, 'stato_rip': b.repol_source})
         return rows
 
+    def drift(self):
+        """Drift of the rate and the FPD over the recording from the current beats (``drift.rate_drift``)."""
+        from .drift import rate_drift
+        rows = self.per_beat_rows()
+        return rate_drift([r['dep_s'] for r in rows], [r['fpd_s'] if r['fpd_s'] is not None else np.nan for r in rows])
+
     def measures(self, reference=None, exclude_gaps=True, gap_factor=1.5):
         """The columns of the sheet ``CHIP X`` (seconds, %, µV). With ``exclude_gaps`` the intervals longer than
         ``gap_factor`` × the median (a missing beat) are left out of the beating period; the count is reported.
@@ -536,6 +542,13 @@ class ReviewState:
              'amp_uV': float(amp.mean()) if len(amp) else None,
              'n_vetoed': len(self.vetoed), 'burst_frac': self.burst_fraction()}
         m['fpdc_s'] = m['fpd_s'] / m['bp_s'] ** (1 / 3) if m['fpd_s'] is not None and m['bp_s'] else None
+        d = self.drift() if len(rows) >= 3 else None
+        m['drift'] = d
+        m['drift_pct'] = d['variazione_pct'] if d and d.get('pendenza_bpm_min') is not None else None
+        m['drift_bpm_min'] = d['pendenza_bpm_min'] if d else None
+        m['drift_ok'] = bool(d and d.get('affidabile'))
+        m['fpd_drift_pct'] = (d['fpd']['variazione_pct'] if d and d.get('fpd') and d['fpd'].get('pendenza_ms_min') is not None
+                              else None)
         if reference:
             for key in ('bp_s', 'fpd_s', 'fpdc_s', 'amp_uV'):
                 base = reference.get(key)

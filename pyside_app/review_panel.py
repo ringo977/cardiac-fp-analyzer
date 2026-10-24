@@ -30,6 +30,8 @@ from cardiac_fp_analyzer.quality_summary import LEVEL_COLOURS, summarise_quality
 
 from .review_helpers import BEAT_COLUMNS, format_beat_rows, format_measures, processing_text
 
+N_MEASURE_ROWS = 13
+
 
 class ReviewPanel(QWidget):
     """Right-hand dock of the review screen."""
@@ -169,7 +171,7 @@ class ReviewPanel(QWidget):
             lbl.setStyleSheet("font-weight: bold;")
             g.addWidget(lbl, 0, j)
         self._measure_rows: list[tuple[QLabel, QLabel, QLabel, QLabel]] = []
-        for i in range(11):
+        for i in range(N_MEASURE_ROWS):
             cells = tuple(QLabel("") for _ in range(4))
             for j, c in enumerate(cells):
                 if j:

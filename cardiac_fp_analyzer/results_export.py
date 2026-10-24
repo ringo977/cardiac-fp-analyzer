@@ -38,7 +38,8 @@ SUMMARY_HEADERS = (
     'Beating Period [%] - variation to baseline', 'Field Potential Duration [s]', 'Field Potential Duration [%]',
     'FPD [%]  - variation to baseline', "FPD Fridericia's Method [s]", "FPD Fridericia's Method [%]",
     "FPD Fridericia's Method [%]  - variation to baseline", 'Dep. Amplitude [µV]', 'Dep. Amplitude [%]',
-    'Dep. Amplitude [%]  - variation to baseline', 'Note', 'File', 'Input')
+    'Dep. Amplitude [%]  - variation to baseline', 'Note', 'File', 'Input', 'Rate drift [% over the recording]',
+    'Rate drift [bpm/min]', 'FPD drift [%]')
 RAW_HEADERS = ('Dep. time [s]', 'Beating Period [s]', 'Rep. time [s]', 'Field Potential Duration [s]',
                'Dep. Voltage up (10k amp) [V]', 'Dep. Voltage down (10k amp) [V]', 'Dep. Voltage [µV]')
 RAW_GROUP_WIDTH = 9                     # label column + 7 data columns + 1 note column
@@ -263,6 +264,9 @@ def _note(rec):
         parts.append(f"{m['intervalli_esclusi']} interval(s) with a missing beat excluded from the beating period")
     if m.get('n_vetoed'):
         parts.append(f"{m['n_vetoed']} weak/burst detection(s) removed by the vetoes")
+    d = m.get('drift') or {}
+    if d.get('affidabile') and d.get('significativa') and d.get('variazione_pct') is not None and abs(d['variazione_pct']) >= 5:
+        parts.append(f"rate drift {d['variazione_pct']:+.0f} % over {d['durata_s']:.0f} s ({d['pendenza_bpm_min']:+.1f} bpm/min)")
     if rec.get('alternates'):
         parts.append('other recording(s) of this tissue and condition not used: ' + ', '.join(rec['alternates']))
     return ' — '.join(parts)
@@ -333,7 +337,7 @@ def _write_samples_sheet(wb, F, records, title):
     ws.write(1, 0, f'Cardiac FP Analyzer {__version__} — one row per recording (tissue input)', F['grey'])
     heads = ('#exp', 'Day', 'CHIP', 'Ch', 'Item', 'Condition', 'Beats', 'Beating Period [s]', 'CV BP [%]',
              'FPD [s]', "FPDc Fridericia [s]", 'Dep. Amplitude [µV]', 'Judgement', 'Problems', 'Corrections',
-             'File', 'Input', 'Review state')
+             'File', 'Input', 'Review state', 'Rate drift [%]', 'Rate drift [bpm/min]', 'FPD drift [%]')
     for j, h in enumerate(heads):
         ws.write(3, j, h, F['hdr'])
     rows = sorted(records, key=lambda r: (str(r.get('experiment') or ''), str(r.get('day') or ''),
@@ -350,9 +354,10 @@ def _write_samples_sheet(wb, F, records, title):
                 '; '.join(q.get('problemi') or []),
                 'yes' if c.get('corrected') else 'no', r.get('name'), r.get('electrode'),
                 {'chiuso': 'closed', 'approvato': 'approved'}.get(r.get('stato'), 'to review') +
-                (f" — {r['stato_testo']}" if r.get('stato') in ('chiuso', 'approvato') and r.get('stato_testo') else ''))
+                (f" — {r['stato_testo']}" if r.get('stato') in ('chiuso', 'approvato') and r.get('stato_testo') else ''),
+                _num(m.get('drift_pct')), _num(m.get('drift_bpm_min')), _num(m.get('fpd_drift_pct')))
         fmts = (None, None, None, None, None, None, None, F['s3'], F['p1'], F['s3'], F['s3'], F['uv'],
-                None, F['txtw'], None, None, None, None)
+                None, F['txtw'], None, None, None, None, F['p1'], F['p1'], F['p1'])
         for j, (v, f) in enumerate(zip(vals, fmts)):
             if v is None:
                 continue
@@ -379,6 +384,7 @@ def _write_summary_sheet(wb, F, name, key, chambers, title):
     ws.set_column(15, 15, 60)
     ws.set_column(16, 16, 44)
     ws.set_column(17, 17, 8)
+    ws.set_column(18, 20, 14)
     row = 5
     for chamber in sorted(chambers, key=_chamber_key):
         conds = chambers[chamber]
@@ -421,6 +427,10 @@ def _write_summary_sheet(wb, F, name, key, chambers, title):
             ws.write(r, 15, _note(rec), F['txt'])
             ws.write(r, 16, rec.get('name'), F['cell'])
             ws.write(r, 17, rec.get('electrode'), F['cell'])
+            for col, key, fmt in ((18, 'drift_pct', F['p1']), (19, 'drift_bpm_min', F['p1']), (20, 'fpd_drift_pct', F['p1'])):
+                v = _num(m.get(key))
+                if v is not None:
+                    ws.write(r, col, v, fmt)
             r += 2
         row = r + 2
     ws.freeze_panes(0, 1)

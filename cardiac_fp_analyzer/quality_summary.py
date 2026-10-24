@@ -48,7 +48,7 @@ def _reason_it(reason):
     return r
 
 
-def summarise_quality(result, *, burst_warn=0.10, cv_warn=25.0, min_beats=10):
+def summarise_quality(result, *, burst_warn=0.10, cv_warn=25.0, min_beats=10, drift_warn=5.0):
     """See the module docstring. ``result`` is what ``analyze_single_file`` returns."""
     s = result.get('summary') or {}
     fi = result.get('file_info') or {}
@@ -149,6 +149,19 @@ def summarise_quality(result, *, burst_warn=0.10, cv_warn=25.0, min_beats=10):
         bp_s = float(np.median(np.diff(bi)) / fs)
         if bp_s > 3.0:
             add('ritmo_lento', 'basso', f'ritmo molto lento ({bp_s:.1f} s): controllare che non manchino battiti', bp_s)
+
+    # drift of the rate within the recording (temperature, run-down): ≥ 10 % → to verify, 5–10 % → note
+    d = s.get('drift') or {}
+    if d.get('affidabile') and d.get('significativa') and d.get('variazione_pct') is not None and not s.get('not_analysable'):
+        pct = float(d['variazione_pct'])
+        if abs(pct) >= drift_warn:
+            txt = (f"frequenza in deriva: {pct:+.0f} % in {d['durata_s']:.0f} s ({d['pendenza_bpm_min']:+.1f} bpm/min)"
+                   + ('; ' + d['nota'] if d.get('nota') else ''))
+            add('deriva', 'medio' if abs(pct) >= 2 * drift_warn else 'basso', txt, pct)
+        f = d.get('fpd') or {}
+        if f.get('affidabile') and f.get('significativa') and f.get('variazione_pct') is not None and abs(f['variazione_pct']) >= drift_warn:
+            add('deriva_fpd', 'basso', f"FPD in deriva: {f['variazione_pct']:+.0f} % ({f['pendenza_ms_min']:+.0f} ms/min)",
+                float(f['variazione_pct']))
 
     problems.sort(key=lambda p: -_SEV[p['gravita']])
     worst = max((_SEV[p['gravita']] for p in problems), default=0)

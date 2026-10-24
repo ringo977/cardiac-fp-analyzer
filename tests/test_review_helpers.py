@@ -55,7 +55,7 @@ def test_format_measures_and_rows():
     rows = format_measures(m)
     assert rows[0] == ('Beating Period [s]', '2.190', '108.5', '+8.5')
     assert rows[5][1] == '367' and rows[-1][1] == '41 %'
-    assert len(rows) == 11
+    assert len(rows) == 13 and rows[6][0].startswith('Deriva frequenza')
     beats = format_beat_rows([{'n': 1, 'dep_s': 0.4278, 'bp_s': 2.273, 'rep_s': 1.6148, 'fpd_s': 1.187, 'amp_uV': 352.5,
                                'stato': 'auto', 'stato_rip': 'corretto'},
                               {'n': 2, 'dep_s': 2.7, 'bp_s': None, 'rep_s': None, 'fpd_s': None, 'amp_uV': 10.0,
