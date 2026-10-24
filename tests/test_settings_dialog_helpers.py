@@ -26,6 +26,8 @@ Contracts covered:
 from __future__ import annotations
 
 import pytest
+
+from cardiac_fp_analyzer.config import AnalysisConfig
 from pyside_app.settings_dialog_helpers import (
     SPEC,
     apply_values_to_config,
@@ -33,8 +35,6 @@ from pyside_app.settings_dialog_helpers import (
     page_order,
     values_from_config,
 )
-
-from cardiac_fp_analyzer.config import AnalysisConfig
 
 # ═══════════════════════════════════════════════════════════════════════
 #   SPEC sanity

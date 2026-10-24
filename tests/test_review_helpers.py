@@ -1,5 +1,6 @@
 """Qt-free helpers of the Revisione screen (pyside_app.review_helpers)."""
 import numpy as np
+
 from pyside_app.review_helpers import (
     BEAT_COLUMNS,
     format_beat_rows,

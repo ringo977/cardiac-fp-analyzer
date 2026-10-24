@@ -20,10 +20,9 @@ try:
 except ImportError as exc:   # pragma: no cover — platform-dependent
     pytest.skip(f"PySide6 widget libs unavailable: {exc}", allow_module_level=True)
 
+from cardiac_fp_analyzer.chambers import UHEART_MVP_64  # noqa: E402
 from pyside_app.chip_map import ChipMapWidget  # noqa: E402
 from pyside_app.main import CHANNEL_AUTO, MainWindow, _SignalTab  # noqa: E402
-
-from cardiac_fp_analyzer.chambers import UHEART_MVP_64  # noqa: E402
 from tests.test_chambers import NAME, _chip_file  # noqa: E402
 
 

@@ -18,11 +18,10 @@ try:
 except ImportError as exc:   # pragma: no cover — platform-dependent
     pytest.skip(f"PySide6 widget libs unavailable: {exc}", allow_module_level=True)
 
+from cardiac_fp_analyzer.config import AnalysisConfig  # noqa: E402
 from pyside_app.main import MainWindow  # noqa: E402
 from pyside_app.review_panel import ReviewPanel  # noqa: E402
 from pyside_app.review_queue import ReviewQueue  # noqa: E402
-
-from cardiac_fp_analyzer.config import AnalysisConfig  # noqa: E402
 from tests.test_review_model import FS, _trace  # noqa: E402
 
 

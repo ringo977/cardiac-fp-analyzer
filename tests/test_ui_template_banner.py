@@ -18,6 +18,7 @@ import pytest
 pytest.importorskip("streamlit")
 
 import streamlit as st  # noqa: E402
+
 from ui import display as display_mod  # noqa: E402
 from ui.display import _render_template_representativity_banner  # noqa: E402
 

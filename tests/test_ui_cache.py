@@ -25,11 +25,10 @@ import pytest
 
 pytest.importorskip("streamlit")
 
-from ui import cache as cache_mod  # noqa: E402
-
 from cardiac_fp_analyzer import analyze as analyze_mod  # noqa: E402
 from cardiac_fp_analyzer import loader as loader_mod  # noqa: E402
 from cardiac_fp_analyzer.config import AnalysisConfig  # noqa: E402
+from ui import cache as cache_mod  # noqa: E402
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Synthetic CSV helper — matches Digilent WaveForms header format

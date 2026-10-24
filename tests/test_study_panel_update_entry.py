@@ -72,18 +72,17 @@ except ImportError as exc:   # pragma: no cover — platform-dependent
         allow_module_level=True,
     )
 
-from pyside_app.study_panel import (
-    FileResult,
-    StudyPanel,
-    _result_fingerprint,
-)
-
 from cardiac_fp_analyzer.config import AnalysisConfig
 from cardiac_fp_analyzer.study import (
     FileEntry,
     Group,
     Study,
     save_study,
+)
+from pyside_app.study_panel import (
+    FileResult,
+    StudyPanel,
+    _result_fingerprint,
 )
 
 
