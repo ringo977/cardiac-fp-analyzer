@@ -125,3 +125,11 @@ def test_open_from_queue(app, csv_path):
     w._open_from_queue(str(csv_path), "el2", None)
     assert w._review_state is not None and w._review_state.channel.lower() == "el2"
     w.close()
+
+
+def test_worker_pools_have_large_stacks(app):
+    """OpenBLAS's parallel LU overflows macOS's 512 KB thread stacks: every GUI pool asks for 16 MB."""
+    from pyside_app.workers import WORKER_STACK_BYTES, analysis_pool
+    q = ReviewQueue(lambda: AnalysisConfig())
+    assert q._pool.stackSize() == WORKER_STACK_BYTES == 16 * 1024 * 1024
+    assert analysis_pool(max_threads=2).maxThreadCount() == 2

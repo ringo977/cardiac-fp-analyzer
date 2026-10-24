@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from cardiac_fp_analyzer.quality_summary import LEVEL_COLOURS
 
 from .review_helpers import inputs_of, queue_entry, queue_sort_key
+from .workers import analysis_pool
 
 logger = logging.getLogger(__name__)
 _EXT = ('.csv', '.h5', '.npz')
@@ -75,8 +76,8 @@ class ReviewQueue(QWidget):
         self._pending = 0
         self._signals = _QueueSignals()
         self._signals.done.connect(self._on_done)
-        self._pool = QThreadPool(self)
-        self._pool.setMaxThreadCount(max(1, min(3, QThreadPool.globalInstance().maxThreadCount() - 1)))
+        # 16 MB stacks: OpenBLAS needs more than macOS's 512 KB default (see workers.py).
+        self._pool = analysis_pool(self, max_threads=min(3, QThreadPool.globalInstance().maxThreadCount() - 1))
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)

@@ -90,7 +90,6 @@ from PySide6.QtCore import (
     QRunnable,
     Qt,
     QThread,
-    QThreadPool,
     Signal,
 )
 from PySide6.QtGui import QAction, QBrush, QColor
@@ -131,6 +130,7 @@ from cardiac_fp_analyzer.study import (
 )
 
 from . import theme
+from .workers import analysis_pool
 
 logger = logging.getLogger(__name__)
 
@@ -1950,9 +1950,9 @@ class StudyPanel(QWidget):
 
         loop = QEventLoop(self)
         signals = _BatchWorkerSignals()
-        pool = QThreadPool(self)
-        pool.setMaxThreadCount(
-            min(QThread.idealThreadCount() or 1, _BATCH_MAX_THREADS)
+        # 16 MB stacks: OpenBLAS needs more than macOS's 512 KB default (see workers.py).
+        pool = analysis_pool(
+            self, max_threads=min(QThread.idealThreadCount() or 1, _BATCH_MAX_THREADS)
         )
 
         # Mutable flags packed in a dict so the inner closures can
@@ -2181,7 +2181,7 @@ class StudyPanel(QWidget):
             self._study.name, study_id, n, out_folder,
         )
 
-        pool = QThreadPool(self)
+        pool = analysis_pool(self)
         pool.start(worker)
 
         loop.exec()
