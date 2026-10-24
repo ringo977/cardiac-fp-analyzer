@@ -41,6 +41,7 @@ class ReviewPanel(QWidget):
     polarity_requested = Signal(int)      # +1 / -1
     beat_selected = Signal(int)           # row double-clicked → beat index
     restore_all_requested = Signal()
+    next_problem_requested = Signal(int)  # +1 / -1
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -60,6 +61,24 @@ class ReviewPanel(QWidget):
         self._problems.setWordWrap(True)
         self._problems.setStyleSheet("color: #666; padding: 0 4px;")
         lay.addWidget(self._problems)
+        # legend of the highlighted stretches + navigation
+        rowl = QHBoxLayout()
+        self._legend = QLabel("")
+        self._legend.setWordWrap(True)
+        self._legend.setTextFormat(Qt.RichText)
+        self._legend.setStyleSheet("padding: 0 4px;")
+        rowl.addWidget(self._legend, stretch=1)
+        self._btn_prev_problem = QPushButton("◀")
+        self._btn_next_problem = QPushButton(self.tr("Prossimo tratto ▶"))
+        self._btn_prev_problem.setToolTip(self.tr("Tratto evidenziato precedente"))
+        self._btn_next_problem.setToolTip(self.tr("Va al prossimo tratto evidenziato: battito mancante, battiti troppo "
+                                                  "vicini, ripolarizzazione assente (Ctrl+G)"))
+        self._btn_prev_problem.setFixedWidth(28)
+        self._btn_prev_problem.clicked.connect(lambda: self.next_problem_requested.emit(-1))
+        self._btn_next_problem.clicked.connect(lambda: self.next_problem_requested.emit(1))
+        rowl.addWidget(self._btn_prev_problem)
+        rowl.addWidget(self._btn_next_problem)
+        lay.addLayout(rowl)
 
         # ── view + actions ──
         row = QHBoxLayout()
@@ -171,7 +190,7 @@ class ReviewPanel(QWidget):
         self._quality = summarise_quality(result) if (state is not None and result is not None) else None
         enabled = state is not None
         for b in (self._btn_undo, self._btn_redo, self._btn_pos, self._btn_neg, self._btn_restore,
-                  self._btn_recompute, self._btn_save):
+                  self._btn_recompute, self._btn_save, self._btn_prev_problem, self._btn_next_problem):
             b.setEnabled(enabled)
         self.refresh()
 
@@ -181,6 +200,7 @@ class ReviewPanel(QWidget):
             self._badge.setText(self.tr("Nessuna registrazione"))
             self._badge.setStyleSheet("padding: 6px; border-radius: 6px; background: #e6e6e6; color: #222;")
             self._problems.setText("")
+            self._legend.setText("")
             for cells in self._measure_rows:
                 for c in cells:
                     c.setText("")
@@ -195,6 +215,7 @@ class ReviewPanel(QWidget):
             self._problems.setText("\n".join("• " + p["testo"] for p in q["problemi"][:6]))
         self._btn_undo.setEnabled(st.can_undo)
         self._btn_redo.setEnabled(st.can_redo)
+        self._legend.setText(self._legend_text(st))
         m = st.measures(reference=self._reference)
         for cells, (label, val, pct, var) in zip(self._measure_rows, format_measures(m, self._reference)):
             cells[0].setText(label)
@@ -211,6 +232,21 @@ class ReviewPanel(QWidget):
                     item.setForeground(QBrush(QColor("#1f4e9c" if txt in ("corretto", "propagato", "aggiunto", "ripristinato")
                                                      else "#b23a3a")))
                 self._table.setItem(i, j, item)
+
+    @staticmethod
+    def _legend_text(st) -> str:
+        from .signal_viewer import PROBLEM_COLOURS, PROBLEM_LABELS
+        counts = {}
+        for p in st.problems():
+            counts[p['tipo']] = counts.get(p['tipo'], 0) + 1
+        parts = []
+        if st.bursts:
+            parts.append('<span style="color:#f5c27a">■</span> burst')
+        for tipo, label in PROBLEM_LABELS.items():
+            if counts.get(tipo):
+                r, g, b = PROBLEM_COLOURS[tipo]
+                parts.append(f'<span style="color:rgb({r},{g},{b})">■</span> {label} ({counts[tipo]})')
+        return ('<span style="color:#666">Tratti evidenziati: ' + ' · '.join(parts) + '</span>') if parts else ''
 
     def select_row(self, k: int | None) -> None:
         if k is None or k >= self._table.rowCount():

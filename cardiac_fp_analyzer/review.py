@@ -480,6 +480,33 @@ class ReviewState:
                     m[key + '_var'] = m[key + '_pct'] - 100
         return m
 
+    def problems(self, gap_factor=1.5, close_factor=0.5):
+        """Stretches of the trace the operator should look at, as dicts ``{'tipo', 'start', 'end', 'k'}``
+        (sample indices, ``k`` the beat before the stretch): ``battito_mancante`` — an interval longer than
+        ``gap_factor`` × the median interval (a depolarisation probably missing between two beats; the same rule
+        excludes it from the beating period); ``battiti_vicini`` — an interval shorter than ``close_factor`` ×
+        the median (a detection in excess); ``ripolarizzazione_assente`` — a beat without a repolarisation, from
+        its depolarisation to the next one (or one median interval). Needs at least 3 intervals for the
+        interval rules."""
+        d = self.deps()
+        out = []
+        n = len(self.filtered)
+        rr = np.diff(d) if len(d) > 1 else np.array([], dtype=float)
+        med = float(np.median(rr)) if len(rr) >= 3 else None
+        if med:
+            for k, r in enumerate(rr):
+                if r > gap_factor * med:
+                    out.append({'tipo': 'battito_mancante', 'start': int(d[k]), 'end': int(d[k + 1]), 'k': k})
+                elif r < close_factor * med:
+                    out.append({'tipo': 'battiti_vicini', 'start': int(d[k]), 'end': int(d[k + 1]), 'k': k})
+        span = int(med) if med else int(1.0 * self.fs)
+        for k, b in enumerate(self.beats):
+            if b.repol is None:
+                end = int(d[k + 1]) if k + 1 < len(d) else min(n - 1, b.dep + span)
+                out.append({'tipo': 'ripolarizzazione_assente', 'start': int(b.dep), 'end': int(end), 'k': k})
+        out.sort(key=lambda x: (x['start'], x['tipo']))
+        return out
+
     def burst_fraction(self):
         n = len(self.filtered)
         return float(sum(e - s for s, e in self.bursts) / n) if n else 0.0

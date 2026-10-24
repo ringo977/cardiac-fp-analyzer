@@ -1965,6 +1965,7 @@ class MainWindow(QMainWindow):
         self._review_panel.polarity_requested.connect(self._review_polarity)
         self._review_panel.beat_selected.connect(self._review_select)
         self._review_panel.restore_all_requested.connect(self._review_restore_all)
+        self._review_panel.next_problem_requested.connect(self._review_next_problem)
         self._review_queue.open_requested.connect(self._open_from_queue)
         self.viewer.review_report.connect(lambda msg: self.statusBar().showMessage(msg, 8000))
         self.viewer.beats_changed.connect(self._review_panel.refresh)
@@ -1993,6 +1994,8 @@ class MainWindow(QMainWindow):
         m_review.addSeparator()
         for text, key, slot in ((self.tr("Battito precedente"), "Left", lambda: self._review_step(-1)),
                                 (self.tr("Battito successivo"), "Right", lambda: self._review_step(1)),
+                                (self.tr("Prossimo tratto da controllare"), "Ctrl+G", lambda: self._review_next_problem(1)),
+                                (self.tr("Tratto da controllare precedente"), "Ctrl+Shift+G", lambda: self._review_next_problem(-1)),
                                 (self.tr("Togli il battito selezionato"), "Delete", self._review_delete_selected),
                                 (self.tr("Ripolarizzazione: picco positivo"), "P", lambda: self._review_polarity(1)),
                                 (self.tr("Ripolarizzazione: picco negativo"), "N", lambda: self._review_polarity(-1))):
@@ -2302,6 +2305,21 @@ class MainWindow(QMainWindow):
             return
         self.viewer.select_next(step)
         self._review_panel.select_row(self.viewer.selected_beat())
+
+    def _review_next_problem(self, step: int = 1) -> None:
+        """Centre the trace on the next highlighted stretch (missing beat, detections too close, no
+        repolarisation) and say what it is in the status bar."""
+        if self._review_state is None:
+            return
+        from .signal_viewer import PROBLEM_LABELS
+        prob = self.viewer.goto_next_problem(step)
+        if prob is None:
+            self.statusBar().showMessage(self.tr("Nessun tratto evidenziato in questa registrazione"), 4000)
+            return
+        self._review_panel.select_row(self.viewer.selected_beat())
+        t = prob['start'] / self._review_state.fs
+        self.statusBar().showMessage(self.tr("{0} a {1:.1f} s (battito #{2})").format(
+            PROBLEM_LABELS.get(prob['tipo'], prob['tipo']), t, prob['k'] + 1), 6000)
 
     def _review_select(self, k: int) -> None:
         if self._review_state is None:

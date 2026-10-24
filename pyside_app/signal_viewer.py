@@ -41,6 +41,19 @@ from .review_helpers import operators_view
 _SNAP_WINDOW_S = 0.200
 
 
+# Highlighted stretches of the review mode (ReviewState.problems): RGB
+PROBLEM_COLOURS = {
+    'battito_mancante': (231, 76, 60),          # red — a depolarisation probably missing
+    'battiti_vicini': (52, 152, 219),           # blue — detections too close (one in excess)
+    'ripolarizzazione_assente': (155, 89, 182), # violet — beat without repolarisation
+}
+PROBLEM_LABELS = {
+    'battito_mancante': 'battito mancante?',
+    'battiti_vicini': 'battiti troppo vicini',
+    'ripolarizzazione_assente': 'ripolarizzazione assente',
+}
+
+
 class SignalViewer(pg.PlotWidget):
     """Single-plot viewer with click-to-edit via contextual menu."""
 
@@ -124,6 +137,7 @@ class SignalViewer(pg.PlotWidget):
                                                     pen=pg.mkPen("#ffb000", width=2))
         self.addItem(self._selected_scatter)
         self._burst_regions: list = []
+        self._problem_regions: list = []      # (LinearRegionItem, problem dict) — review mode
 
         # Mouse clicks on the scene → edit menu (in edit mode).
         self.scene().sigMouseClicked.connect(self._on_mouse_click)
@@ -243,6 +257,37 @@ class SignalViewer(pg.PlotWidget):
             if center and self._time is not None:
                 self.center_on(float(self._time[self._state.beats[k].dep]))
         self._redraw()
+
+    def problems(self) -> list:
+        """The highlighted stretches currently drawn (ReviewState.problems dicts)."""
+        return [p for _r, p in self._problem_regions]
+
+    def goto_next_problem(self, step: int = 1):
+        """Centre the view on the next (or previous) highlighted stretch after the current centre, cycling;
+        selects the beat before it. Returns the problem dict or None."""
+        probs = self.problems()
+        if not probs or self._time is None:
+            return None
+        vb = self.getPlotItem().vb
+        (x_lo, x_hi), _ = vb.viewRange()
+        centre = 0.5 * (x_lo + x_hi)
+        starts = [float(self._time[min(len(self._time) - 1, p['start'])]) for p in probs]
+        if step >= 0:
+            nxt = [i for i, t in enumerate(starts) if t > centre + 1e-6]
+            i = nxt[0] if nxt else 0
+        else:
+            prv = [i for i, t in enumerate(starts) if t < centre - 1e-6]
+            i = prv[-1] if prv else len(probs) - 1
+        prob = probs[i]
+        a, b = float(self._time[prob['start']]), float(self._time[min(len(self._time) - 1, prob['end'])])
+        width = x_hi - x_lo
+        if b - a > 0.8 * width:              # widen the view so the whole stretch is visible
+            vb.setXRange(a - 0.1 * (b - a), b + 0.1 * (b - a), padding=0)
+        else:
+            self.center_on(0.5 * (a + b))
+        self._selected = int(prob['k']) if self._state is not None and prob['k'] < len(self._state.beats) else None
+        self._redraw()
+        return prob
 
     def select_next(self, step: int = 1) -> None:
         if self._state is None or not self._state.beats:
@@ -417,6 +462,9 @@ class SignalViewer(pg.PlotWidget):
         for reg in self._burst_regions:
             self.removeItem(reg)
         self._burst_regions = []
+        for reg, _p in self._problem_regions:
+            self.removeItem(reg)
+        self._problem_regions = []
         if self._state is not None:
             vet = np.asarray([v for v in self._state.vetoed if 0 <= v < n], dtype=int)
             if len(vet):
@@ -438,6 +486,18 @@ class SignalViewer(pg.PlotWidget):
                 reg.setZValue(-10)
                 self.addItem(reg)
                 self._burst_regions.append(reg)
+            # Stretches to look at (ReviewState.problems): a probable missing beat, detections too close,
+            # a beat without repolarisation — each in its own colour (legend in the Revisione panel).
+            for prob in self._state.problems():
+                a, b = max(0, int(prob['start'])), min(n - 1, int(prob['end']))
+                if b <= a:
+                    continue
+                colour = PROBLEM_COLOURS.get(prob['tipo'], (120, 120, 120))
+                reg = pg.LinearRegionItem(values=(float(self._time[a]), float(self._time[b])), movable=False,
+                                          brush=pg.mkBrush(*colour, 55), pen=pg.mkPen(*colour, 160, width=1))
+                reg.setZValue(-9)
+                self.addItem(reg)
+                self._problem_regions.append((reg, prob))
         else:
             self._vetoed_scatter.setData([], [])
             self._selected_scatter.setData([], [])

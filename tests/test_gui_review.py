@@ -78,6 +78,18 @@ def test_review_state_and_panel_after_open(app, csv_path):
     assert st.n_beats() == n - 1
     w._review_undo()
 
+    # highlighted stretches and navigation: remove a beat → a red 'missing beat' stretch, Ctrl+G reaches it
+    st.remove_beat(3)
+    w._review_after_edit()
+    probs = w.viewer.problems()
+    assert any(p["tipo"] == "battito_mancante" for p in probs) and len(w.viewer._problem_regions) == len(probs)
+    assert "battito mancante" in panel._legend.text()
+    w._review_next_problem(1)
+    assert w.viewer.selected_beat() is not None
+    w._review_next_problem(-1)
+    w._review_undo()
+    assert not any(p["tipo"] == "battito_mancante" for p in w.viewer.problems())
+
     # views
     for kind in ("grezzo", "operatori", "filtrato"):
         w.viewer.set_view(kind)

@@ -218,3 +218,19 @@ def test_removed_beats_are_tracked_and_saved(tmp_path):
     other, _, _ = _state()
     other.source_file = st.source_file
     assert ReviewState.load_into(other) and other.removed == [int(beats[2])] and other.n_beats() == n - 1
+
+
+def test_problems_flag_gaps_close_beats_and_missing_repol():
+    st, beats, reps = _state()
+    assert st.problems() == []
+    st.remove_beat(3)                                   # a gap of two periods
+    st.clear_repol(5)                                   # a beat without repolarisation
+    st.add_beat(int(beats[8]) + int(0.3 * FS))          # a detection 0.3 s after a beat
+    probs = st.problems()
+    kinds = [p['tipo'] for p in probs]
+    assert kinds.count('battito_mancante') == 1 and kinds.count('ripolarizzazione_assente') >= 1 and kinds.count('battiti_vicini') == 1
+    gap = next(p for p in probs if p['tipo'] == 'battito_mancante')
+    assert gap['start'] == int(beats[2]) and gap['end'] == int(beats[4]) and gap['k'] == 2
+    close = next(p for p in probs if p['tipo'] == 'battiti_vicini')
+    assert abs(close['end'] - close['start'] - int(0.3 * FS)) <= int(0.010 * FS)      # snapped within ±10 ms
+    assert probs == sorted(probs, key=lambda p: (p['start'], p['tipo']))
