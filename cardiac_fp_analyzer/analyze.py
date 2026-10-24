@@ -682,6 +682,15 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
             raise ValueError(f"none of the electrodes {file_info['electrodes']} is in {filepath.name}")
         stim = [c for c in (file_info.get('stimulation_electrodes') or []) if c in allowed]
         actual_ch = channel
+        if channel == 'auto' and config.use_overrides and not file_info.get('two_tissue_file'):
+            # the operator may have chosen the input for this recording (review sidecar)
+            from .review import ReviewState
+            chosen = ReviewState.chosen_electrode(filepath)
+            if chosen in allowed:
+                channel = actual_ch = chosen
+                file_info['electrode_choice'] = 'operatore'
+                if verbose:
+                    print(f"  Channel {chosen} chosen by the operator (review sidecar)")
         if channel == 'auto':
             if len(allowed) <= 2 and not file_info.get('electrodes'):
                 actual_ch, ch_det = select_best_channel(df, fs, cfg=config, channels=allowed)

@@ -561,6 +561,38 @@ class ReviewState:
         return path
 
     @classmethod
+    def _read_sidecar(cls, recording_path):
+        path = cls.sidecar_path(recording_path)
+        if not path.exists():
+            return None, path
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return None, path
+        return (data if isinstance(data, dict) and data.get('schema') == SCHEMA else None), path
+
+    @classmethod
+    def chosen_electrode(cls, recording_path):
+        """The input the operator chose for this recording's measures ('el1', 'el2', an electrode label),
+        saved by ``save_choice``; None when not chosen."""
+        data, _ = cls._read_sidecar(recording_path)
+        return (data or {}).get('elettrodo_scelto') or None
+
+    @classmethod
+    def save_choice(cls, recording_path, electrode):
+        """Record in the sidecar which input is used for the measures (``None`` removes the choice)."""
+        data, path = cls._read_sidecar(recording_path)
+        data = data or {'schema': SCHEMA, 'ingressi': {}}
+        if electrode:
+            data['elettrodo_scelto'] = str(electrode)
+        else:
+            data.pop('elettrodo_scelto', None)
+        tmp = path.with_suffix(path.suffix + '.tmp')
+        tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding='utf-8')
+        tmp.replace(path)
+        return path
+
+    @classmethod
     def load_into(cls, state, recording_path=None):
         """Apply the saved corrections of ``state.channel`` (if any) to ``state``; returns True when found."""
         path = cls.sidecar_path(recording_path or state.source_file)

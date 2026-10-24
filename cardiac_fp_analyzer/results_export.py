@@ -149,7 +149,9 @@ def records_from_folder(folder, config=None, *, progress=None, files=None):
                                          file_info_update=u['update'])
             st = ReviewState.from_result(result, cfg)
             ReviewState.load_into(st, u['file'])
-            out.append(record_from_state(st, result, file=u['file'], electrode=u['electrode'], identity=u['update']))
+            # 'auto' resolves to the electrode analysed (the operator's saved choice when there is one)
+            actual = (result.get('file_info') or {}).get('analyzed_channel') or u['electrode']
+            out.append(record_from_state(st, result, file=u['file'], electrode=actual, identity=u['update']))
         except Exception as exc:     # noqa: BLE001 — one bad file must not stop the export
             logger.exception('results export: %s (%s): %s', u['file'], u['electrode'], exc)
     return out

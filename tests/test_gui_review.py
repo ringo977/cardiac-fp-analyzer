@@ -13,6 +13,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6.QtGui", exc_type=ImportError)
 try:
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 except ImportError as exc:   # pragma: no cover — platform-dependent
     pytest.skip(f"PySide6 widget libs unavailable: {exc}", allow_module_level=True)
@@ -125,7 +126,7 @@ def test_review_queue_lists_both_inputs(app, csv_path, tmp_path):
     entries = q.entries()
     assert len(entries) == 2 and all(e["livello"] in ("verde", "giallo", "rosso") for e in entries)
     assert {e["ingresso"] for e in entries} == {"el1", "el2"}
-    assert q._tree.topLevelItemCount() == 2 and q._tree.columnCount() == 8
+    assert q._tree.topLevelItemCount() == 2 and q._tree.columnCount() == 9
     # every row carries its export record (identity from the two-tissue name) and the measures of the review model
     recs = q.records()
     assert len(recs) == 2 and {(r["chip"], r["chamber"]) for r in recs} == {("A", 1), ("B", 1)}
@@ -147,6 +148,66 @@ def test_review_queue_lists_both_inputs(app, csv_path, tmp_path):
     assert q.export_results(out) == 2 and out.exists() and out.stat().st_size > 5000
     q.clear()
     assert q._tree.topLevelItemCount() == 0 and not q._btn_export.isEnabled()
+
+
+@pytest.fixture(scope="module")
+def single_tissue_csv(tmp_path_factory):
+    """One construct, two electrodes: input 2 is a weaker copy of input 1 (the software prefers el1)."""
+    x, raw, beats, reps = _trace(dur_s=40.0, amp=1.0, noise=0.02, pos_wave=0.3)
+    t = np.arange(len(x)) / FS
+    d = tmp_path_factory.mktemp("single")
+    p = d / "Exp2_chipA_ch2_baseline.csv"
+    rng = np.random.default_rng(1)
+    with open(p, "w") as f:
+        f.write("#Sample rate: 2000Hz\nTime (s),Channel 1 (V),Channel 2 (V)\n")
+        for ti, xi, ni in zip(t, raw * 1e-4, rng.normal(0, 0.3e-4, len(t))):
+            f.write(f"{ti:.6f},{xi:.9e},{0.4 * xi + ni:.9e}\n")
+    return p
+
+
+def test_review_queue_groups_the_electrodes_of_one_tissue(app, single_tissue_csv, tmp_path):
+    from cardiac_fp_analyzer.analyze import analyze_single_file
+    from cardiac_fp_analyzer.review import ReviewState
+    q = ReviewQueue(lambda: AnalysisConfig())
+    assert q.add_paths([single_tissue_csv]) == 1
+    q._pool.waitForDone(180000)
+    for _ in range(50):
+        app.processEvents()
+        if all(e.get("livello") for e in q._entries.values()):
+            break
+    e = q.entries()[0]
+    assert e["due_elettrodi"] and set(e["elettrodi"]) == {"el1", "el2"} and e["scelto"] == "el1"
+    assert e["elettrodi"]["el1"]["scelta_software"] and not e["elettrodi"]["el2"]["scelta_software"]
+    assert e["record"] is e["elettrodi"]["el1"]["record"] and e["record"]["electrode"] == "el1"
+    top = q._tree.topLevelItem(0)
+    assert top.childCount() == 2 and top.child(0).checkState(4) == Qt.Checked and top.child(1).checkState(4) == Qt.Unchecked
+    assert "(usato)" in top.text(3) and q.records()[0]["electrode"] == "el1"
+    # the operator picks EL2: the tissue row follows, the choice is saved and 'auto' honours it
+    assert q.choose_electrode(str(single_tissue_csv), "el2")
+    e = q.entries()[0]
+    assert e["scelto"] == "el2" and e["record"]["electrode"] == "el2" and q.records()[0]["electrode"] == "el2"
+    assert ReviewState.chosen_electrode(single_tissue_csv) == "el2"
+    r = analyze_single_file(str(single_tissue_csv), channel="auto", verbose=False)
+    assert r["file_info"]["analyzed_channel"] == "el2" and r["file_info"]["electrode_choice"] == "operatore"
+    # ticking in the tree does the same
+    top = q._tree.topLevelItem(0)
+    top.child(0).setCheckState(4, Qt.Checked)
+    for _ in range(5):
+        app.processEvents()
+    assert q.entries()[0]["scelto"] == "el1" and ReviewState.chosen_electrode(single_tissue_csv) == "el1"
+    assert q._tree.topLevelItem(0).child(0).checkState(4) == Qt.Checked
+    # a re-run of the queue starts from the saved choice while still telling the software's own
+    q.clear()
+    q.add_paths([single_tissue_csv])
+    q._pool.waitForDone(180000)
+    for _ in range(50):
+        app.processEvents()
+        if all(e.get("livello") for e in q._entries.values()):
+            break
+    e = q.entries()[0]
+    assert e["scelto"] == "el1" and e["elettrodi"]["el1"]["scelta_software"]
+    ReviewState.save_choice(single_tissue_csv, None)
+    assert ReviewState.chosen_electrode(single_tissue_csv) is None
 
 
 def test_open_from_queue(app, csv_path):
