@@ -128,6 +128,7 @@ from cardiac_fp_analyzer.study import (
     resolve_file_path,
     save_study,
 )
+from pyside_app.i18n import tr
 
 from . import theme
 from .workers import analysis_pool
@@ -324,7 +325,7 @@ class DoseResponsePoint:
 # * ``key`` matches :class:`FileResult` field + the
 #   :func:`_aggregate_group_metrics` dict key — the rename-safe
 #   single source of truth.
-# * ``label`` is the *Italian* human-readable name (FPDc / FPD / BPM / STV);
+# * ``label`` is the human-readable name (FPDc / FPD / BPM / STV), shown through ``tr()``;
 #   ``unit`` is appended on the y-axis.  BPM already encodes its unit
 #   in the label, so ``unit=''``.
 # * ``decimals`` match the tree-row formatting from step 4 — integers
@@ -342,7 +343,7 @@ _DOSE_RESPONSE_METRICS: tuple[tuple[str, str, str, int], ...] = (
     # the typical 50–1000 µV cardiomyocyte FP range.  Kept last in
     # the dropdown because it's a secondary / sanity-check metric,
     # not a primary pharmacological endpoint.
-    ('amp_uv', 'Ampiezza p2p', 'µV', 0),
+    ('amp_uv', 'Amplitude p2p', 'µV', 0),
 )
 
 
@@ -432,12 +433,9 @@ def _collect_batch_inputs(
             if not abspath.is_file():
                 # Plain Italian here (no ``tr()``): the string is
                 # assembled outside a ``QObject`` context so we can
-                # keep this helper Qt-free.  The wider i18n pass
-                # (bilingual UI, see project_i18n memory) will route
-                # this through ``QCoreApplication.translate`` later.
                 missing[key] = FileResult(
                     status='error',
-                    error=f"File non trovato: {abspath}",
+                    error=tr("File not found: {0}").format(abspath),
                 )
                 continue
             ch = fe.channel if fe.channel in ('auto', 'EL1', 'EL2') else 'auto'
@@ -529,7 +527,7 @@ class _BatchWorker(QRunnable):
         if result is None:
             fr = FileResult(
                 status='error',
-                error="Pipeline ritornata vuota",
+                error=tr("The pipeline returned nothing"),
                 fingerprint=self._fingerprint,
             )
             self._signals.done.emit(self._file_index, fr)
@@ -726,7 +724,7 @@ class _ExportWorker(QRunnable):
                 # file; surface it so the user knows the export isn't
                 # a complete snapshot of the study.
                 self._signals.failed.emit(
-                    f"{fe.csv_relpath}: pipeline ritornata vuota"
+                    f"{fe.csv_relpath}: " + tr("the pipeline returned nothing")
                 )
                 return
 
@@ -742,7 +740,7 @@ class _ExportWorker(QRunnable):
             return
 
         if not enriched_results:
-            self._signals.failed.emit("Nessun risultato fresco-ok da esportare.")
+            self._signals.failed.emit(tr("No fresh, successful result to export."))
             return
 
         try:
@@ -792,7 +790,7 @@ class _GroupDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle(title or self.tr("Gruppo"))
+        self.setWindowTitle(title or tr("Group"))
 
         form = QFormLayout()
         self._name = QLineEdit(name)
@@ -806,7 +804,7 @@ class _GroupDialog(QDialog):
         # Dose is optional — a checkbox gates the spinbox so a baseline
         # group can persist "dose_uM = null" rather than "0.0 µM", which
         # would be ambiguous with a true zero-concentration control.
-        self._has_dose = QCheckBox(self.tr("Dose (µM)"))
+        self._has_dose = QCheckBox(tr("Dose (µM)"))
         self._has_dose.setChecked(dose_uM is not None)
         self._dose = QDoubleSpinBox()
         self._dose.setDecimals(4)
@@ -822,12 +820,12 @@ class _GroupDialog(QDialog):
         dose_host = QWidget()
         dose_host.setLayout(dose_row)
 
-        form.addRow(self.tr("Nome"), self._name)
-        form.addRow(self.tr("Farmaco"), self._drug)
+        form.addRow(tr("Name"), self._name)
+        form.addRow(tr("Drug"), self._drug)
         form.addRow("", dose_host)
-        form.addRow(self.tr("Condizione"), self._condition)
-        form.addRow(self.tr("Data analisi"), self._date)
-        form.addRow(self.tr("Note"), self._notes)
+        form.addRow(tr("Condition"), self._condition)
+        form.addRow(tr("Analysis date"), self._date)
+        form.addRow(tr("Notes"), self._notes)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
@@ -931,7 +929,7 @@ class DoseResponseDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle(self.tr("Dose-risposta"))
+        self.setWindowTitle(tr("Dose-response"))
         self.resize(720, 480)
         self._study = study
         self._results_cache = results_cache
@@ -945,17 +943,17 @@ class DoseResponseDialog(QDialog):
         # ── Controls row ──────────────────────────────────────────────
         self._metric_combo = QComboBox()
         for key, label, unit, _dec in _DOSE_RESPONSE_METRICS:
-            display = f"{label} ({unit})" if unit else label
+            display = f"{tr(label)} ({unit})" if unit else tr(label)
             self._metric_combo.addItem(display, userData=key)
         self._metric_combo.setCurrentIndex(0)   # FPDc by default
         self._metric_combo.currentIndexChanged.connect(self._refresh_plot)
 
-        self._chk_logx = QCheckBox(self.tr("Asse X logaritmico"))
+        self._chk_logx = QCheckBox(tr("Logarithmic X axis"))
         self._chk_logx.setChecked(True)
         self._chk_logx.toggled.connect(self._refresh_plot)
 
         top = QHBoxLayout()
-        top.addWidget(QLabel(self.tr("Metrica:")))
+        top.addWidget(QLabel(tr("Metric:")))
         top.addWidget(self._metric_combo)
         top.addSpacing(12)
         top.addWidget(self._chk_logx)
@@ -995,9 +993,8 @@ class DoseResponseDialog(QDialog):
         # Shown when no group has fresh-ok results for the chosen
         # metric.  Kept as a plain QLabel layered behind the plot so
         # we don't have to manipulate pyqtgraph's text item machinery.
-        self._empty_label = QLabel(self.tr(
-            "Nessun gruppo con risultati fresh-ok per la metrica scelta.\n"
-            "Esegui “Analizza gruppo” su almeno un gruppo."
+        self._empty_label = QLabel(tr(
+            "No group has fresh results for the chosen metric.\nRun “Analyse group” on at least one group."
         ))
         self._empty_label.setAlignment(Qt.AlignCenter)
         self._empty_label.setStyleSheet("color: #888; padding: 24px;")
@@ -1075,9 +1072,9 @@ class DoseResponseDialog(QDialog):
         # concentration to a single column at ~10⁻²⁷ and labels the axis
         # ``Dose (e27µM)``.  Putting "(µM)" in the label text keeps
         # pyqtgraph from interpreting the string as an SI unit.
-        y_axis = label if not unit else f"{label} ({unit})"
+        y_axis = tr(label) if not unit else f"{tr(label)} ({unit})"
         fg = theme.label_color()
-        self._plot.setLabel('bottom', self.tr("Dose (µM)"), color=fg)
+        self._plot.setLabel('bottom', tr("Dose (µM)"), color=fg)
         self._plot.setLabel('left', y_axis, color=fg)
 
         # Log-x only makes sense when every dose point is > 0; disable
@@ -1105,7 +1102,7 @@ class DoseResponseDialog(QDialog):
             # Line connecting the points — read left-to-right as
             # increasing dose; the polyline makes the trend visible
             # at a glance.
-            legend_name = drug if drug else self.tr("(senza nome)")
+            legend_name = drug if drug else tr("(unnamed)")
             self._plot.plot(
                 xs, ys, pen=pen, symbol='o',
                 symbolBrush=brush, symbolPen=pg.mkPen('k', width=0.5),
@@ -1146,8 +1143,8 @@ class DoseResponseDialog(QDialog):
             )
             pen = pg.mkPen(colour, width=1.5, style=Qt.DashLine)
             name = (
-                self.tr("Baseline {0}").format(bl.drug)
-                if bl.drug else self.tr("Baseline")
+                tr("Baseline {0}").format(bl.drug)
+                if bl.drug else tr("Baseline")
             )
             line = pg.InfiniteLine(
                 pos=bl.mean, angle=0, pen=pen, label=None,
@@ -1210,27 +1207,27 @@ class StudyPanel(QWidget):
         #   4. Destructive study   : Delete sidecar (kept at the far end so
         #                            accidental click-streaks don't land on
         #                            it — see audit notes in module docstring).
-        self._toolbar = QToolBar(self.tr("Studio"))
+        self._toolbar = QToolBar(tr("Study"))
         self._toolbar.setIconSize(self._toolbar.iconSize())  # keep defaults
 
-        self._act_new = QAction(self.tr("Nuovo studio..."), self)
-        self._act_open = QAction(self.tr("Apri studio..."), self)
-        self._act_close = QAction(self.tr("Chiudi studio"), self)
-        self._act_add_group = QAction(self.tr("Aggiungi gruppo..."), self)
-        self._act_add_file = QAction(self.tr("Aggiungi CSV al gruppo..."), self)
+        self._act_new = QAction(tr("New study..."), self)
+        self._act_open = QAction(tr("Open study..."), self)
+        self._act_close = QAction(tr("Close study"), self)
+        self._act_add_group = QAction(tr("Add group..."), self)
+        self._act_add_file = QAction(tr("Add CSV files to group..."), self)
         self._act_add_folder = QAction(
-            self.tr("Aggiungi cartella al gruppo..."), self,
+            tr("Add folder to group..."), self,
         )
         self._act_group_settings = QAction(
-            self.tr("Impostazioni gruppo..."), self,
+            tr("Group settings..."), self,
         )
-        self._act_remove = QAction(self.tr("Rimuovi"), self)
-        self._act_analyze_study = QAction(self.tr("Analizza studio..."), self)
-        self._act_analyze_group = QAction(self.tr("Analizza gruppo..."), self)
-        self._act_dose_response = QAction(self.tr("Dose-risposta..."), self)
-        self._act_export_cdisc = QAction(self.tr("Esporta CDISC..."), self)
+        self._act_remove = QAction(tr("Remove"), self)
+        self._act_analyze_study = QAction(tr("Analyse study..."), self)
+        self._act_analyze_group = QAction(tr("Analyse group..."), self)
+        self._act_dose_response = QAction(tr("Dose-response..."), self)
+        self._act_export_cdisc = QAction(tr("Export CDISC..."), self)
         self._act_delete_study = QAction(
-            self.tr("Elimina sidecar studio..."), self,
+            tr("Delete study sidecar..."), self,
         )
 
         # Group 1 — lifecycle.
@@ -1276,7 +1273,7 @@ class StudyPanel(QWidget):
         # ── Tree ──────────────────────────────────────────────────────
         self._tree = QTreeWidget()
         self._tree.setHeaderLabels(
-            [self.tr("Elemento"), self.tr("Dettagli")]
+            [tr("Item"), tr("Details")]
         )
         self._tree.setColumnCount(2)
         self._tree.setRootIsDecorated(True)
@@ -1288,9 +1285,8 @@ class StudyPanel(QWidget):
         #   is opened or created.  Kept as a sibling widget rather than
         #   stuffed into the tree header because PyQtGraph-style "empty
         #   plot" placeholders are much clearer than a 1-row dummy tree.
-        self._hint = QLabel(self.tr(
-            "Nessuno studio aperto.  Usa “Nuovo studio…” o "
-            "“Apri studio…” per iniziare."
+        self._hint = QLabel(tr(
+            "No study open.  Use “New study…” or “Open study…” to begin."
         ))
         self._hint.setWordWrap(True)
         self._hint.setAlignment(Qt.AlignCenter)
@@ -1343,7 +1339,7 @@ class StudyPanel(QWidget):
         pick the same folder again explicitly via "Apri studio".
         """
         folder = QFileDialog.getExistingDirectory(
-            self, self.tr("Cartella del nuovo studio"),
+            self, tr("Folder of the new study"),
         )
         if not folder:
             return
@@ -1354,10 +1350,9 @@ class StudyPanel(QWidget):
         # sidecars would silently override the user's intent.
         if (folder_path / STUDY_FILENAME).is_file():
             QMessageBox.warning(
-                self, self.tr("Studio già presente"),
-                self.tr(
-                    "Questa cartella contiene già uno studio "
-                    "({0}).  Usa “Apri studio…” per caricarlo."
+                self, tr("Study already present"),
+                tr(
+                    "This folder already contains a study ({0}).  Use “Open study…” to load it."
                 ).format(STUDY_FILENAME),
             )
             return
@@ -1367,8 +1362,8 @@ class StudyPanel(QWidget):
         # different study.name (not exposed in the PoC UI).
         default_name = folder_path.name or "new-study"
         name, ok = QInputDialog.getText(
-            self, self.tr("Nome studio"),
-            self.tr("Nome:"),
+            self, tr("Study name"),
+            tr("Name:"),
             text=default_name,
         )
         if not ok:
@@ -1380,8 +1375,8 @@ class StudyPanel(QWidget):
             save_study(study)
         except OSError as e:
             QMessageBox.critical(
-                self, self.tr("Errore salvataggio"),
-                self.tr("Impossibile creare lo studio: {0}").format(e),
+                self, tr("Save error"),
+                tr("Cannot create the study: {0}").format(e),
             )
             return
 
@@ -1390,16 +1385,16 @@ class StudyPanel(QWidget):
     def _on_open_study(self) -> None:
         """Load an existing study sidecar from a user-chosen folder."""
         folder = QFileDialog.getExistingDirectory(
-            self, self.tr("Cartella dello studio"),
+            self, tr("Study folder"),
         )
         if not folder:
             return
         study = load_study(folder)
         if study is None:
             QMessageBox.warning(
-                self, self.tr("Studio non trovato"),
-                self.tr(
-                    "Nessun file {0} valido in questa cartella."
+                self, tr("Study not found"),
+                tr(
+                    "No valid {0} file in this folder."
                 ).format(STUDY_FILENAME),
             )
             return
@@ -1437,7 +1432,7 @@ class StudyPanel(QWidget):
         if self._study is None:
             return
         dlg = _GroupDialog(
-            title=self.tr("Nuovo gruppo"),
+            title=tr("New group"),
             parent=self,
         )
         if dlg.exec() != QDialog.Accepted:
@@ -1445,8 +1440,8 @@ class StudyPanel(QWidget):
         vals = dlg.values()
         if not vals["name"]:
             QMessageBox.warning(
-                self, self.tr("Nome mancante"),
-                self.tr("Il nome del gruppo non può essere vuoto."),
+                self, tr("Missing name"),
+                tr("The group name cannot be empty."),
             )
             return
 
@@ -1455,7 +1450,7 @@ class StudyPanel(QWidget):
             add_group(self._study, group)
         except ValueError as e:   # duplicate name / empty name
             QMessageBox.warning(
-                self, self.tr("Impossibile aggiungere"), str(e),
+                self, tr("Cannot add"), str(e),
             )
             return
 
@@ -1473,19 +1468,19 @@ class StudyPanel(QWidget):
         group = self._selected_group()
         if group is None:
             QMessageBox.information(
-                self, self.tr("Seleziona un gruppo"),
-                self.tr(
-                    "Seleziona prima un gruppo nell'albero, poi "
-                    "“Aggiungi CSV al gruppo”."
+                self, tr("Select a group"),
+                tr(
+                    "First select a group in the tree, then “Add CSV files to group”."
                 ),
             )
             return
 
         paths, _ = QFileDialog.getOpenFileNames(
             self,
-            self.tr("Aggiungi registrazioni al gruppo “{0}”").format(group.name),
+            tr("Add recordings to group “{0}”").format(group.name),
             self._study.folder,
-            self.tr("Recordings (*.csv *.h5 *.npz);;CSV files (*.csv);;MCS HDF5 (*.h5);;MCS compact (*.npz);;All files (*)"),
+            tr("Recordings (*.csv *.h5 *.npz);;CSV files (*.csv);;MCS HDF5 (*.h5);;MCS compact "
+               "(*.npz);;All files (*)"),
         )
         if not paths:
             return
@@ -1509,10 +1504,9 @@ class StudyPanel(QWidget):
 
         if outside:
             QMessageBox.warning(
-                self, self.tr("File fuori dallo studio"),
-                self.tr(
-                    "I seguenti file non si trovano dentro la cartella "
-                    "dello studio e non sono stati aggiunti:\n\n{0}"
+                self, tr("Files outside the study"),
+                tr(
+                    "The following files are not inside the study folder and were not added:\n\n{0}"
                 ).format("\n".join(outside)),
             )
 
@@ -1553,17 +1547,16 @@ class StudyPanel(QWidget):
         group = self._selected_group()
         if group is None:
             QMessageBox.information(
-                self, self.tr("Seleziona un gruppo"),
-                self.tr(
-                    "Seleziona prima un gruppo nell'albero, poi "
-                    "“Aggiungi cartella al gruppo”."
+                self, tr("Select a group"),
+                tr(
+                    "First select a group in the tree, then “Add folder to group”."
                 ),
             )
             return
 
         folder = QFileDialog.getExistingDirectory(
             self,
-            self.tr("Aggiungi cartella al gruppo “{0}”").format(group.name),
+            tr("Add folder to group “{0}”").format(group.name),
             self._study.folder,
         )
         if not folder:
@@ -1572,9 +1565,9 @@ class StudyPanel(QWidget):
         candidates = _enumerate_csvs_under(Path(folder))
         if not candidates:
             QMessageBox.information(
-                self, self.tr("Nessun CSV trovato"),
-                self.tr(
-                    "Nessun file .csv, .h5 o .npz (MCS) trovato (ricorsivamente) in “{0}”."
+                self, tr("No CSV found"),
+                tr(
+                    "No .csv, .h5 or .npz (MCS) file found (recursively) in “{0}”."
                 ).format(folder),
             )
             return
@@ -1622,12 +1615,11 @@ class StudyPanel(QWidget):
             # full list is in the audit log anyway.
             preview = "\n".join(outside[:20])
             if len(outside) > 20:
-                preview += self.tr("\n… ({0} altri)").format(len(outside) - 20)
+                preview += tr("\n… ({0} more)").format(len(outside) - 20)
             QMessageBox.warning(
-                self, self.tr("File fuori dallo studio"),
-                self.tr(
-                    "I seguenti CSV non si trovano dentro la cartella "
-                    "dello studio e non sono stati aggiunti:\n\n{0}"
+                self, tr("Files outside the study"),
+                tr(
+                    "The following CSV files are not inside the study folder and were not added:\n\n{0}"
                 ).format(preview),
             )
 
@@ -1636,18 +1628,16 @@ class StudyPanel(QWidget):
             # A concise summary line so the user knows what happened —
             # posted once, not per-file.
             QMessageBox.information(
-                self, self.tr("Aggiunta cartella completata"),
-                self.tr(
-                    "Aggiunti {0} CSV al gruppo “{1}”.\n"
-                    "Duplicati saltati: {2}.\n"
-                    "Fuori studio: {3}."
+                self, tr("Folder added"),
+                tr(
+                    "{0} CSV files added to group “{1}”.\nDuplicates skipped: {2}.\nOutside the study: {3}."
                 ).format(added, group.name, duplicates, len(outside)),
             )
         elif duplicates and not outside:
             QMessageBox.information(
-                self, self.tr("Nessun nuovo file"),
-                self.tr(
-                    "Tutti i {0} CSV trovati erano già nel gruppo “{1}”."
+                self, tr("No new files"),
+                tr(
+                    "All {0} CSV files found were already in group “{1}”."
                 ).format(duplicates, group.name),
             )
 
@@ -1659,7 +1649,7 @@ class StudyPanel(QWidget):
         if group is None:
             return
         dlg = _GroupDialog(
-            title=self.tr("Impostazioni gruppo"),
+            title=tr("Group settings"),
             name=group.name,
             drug=group.drug,
             dose_uM=group.dose_uM,
@@ -1701,10 +1691,9 @@ class StudyPanel(QWidget):
         if kind == "group":
             name = item.data(0, _GROUP_NAME_ROLE)
             if QMessageBox.question(
-                self, self.tr("Rimuovi gruppo"),
-                self.tr("Rimuovere il gruppo “{0}” e tutti i suoi file "
-                         "dall'elenco?  I file CSV su disco NON verranno "
-                         "eliminati.").format(name),
+                self, tr("Remove group"),
+                tr("Remove group “{0}” and all its files from the list?  The CSV files on disk "
+                   "will NOT be deleted.").format(name),
             ) != QMessageBox.Yes:
                 return
             remove_group(self._study, name)
@@ -1716,9 +1705,8 @@ class StudyPanel(QWidget):
             if group is None or not (0 <= file_idx < len(group.files)):
                 return
             if QMessageBox.question(
-                self, self.tr("Rimuovi file"),
-                self.tr("Rimuovere il file dall'elenco del gruppo?  "
-                         "Il CSV su disco NON verrà eliminato."),
+                self, tr("Remove file"),
+                tr("Remove the file from the group list?  The CSV on disk will NOT be deleted."),
             ) != QMessageBox.Yes:
                 return
             del group.files[file_idx]
@@ -1749,27 +1737,25 @@ class StudyPanel(QWidget):
         group = self._selected_group()
         if group is None:
             QMessageBox.information(
-                self, self.tr("Seleziona un gruppo"),
-                self.tr(
-                    "Seleziona prima un gruppo nell'albero, poi "
-                    "“Analizza gruppo”."
+                self, tr("Select a group"),
+                tr(
+                    "First select a group in the tree, then “Analyse group”."
                 ),
             )
             return
         if not group.files:
             QMessageBox.information(
-                self, self.tr("Gruppo vuoto"),
-                self.tr(
-                    "Il gruppo “{0}” non contiene file.  Aggiungi "
-                    "almeno un CSV prima di avviare l'analisi."
+                self, tr("Empty group"),
+                tr(
+                    "Group “{0}” contains no files.  Add at least one CSV before starting the analysis."
                 ).format(group.name),
             )
             return
 
         self._run_batch(
             groups=[group],
-            window_title=self.tr("Analisi gruppo"),
-            header_text=self.tr("Analisi gruppo “{0}”...").format(group.name),
+            window_title=tr("Group analysis"),
+            header_text=tr("Analysing group “{0}”...").format(group.name),
             include_group_in_row_label=False,
         )
 
@@ -1805,11 +1791,10 @@ class StudyPanel(QWidget):
         groups_with_files = [g for g in study.groups if g.files]
         if not groups_with_files:
             QMessageBox.information(
-                self, self.tr("Studio vuoto"),
-                self.tr(
-                    "Lo studio “{0}” non contiene file da analizzare.  "
-                    "Aggiungi almeno un CSV a un gruppo prima di "
-                    "avviare l'analisi dell'intero studio."
+                self, tr("Empty study"),
+                tr(
+                    "Study “{0}” contains no files to analyse.  Add at least one CSV to a group "
+                    "before analysing the whole study."
                 ).format(study.name),
             )
             return
@@ -1818,11 +1803,10 @@ class StudyPanel(QWidget):
         n_groups = len(groups_with_files)
 
         answer = QMessageBox.question(
-            self, self.tr("Analizza studio"),
-            self.tr(
-                "Analizzare {0} file in {1} gruppi dello studio “{2}”?\n\n"
-                "L'operazione analizzerà tutti i file di tutti i gruppi "
-                "e può richiedere alcuni minuti."
+            self, tr("Analyse study"),
+            tr(
+                "Analyse {0} files in {1} groups of study “{2}”?\n\nEvery file of every group will "
+                "be analysed; this may take a few minutes."
             ).format(n_files, n_groups, study.name),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes,
@@ -1832,8 +1816,8 @@ class StudyPanel(QWidget):
 
         self._run_batch(
             groups=groups_with_files,
-            window_title=self.tr("Analisi studio"),
-            header_text=self.tr("Analisi studio “{0}”...").format(study.name),
+            window_title=tr("Study analysis"),
+            header_text=tr("Analysing study “{0}”...").format(study.name),
             include_group_in_row_label=True,
         )
 
@@ -1930,7 +1914,7 @@ class StudyPanel(QWidget):
 
         # ── 3. Wire up progress dialog + result collector + event loop ──
         progress = QProgressDialog(
-            header_text, self.tr("Annulla"), 0, n, self,
+            header_text, tr("Cancel"), 0, n, self,
         )
         progress.setWindowTitle(window_title)
         progress.setWindowModality(Qt.WindowModal)
@@ -1978,7 +1962,7 @@ class StudyPanel(QWidget):
                 else fe.csv_relpath
             )
             progress.setLabelText(
-                self.tr("({0}/{1}) {2}").format(
+                tr("({0}/{1}) {2}").format(
                     state['completed'], n, row_label,
                 )
             )
@@ -2096,11 +2080,10 @@ class StudyPanel(QWidget):
         pairs = _collect_export_inputs(self._study, self._results)
         if not pairs:
             QMessageBox.information(
-                self, self.tr("Nessun risultato esportabile"),
-                self.tr(
-                    "Lo studio non ha ancora risultati freschi (✓) da "
-                    "esportare.  Esegui “Analizza gruppo” su almeno un "
-                    "gruppo prima di creare il pacchetto CDISC."
+                self, tr("No exportable results"),
+                tr(
+                    "The study has no fresh results (✓) to export yet.  Run “Analyse group” on at "
+                    "least one group before creating the CDISC package."
                 ),
             )
             return
@@ -2108,10 +2091,9 @@ class StudyPanel(QWidget):
         # ── 2. Ask the user for STUDYID + output folder ───────────────
         suggested = _suggest_study_id(self._study.name)
         study_id, ok = QInputDialog.getText(
-            self, self.tr("Export CDISC SEND"),
-            self.tr(
-                "STUDYID (identificativo CDISC — massimo 32 caratteri "
-                "A-Z / 0-9 / -):"
+            self, tr("CDISC SEND export"),
+            tr(
+                "STUDYID (CDISC identifier — at most 32 characters A-Z / 0-9 / -):"
             ),
             text=suggested,
         )
@@ -2121,7 +2103,7 @@ class StudyPanel(QWidget):
 
         out_folder = QFileDialog.getExistingDirectory(
             self,
-            self.tr("Cartella di destinazione per il pacchetto CDISC"),
+            tr("Destination folder for the CDISC package"),
         )
         if not out_folder:
             return
@@ -2129,11 +2111,11 @@ class StudyPanel(QWidget):
         # ── 3. Progress dialog + worker ───────────────────────────────
         n = len(pairs)
         progress = QProgressDialog(
-            self.tr("Preparazione export CDISC..."),
-            self.tr("Annulla"),
+            tr("Preparing CDISC export..."),
+            tr("Cancel"),
             0, n, self,
         )
-        progress.setWindowTitle(self.tr("Export CDISC SEND"))
+        progress.setWindowTitle(tr("CDISC SEND export"))
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -2158,7 +2140,7 @@ class StudyPanel(QWidget):
             progress.setValue(done)
             if name:
                 progress.setLabelText(
-                    self.tr("({0}/{1}) {2}").format(done, total, name)
+                    tr("({0}/{1}) {2}").format(done, total, name)
                 )
 
         def _on_finished(result: object) -> None:
@@ -2200,10 +2182,9 @@ class StudyPanel(QWidget):
                     "study=%r", self._study.name,
                 )
                 QMessageBox.information(
-                    self, self.tr("Export annullato"),
-                    self.tr(
-                        "Export CDISC annullato.  Nessun file "
-                        "garantito completo nella cartella scelta."
+                    self, tr("Export cancelled"),
+                    tr(
+                        "CDISC export cancelled.  No file in the chosen folder is guaranteed complete."
                     ),
                 )
                 return
@@ -2212,10 +2193,9 @@ class StudyPanel(QWidget):
                 self._study.name, err,
             )
             QMessageBox.critical(
-                self, self.tr("Export CDISC fallito"),
-                self.tr(
-                    "Impossibile completare l'export CDISC.\n\n"
-                    "Dettaglio:\n{0}"
+                self, tr("CDISC export failed"),
+                tr(
+                    "The CDISC export could not be completed.\n\nDetail:\n{0}"
                 ).format(err),
             )
             return
@@ -2230,8 +2210,8 @@ class StudyPanel(QWidget):
                 type(result).__name__,
             )
             QMessageBox.critical(
-                self, self.tr("Export CDISC fallito"),
-                self.tr("Risultato dell'export in formato inatteso."),
+                self, tr("CDISC export failed"),
+                tr("Export result in an unexpected format."),
             )
             return
 
@@ -2248,25 +2228,19 @@ class StudyPanel(QWidget):
         # and the user should know up-front.
         if backend == 'csv_fallback':
             QMessageBox.warning(
-                self, self.tr("Export CDISC completato (fallback CSV)"),
-                self.tr(
-                    "Il pacchetto è stato creato in {0} ma usa il "
-                    "fallback CSV: né pyreadstat né xport sono "
-                    "installati, quindi i file .xpt sono in realtà "
-                    "CSV e NON sono conformi alla sottomissione "
-                    "regolatoria.\n\n"
-                    "Per produrre .xpt veri installa pyreadstat "
-                    "(consigliato) o xport."
+                self, tr("CDISC export completed (CSV fallback)"),
+                tr(
+                    "The package was created in {0} but uses the CSV fallback: neither pyreadstat "
+                    "nor xport is installed, so the .xpt files are actually CSV and are NOT "
+                    "suitable for a regulatory submission.\n\nTo produce real .xpt files install "
+                    "pyreadstat (recommended) or xport."
                 ).format(out_folder),
             )
         else:
             QMessageBox.information(
-                self, self.tr("Export CDISC completato"),
-                self.tr(
-                    "Pacchetto CDISC SEND generato con backend "
-                    "“{0}”.\n\n"
-                    "Cartella: {1}\n"
-                    "File scritti: {2}"
+                self, tr("CDISC export completed"),
+                tr(
+                    "CDISC SEND package generated with backend “{0}”.\n\nFolder: {1}\nFiles written: {2}"
                 ).format(backend, out_folder, n_files),
             )
 
@@ -2341,19 +2315,14 @@ class StudyPanel(QWidget):
         # an informed click, not a default-to-destructive.
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle(self.tr("Elimina sidecar studio"))
-        box.setText(self.tr(
-            "Eliminare il file di studio “{0}”?"
+        box.setWindowTitle(tr("Delete study sidecar"))
+        box.setText(tr(
+            "Delete the study file “{0}”?"
         ).format(STUDY_FILENAME))
-        box.setInformativeText(self.tr(
-            "Verrà eliminato SOLO il file:\n\n"
-            "    {0}\n\n"
-            "NON verranno toccati:\n"
-            "  • la cartella dello studio\n"
-            "  • i file CSV di segnale\n"
-            "  • i file di correzione per-segnale "
-            "(*.overrides.json)\n\n"
-            "Operazione non annullabile."
+        box.setInformativeText(tr(
+            "ONLY this file will be deleted:\n\n    {0}\n\nThese will NOT be touched:\n  • the "
+            "study folder\n  • the signal CSV files\n  • the per-signal correction files "
+            "(*.overrides.json)\n\nThis cannot be undone."
         ).format(sidecar))
         box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         box.setDefaultButton(QMessageBox.No)   # ↵ = Annulla, non elimina.
@@ -2376,11 +2345,9 @@ class StudyPanel(QWidget):
                 "StudyPanel: failed to delete sidecar %s", sidecar,
             )
             QMessageBox.critical(
-                self, self.tr("Eliminazione fallita"),
-                self.tr(
-                    "Impossibile eliminare il file di studio:\n\n"
-                    "    {0}\n\n"
-                    "Errore: {1}"
+                self, tr("Deletion failed"),
+                tr(
+                    "Cannot delete the study file:\n\n    {0}\n\nError: {1}"
                 ).format(sidecar, e),
             )
             return
@@ -2410,9 +2377,9 @@ class StudyPanel(QWidget):
         abspath = resolve_file_path(self._study, fe)
         if not abspath.is_file():
             QMessageBox.warning(
-                self, self.tr("File mancante"),
-                self.tr(
-                    "Il file non esiste più sul disco:\n{0}"
+                self, tr("Missing file"),
+                tr(
+                    "The file no longer exists on disk:\n{0}"
                 ).format(abspath),
             )
             return
@@ -2735,11 +2702,10 @@ class StudyPanel(QWidget):
             save_study(self._study)
         except OSError as e:
             QMessageBox.warning(
-                self, self.tr("Salvataggio fallito"),
-                self.tr(
-                    "Impossibile salvare lo studio su disco ({0}).  "
-                    "Le modifiche restano in memoria ma potrebbero "
-                    "andare perse alla chiusura."
+                self, tr("Save failed"),
+                tr(
+                    "The study could not be saved to disk ({0}).  The changes stay in memory but "
+                    "may be lost when the application closes."
                 ).format(e),
             )
         self._prune_cache()
@@ -2807,7 +2773,7 @@ class StudyPanel(QWidget):
 
         root = QTreeWidgetItem(self._tree)
         root.setText(0, self._study.name)
-        root.setText(1, self.tr("{0} gruppi").format(len(self._study.groups)))
+        root.setText(1, tr("{0} groups").format(len(self._study.groups)))
         root.setData(0, _KIND_ROLE, "study")
         root.setExpanded(True)
 
@@ -2998,7 +2964,7 @@ def _format_group_details(group: Group) -> str:
 
 def _n_files_label(n: int) -> str:
     """Italian-aware pluralisation for "N file"."""
-    return "1 file" if n == 1 else f"{n} file"
+    return tr("1 file") if n == 1 else tr("{0} files").format(n)
 
 
 def _enumerate_csvs_under(folder: Path) -> list[Path]:
@@ -3259,17 +3225,17 @@ def _tooltip_for(res: FileResult | None, *, stale: bool = False) -> str:
     if res is None:
         return ""
     if res.status == 'error':
-        body = f"Errore: {res.error}" if res.error else "Errore"
+        body = tr("Error: {0}").format(res.error) if res.error else tr("Error")
     else:
         # status == 'ok'
         parts: list[str] = []
         if res.channel_analyzed:
-            parts.append(f"Canale: {res.channel_analyzed.upper()}")
+            parts.append(tr("Channel: {0}").format(res.channel_analyzed.upper()))
         if res.n_total:
             if res.n_included != res.n_total:
-                parts.append(f"{res.n_included}/{res.n_total} battiti inclusi")
+                parts.append(tr("{0}/{1} beats included").format(res.n_included, res.n_total))
             else:
-                parts.append(f"{res.n_total} battiti")
+                parts.append(tr("{0} beats").format(res.n_total))
         # Step 4 — surface the scalar metrics alongside the beat
         # counts so the user can compare FPDc/BPM across files in
         # the same group without clicking each one.
@@ -3278,7 +3244,7 @@ def _tooltip_for(res: FileResult | None, *, stale: bool = False) -> str:
             parts.append(metrics)
         body = "  ·  ".join(parts)
     if stale:
-        prefix = "Risultato non aggiornato (config cambiata)"
+        prefix = tr("Result out of date (settings changed)")
         return f"{prefix}  ·  {body}" if body else prefix
     return body
 

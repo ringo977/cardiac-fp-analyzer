@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
 )
 
 from cardiac_fp_analyzer.config import AnalysisConfig
+from pyside_app.i18n import tr
 from pyside_app.settings_dialog_helpers import (
     SPEC,
     FieldSpec,
@@ -82,7 +83,7 @@ def _make_widget(fs: FieldSpec, parent: QWidget | None = None) -> QWidget:
         if fs.suffix:
             w.setSuffix(fs.suffix)
         if fs.tooltip:
-            w.setToolTip(fs.tooltip)
+            w.setToolTip(tr(fs.tooltip))
         return w
     if fs.kind == "int":
         w = QSpinBox(parent)
@@ -91,19 +92,19 @@ def _make_widget(fs: FieldSpec, parent: QWidget | None = None) -> QWidget:
         if fs.suffix:
             w.setSuffix(fs.suffix)
         if fs.tooltip:
-            w.setToolTip(fs.tooltip)
+            w.setToolTip(tr(fs.tooltip))
         return w
     if fs.kind == "bool":
         w = QCheckBox(parent)
         if fs.tooltip:
-            w.setToolTip(fs.tooltip)
+            w.setToolTip(tr(fs.tooltip))
         return w
     if fs.kind == "choice":
         w = QComboBox(parent)
         for c in fs.choices:
             w.addItem(c, userData=c)
         if fs.tooltip:
-            w.setToolTip(fs.tooltip)
+            w.setToolTip(tr(fs.tooltip))
         return w
     raise ValueError(f"Unsupported FieldSpec.kind={fs.kind!r}")
 
@@ -178,7 +179,7 @@ class SettingsDialog(QDialog):
         self, config: AnalysisConfig, parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle(self.tr("Impostazioni analisi"))
+        self.setWindowTitle(tr("Analysis settings"))
         self._config = config
         # Widget registry keyed by the same ``{section}.{attr}`` string
         # that ``values_from_config`` uses — lets us copy widget values
@@ -189,18 +190,17 @@ class SettingsDialog(QDialog):
 
         # ── Preset row ───────────────────────────────────────────
         preset_row = QHBoxLayout()
-        preset_row.addWidget(QLabel(self.tr("Preset:")))
+        preset_row.addWidget(QLabel(tr("Preset:")))
         self._combo_preset = QComboBox(self)
         for name in ("default", "conservative", "sensitive",
                      "peak_method", "no_filters"):
             self._combo_preset.addItem(name)
-        self._combo_preset.setToolTip(self.tr(
-            "Carica un profilo di parametri nei campi sottostanti. "
-            "Le modifiche non vengono applicate finché non si clicca "
-            "Applica o OK."
+        self._combo_preset.setToolTip(tr(
+            "Load a parameter profile into the fields below. Changes are not applied until you "
+            "click Apply or OK."
         ))
         preset_row.addWidget(self._combo_preset)
-        btn_load_preset = QPushButton(self.tr("Carica preset"), self)
+        btn_load_preset = QPushButton(tr("Load preset"), self)
         btn_load_preset.clicked.connect(self._on_load_preset)
         preset_row.addWidget(btn_load_preset)
         preset_row.addStretch(1)
@@ -209,7 +209,7 @@ class SettingsDialog(QDialog):
         # ── Tabs ─────────────────────────────────────────────────
         self._tabs = QTabWidget(self)
         for page in page_order():
-            self._tabs.addTab(self._build_page(page), page)
+            self._tabs.addTab(self._build_page(page), tr(page))
         root.addWidget(self._tabs)
 
         # ── Buttons ──────────────────────────────────────────────
@@ -220,11 +220,11 @@ class SettingsDialog(QDialog):
             | QDialogButtonBox.RestoreDefaults,
             parent=self,
         )
-        bb.button(QDialogButtonBox.Ok).setText(self.tr("OK"))
-        bb.button(QDialogButtonBox.Apply).setText(self.tr("Applica"))
-        bb.button(QDialogButtonBox.Cancel).setText(self.tr("Annulla"))
+        bb.button(QDialogButtonBox.Ok).setText(tr("OK"))
+        bb.button(QDialogButtonBox.Apply).setText(tr("Apply"))
+        bb.button(QDialogButtonBox.Cancel).setText(tr("Cancel"))
         bb.button(QDialogButtonBox.RestoreDefaults).setText(
-            self.tr("Ripristina default")
+            tr("Restore defaults")
         )
         bb.accepted.connect(self._on_ok)
         bb.rejected.connect(self.reject)
@@ -247,7 +247,7 @@ class SettingsDialog(QDialog):
             w = _make_widget(fs, container)
             key = f"{fs.section}.{fs.attr}"
             self._widgets[key] = w
-            form.addRow(self.tr(fs.label), w)
+            form.addRow(tr(fs.label), w)
         return container
 
     # ─── Value plumbing ──────────────────────────────────────────────

@@ -8,12 +8,13 @@ tissue, the chamber status of multi-electrode chips) into:
 * ``livello``: ``'verde'`` (analysable, nothing to check), ``'giallo'``
   (analysable, something to check by eye), ``'rosso'`` (not analysable, or a
   problem that makes the measures unreliable);
-* ``titolo``: a short Italian label;
+* ``titolo``: a short label ('Problems' / 'To verify' / 'Good');
 * ``problemi``: a list of ``{'codice', 'gravita', 'testo', 'valore'}`` sorted
   by severity (``alto`` > ``medio`` > ``basso``);
 * ``riassunto``: one line for tables and tooltips.
 
-The review queue of the GUI sorts recordings by this judgement.
+The texts are in the language of ``cardiac_fp_analyzer.i18n`` (English source, Italian catalog); the
+codes and levels are machine keys.  The review queue of the GUI sorts recordings by this judgement.
 """
 from __future__ import annotations
 
@@ -21,31 +22,37 @@ import re
 
 import numpy as np
 
+from .i18n import tr
+
 __all__ = ['summarise_quality', 'LEVEL_COLOURS']
 
 LEVEL_COLOURS = {'verde': '#1a7f37', 'giallo': '#d19a00', 'rosso': '#c0392b'}
 _SEV = {'alto': 3, 'medio': 2, 'basso': 1}
 
 
-def _reason_it(reason):
-    """The pipeline's English verdict reasons in Italian, numbers kept."""
+def _reason_text(reason):
+    """The pipeline's verdict reasons as operator texts (translated), numbers kept."""
     r = reason or ''
     m = re.search(r'median beat amplitude ([\d.]+)× the noise floor', r)
     if m:
-        return f'segnale debole: battiti {m.group(1)}× il rumore di fondo'
+        return tr('weak signal: beats {0}× the noise floor').format(m.group(1))
     m = re.search(r'only (\d+) depolarisations with RR CV (\d+) %', r)
     if m:
-        return f'solo {m.group(1)} battiti con intervalli irregolari (CV {m.group(2)} %)'
+        return tr('only {0} beats with irregular intervals (CV {1} %)').format(m.group(1), m.group(2))
     m = re.search(r'only (\d+) depolarisation', r)
     if m:
-        return f'solo {m.group(1)} depolarizzazioni trovate'
-    if 'irregular' in r:
-        return 'ritmo irregolare nella camera'
-    if 'conduction' in r:
-        return 'conduzione persa tra gli elettrodi della camera'
-    if 'silent' in r:
-        return 'tessuto fermo'
-    return r
+        return tr('only {0} depolarisations found').format(m.group(1))
+    head, _, detail = r.partition(': ')
+    txt = None
+    if 'irregular' in head:
+        txt = tr('irregular rhythm in the chamber')
+    elif 'conduction' in head:
+        txt = tr('conduction lost between the electrodes of the chamber')
+    elif 'silent' in head:
+        txt = tr('silent tissue')
+    if txt is None:
+        return r
+    return txt + (f' ({detail})' if detail else '')
 
 
 def summarise_quality(result, *, burst_warn=0.10, cv_warn=25.0, min_beats=10, drift_warn=5.0):
@@ -66,21 +73,21 @@ def summarise_quality(result, *, burst_warn=0.10, cv_warn=25.0, min_beats=10, dr
 
     # input without tissue (two-tissue WaveForms file, 'na' in the name / samples sheet)
     if fi.get('two_tissue_file') and fi.get('chamber') in (None, '', 'na'):
-        add('ingresso_senza_tessuto', 'alto', 'ingresso senza tessuto (na): da non analizzare')
+        add('ingresso_senza_tessuto', 'alto', tr('input without tissue (na): not to be analysed'))
 
     # analysability
     if s.get('not_analysable'):
-        add('non_analizzabile', 'alto', 'non analizzabile: ' + _reason_it(s.get('not_analysable_reason')))
+        add('non_analizzabile', 'alto', tr('not analysable: {0}').format(_reason_text(s.get('not_analysable_reason'))))
     # chamber status (multi-electrode chips)
     ch = result.get('chamber') or {}
     if ch.get('rhythm_status') in ('irregular', 'conduction_lost', 'silent'):
-        add('camera', 'alto', 'camera: ' + _reason_it(ch['rhythm_status']), ch['rhythm_status'])
+        add('camera', 'alto', tr('chamber: {0}').format(_reason_text(ch['rhythm_status'])), ch['rhythm_status'])
 
     # beats
     if 0 < n < min_beats:
-        add('pochi_battiti', 'medio', f'pochi battiti ({n})', n)
+        add('pochi_battiti', 'medio', tr('few beats ({0})').format(n), n)
     elif n == 0:
-        add('nessun_battito', 'alto', 'nessun battito trovato')
+        add('nessun_battito', 'alto', tr('no beats found'))
     if fs and n >= 3:
         rr = np.diff(bi) / fs
         cv = float(np.std(rr) / np.mean(rr) * 100)
@@ -88,14 +95,15 @@ def summarise_quality(result, *, burst_warn=0.10, cv_warn=25.0, min_beats=10, dr
         gaps = int((rr > 1.5 * med).sum())
         if gaps:
             add('battiti_mancanti', 'medio' if gaps >= 3 else 'basso',
-                f'{gaps} intervall{"o" if gaps == 1 else "i"} con battito mancante', gaps)
+                (tr('1 interval with a missing beat') if gaps == 1 else tr('{0} intervals with a missing beat').format(gaps)),
+                gaps)
         if cv > cv_warn and not s.get('not_analysable'):
             from .quality_control import common_period
             P, _, info = common_period(rr)
             if P is not None and info.get('cv_folded', 1e9) <= cv_warn:
-                add('ritmo_con_buchi', 'basso', f'ritmo regolare ({P * 1000:.0f} ms) con {info["missing"]} battiti mancanti', P)
+                add('ritmo_con_buchi', 'basso', tr('regular rhythm ({0:.0f} ms) with {1} missing beats').format(P * 1000, info["missing"]), P)
             else:
-                add('ritmo_irregolare', 'medio', f'ritmo irregolare (CV {cv:.0f} %)', cv)
+                add('ritmo_irregolare', 'medio', tr('irregular rhythm (CV {0:.0f} %)').format(cv), cv)
     # noise bursts
     vet = det.get('post_detection_vetoes') or {}
     windows = (vet.get('burst_veto') or {}).get('windows')
@@ -107,12 +115,12 @@ def summarise_quality(result, *, burst_warn=0.10, cv_warn=25.0, min_beats=10, dr
         frac = sum(e - a for a, e in windows) / max(1, len(result.get('filtered_signal', [])))
         if frac >= burst_warn:
             add('burst', 'medio' if frac >= 0.3 else 'basso',
-                f'burst di rumore (incubatore) nel {frac * 100:.0f} % del tempo', frac)
+                tr('noise bursts (incubator) in {0:.0f} % of the time').format(frac * 100), frac)
     # detections removed by the vetoes
     removed = sum(int((vet.get(k) or {}).get('n_removed') or 0) for k in ('weak_population_split', 'burst_veto', 'min_rr'))
     if removed:
         add('rilevamenti_tolti', 'medio' if removed >= max(5, 0.3 * (n + removed)) else 'basso',
-            f'{removed} rilevamenti deboli tolti (ripristinabili)', removed)
+            tr('{0} weak detections removed (restorable)').format(removed), removed)
     # weak signal (even when analysable)
     snr = s.get('beat_snr_median')
     if snr is None and fs and n and 'filtered_signal' in result:
@@ -123,52 +131,52 @@ def summarise_quality(result, *, burst_warn=0.10, cv_warn=25.0, min_beats=10, dr
         if nf > 0:
             snr = float(np.median([np.ptp(x[max(0, i - half):i + half]) for i in bi]) / nf)
     if snr is not None and not s.get('not_analysable') and snr < 3.0:
-        add('segnale_debole', 'medio', f'segnale debole: battiti {snr:.1f}× il rumore di fondo', snr)
+        add('segnale_debole', 'medio', tr('weak signal: beats {0}× the noise floor').format(f'{snr:.1f}'), snr)
     # FPD
     if not s.get('not_analysable') and n:
         fpd = s.get('fpd_ms_median')
         valid = s.get('fpd_valid_ratio')
         if fpd is None or not np.isfinite(fpd):
-            add('fpd_non_misurabile', 'alto', 'onda di ripolarizzazione non trovata: FPD non misurabile')
+            add('fpd_non_misurabile', 'alto', tr('repolarisation wave not found: FPD not measurable'))
         else:
             conf = s.get('fpd_confidence')
             if s.get('fpd_reliable') is False or (valid is not None and valid < 0.5):
-                add('fpd_incerto', 'medio', f'FPD misurato solo sul {(valid or 0) * 100:.0f} % dei battiti', valid)
+                add('fpd_incerto', 'medio', tr('FPD measured on only {0:.0f} % of the beats').format((valid or 0) * 100), valid)
             elif conf is not None and np.isfinite(conf) and conf < 0.66:
-                add('fpd_incerto', 'basso', f'FPD con confidenza bassa ({conf:.2f})', conf)
+                add('fpd_incerto', 'basso', tr('FPD with low confidence ({0:.2f})').format(conf), conf)
     # QC grade
     if grade in ('C', 'D') and not s.get('not_analysable'):
-        add('qualita', 'basso' if grade == 'C' else 'medio', f'qualità del segnale {grade}', grade)
+        add('qualita', 'basso' if grade == 'C' else 'medio', tr('signal quality {0}').format(grade), grade)
     # arrhythmia class
     ar = result.get('arrhythmia_report')
     cls = getattr(ar, 'classification', None)
     if cls and not s.get('not_analysable') and not str(cls).startswith(('Normal', 'Not analysable', 'Bradycardia', 'Borderline')):
-        add('aritmia', 'medio' if 'Irregular' in str(cls) else 'basso', f'classificazione del ritmo: {cls}', cls)
+        add('aritmia', 'medio' if 'Irregular' in str(cls) else 'basso', tr('rhythm classification: {0}').format(cls), cls)
     # very slow rhythm: a beat missed every other cycle leaves no visible gap
     if fs and n >= 3 and not s.get('not_analysable'):
         bp_s = float(np.median(np.diff(bi)) / fs)
         if bp_s > 3.0:
-            add('ritmo_lento', 'basso', f'ritmo molto lento ({bp_s:.1f} s): controllare che non manchino battiti', bp_s)
+            add('ritmo_lento', 'basso', tr('very slow rhythm ({0:.1f} s): check that no beats are missing').format(bp_s), bp_s)
 
     # drift of the rate within the recording (temperature, run-down): ≥ 10 % → to verify, 5–10 % → note
     d = s.get('drift') or {}
     if d.get('affidabile') and d.get('significativa') and d.get('variazione_pct') is not None and not s.get('not_analysable'):
         pct = float(d['variazione_pct'])
         if abs(pct) >= drift_warn:
-            txt = (f"frequenza in deriva: {pct:+.0f} % in {d['durata_s']:.0f} s ({d['pendenza_bpm_min']:+.1f} bpm/min)"
+            txt = (tr('rate drifting: {0:+.0f} % in {1:.0f} s ({2:+.1f} bpm/min)').format(pct, d['durata_s'], d['pendenza_bpm_min'])
                    + ('; ' + d['nota'] if d.get('nota') else ''))
             add('deriva', 'medio' if abs(pct) >= 2 * drift_warn else 'basso', txt, pct)
         f = d.get('fpd') or {}
         if f.get('affidabile') and f.get('significativa') and f.get('variazione_pct') is not None and abs(f['variazione_pct']) >= drift_warn:
-            add('deriva_fpd', 'basso', f"FPD in deriva: {f['variazione_pct']:+.0f} % ({f['pendenza_ms_min']:+.0f} ms/min)",
+            add('deriva_fpd', 'basso', tr('FPD drifting: {0:+.0f} % ({1:+.0f} ms/min)').format(f['variazione_pct'], f['pendenza_ms_min']),
                 float(f['variazione_pct']))
 
     problems.sort(key=lambda p: -_SEV[p['gravita']])
     worst = max((_SEV[p['gravita']] for p in problems), default=0)
     level = 'rosso' if worst == 3 else 'giallo' if worst == 2 else 'verde'
-    title = {'rosso': 'Problemi', 'giallo': 'Da verificare', 'verde': 'Buono'}[level]
+    title = {'rosso': tr('Problems'), 'giallo': tr('To verify'), 'verde': tr('Good')}[level]
     if level == 'verde' and any(p['gravita'] == 'basso' for p in problems):
-        title = 'Buono (note)'
+        title = tr('Good (notes)')
     summary = title + (': ' + '; '.join(p['testo'] for p in problems[:3]) if problems else '')
     return {'livello': level, 'colore': LEVEL_COLOURS[level], 'titolo': title, 'problemi': problems,
             'riassunto': summary, 'grado_qc': grade, 'n_battiti': n}

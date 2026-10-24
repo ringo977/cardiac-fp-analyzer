@@ -33,6 +33,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QMenu
 
+from pyside_app.i18n import tr
+
 from . import theme
 from .review_helpers import operators_view
 
@@ -47,10 +49,10 @@ PROBLEM_COLOURS = {
     'battiti_vicini': (52, 152, 219),           # blue — detections too close (one in excess)
     'ripolarizzazione_assente': (155, 89, 182), # violet — beat without repolarisation
 }
-PROBLEM_LABELS = {
-    'battito_mancante': 'battito mancante?',
-    'battiti_vicini': 'battiti troppo vicini',
-    'ripolarizzazione_assente': 'ripolarizzazione assente',
+PROBLEM_LABELS = {   # English source texts: show them through ``tr()``
+    'battito_mancante': 'missing beat?',
+    'battiti_vicini': 'beats too close',
+    'ripolarizzazione_assente': 'repolarisation missing',
 }
 
 
@@ -162,10 +164,10 @@ class SignalViewer(pg.PlotWidget):
         module exists.
         """
         fg = theme.label_color()
-        self.setLabel("bottom", self.tr("Tempo (s)"), color=fg)
+        self.setLabel("bottom", tr("Time (s)"), color=fg)
         # The traces are in volts (amplifier gain already removed); pyqtgraph picks the SI prefix
         # (µV, mV) for the ticks and the title, so no "×1e-06" factor appears.
-        self.setLabel("left", self.tr("Ampiezza"), units="V", color=fg)
+        self.setLabel("left", tr("Amplitude"), units="V", color=fg)
 
     def _on_theme_changed(self, _mode: str) -> None:
         """Repaint on live theme toggle.
@@ -574,29 +576,29 @@ class SignalViewer(pg.PlotWidget):
 
         menu = QMenu(self)
         if near_depol_i is not None:
-            act = menu.addAction(self.tr("Rimuovi depolarizzazione"))
+            act = menu.addAction(tr("Remove depolarisation"))
             act.triggered.connect(
                 lambda _checked=False, i=near_depol_i: self._remove_depol_i(i)
             )
         else:
-            act = menu.addAction(self.tr("Aggiungi depolarizzazione (qui)"))
+            act = menu.addAction(tr("Add depolarisation (here)"))
             act.triggered.connect(
                 lambda _checked=False, x=x_click_s: self._add_depol_at(x)
             )
 
         if near_repol_i is not None:
-            act = menu.addAction(self.tr("Rimuovi ripolarizzazione"))
+            act = menu.addAction(tr("Remove repolarisation"))
             act.triggered.connect(
                 lambda _checked=False, i=near_repol_i: self._remove_repol_i(i)
             )
         else:
-            act = menu.addAction(self.tr("Aggiungi ripolarizzazione (qui)"))
+            act = menu.addAction(tr("Add repolarisation (here)"))
             act.triggered.connect(
                 lambda _checked=False, x=x_click_s: self._add_repol_at(x)
             )
 
         menu.addSeparator()
-        menu.addAction(self.tr("Annulla"))   # no handler — dismisses the menu
+        menu.addAction(tr("Cancel"))   # no handler — dismisses the menu
 
         menu.exec(QCursor.pos())
 
@@ -604,7 +606,7 @@ class SignalViewer(pg.PlotWidget):
     def _show_review_menu(self, x_click_s: float) -> None:
         st = self._state
         if getattr(st, 'locked', False):
-            self.review_report.emit(self.tr("Registrazione chiusa: Sblocca nel pannello Revisione per modificarla"))
+            self.review_report.emit(tr("Recording closed: Unlock in the Review panel to change it"))
             return
         i_click = int(np.argmin(np.abs(self._time - x_click_s)))
         k_dep = st.beat_near(i_click, tol_s=_SNAP_WINDOW_S)
@@ -616,28 +618,29 @@ class SignalViewer(pg.PlotWidget):
 
         menu = QMenu(self)
         if k_dep is not None:
-            act = menu.addAction(self.tr("Rimuovi depolarizzazione #{0}").format(k_dep + 1))
+            act = menu.addAction(tr("Remove depolarisation #{0}").format(k_dep + 1))
             act.triggered.connect(lambda _c=False, k=k_dep: self._review_do(lambda: st.remove_beat(k)))
-            act = menu.addAction(self.tr("Sposta depolarizzazione #{0} qui").format(k_dep + 1))
+            act = menu.addAction(tr("Move depolarisation #{0} here").format(k_dep + 1))
             act.triggered.connect(lambda _c=False, k=k_dep, i=i_click: self._review_do(lambda: st.move_beat(k, i)))
         else:
-            act = menu.addAction(self.tr("Aggiungi depolarizzazione qui"))
+            act = menu.addAction(tr("Add depolarisation here"))
             act.triggered.connect(lambda _c=False, i=i_click: self._review_do(lambda: st.add_beat(i)))
         if v is not None:
-            act = menu.addAction(self.tr("Ripristina il rilevamento tolto dai veti"))
+            act = menu.addAction(tr("Restore the detection removed by the vetoes"))
             act.triggered.connect(lambda _c=False, vv=v: self._review_do(lambda: st.restore_vetoed(vv)))
         menu.addSeparator()
         if k_rep is not None:
-            act = menu.addAction(self.tr("Rimuovi ripolarizzazione del battito #{0}").format(k_rep + 1))
+            act = menu.addAction(tr("Remove repolarisation of beat #{0}").format(k_rep + 1))
             act.triggered.connect(lambda _c=False, k=k_rep: self._review_do(lambda: st.clear_repol(k)))
         if prev >= 0 and k_dep is None:
-            act = menu.addAction(self.tr("Ripolarizzazione del battito #{0} qui").format(prev + 1))
+            act = menu.addAction(tr("Repolarisation of beat #{0} here").format(prev + 1))
             act.triggered.connect(lambda _c=False, k=prev, i=i_click: self._review_do(lambda: st.set_repol(k, i)))
-            act = menu.addAction(self.tr("Ripolarizzazione del battito #{0} qui e propaga il criterio a tutti").format(prev + 1))
+            act = menu.addAction(tr("Repolarisation of beat #{0} here and propagate the criterion "
+                                    "to all").format(prev + 1))
             act.triggered.connect(lambda _c=False, k=prev, i=i_click: self._review_do(
                 lambda: st.set_repol(k, i, propagate=True), report=True))
         menu.addSeparator()
-        menu.addAction(self.tr("Annulla"))   # dismisses the menu
+        menu.addAction(tr("Cancel"))   # dismisses the menu
         menu.exec(QCursor.pos())
 
     def _review_do(self, op, report: bool = False) -> None:
@@ -650,11 +653,11 @@ class SignalViewer(pg.PlotWidget):
         self.refresh_from_state()
         if report and isinstance(out, dict):
             if out.get("criterio") is None:
-                self.review_report.emit(out.get("motivo", self.tr("criterio non deducibile")))
+                self.review_report.emit(out.get("motivo", tr("criterion cannot be inferred")))
             else:
                 c = out["criterio"]
-                self.review_report.emit(self.tr(
-                    "Criterio propagato: onda {0} a {1:.0f} ms — spostati {2}, invariati {3}, ambigui {4}"
+                self.review_report.emit(tr(
+                    "Criterion propagated: {0} wave at {1:.0f} ms — moved {2}, unchanged {3}, ambiguous {4}"
                 ).format("positiva" if c["polarita"] > 0 else "negativa", c["latenza_s"] * 1000,
                          out["spostati"], out["invariati"], out["ambigui"]))
 

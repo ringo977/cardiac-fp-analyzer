@@ -80,7 +80,7 @@ def test_main_window_opens_chip(app, chip_path):
     fi = w._current_result['file_info']
     assert fi['chamber'] in 'ABCD' and fi['analyzed_channel'] in UHEART_MVP_64[fi['chamber']].recording
     assert w._signal_tab.chamber_choice() == fi['chamber']
-    assert 'camera' in w.windowTitle()
+    assert 'chamber' in w.windowTitle()
     # another chamber: electrode back to Auto, no reload
     chip_before = w._chip
     w._on_chamber_changed('C')

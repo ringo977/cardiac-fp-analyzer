@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.16.0
+**Versione**: 3.19.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1575,6 +1575,14 @@ Restano fissi nel codice (non configurabili): finestra ± 30 ms dell'SNR globale
 
 
 ## 12. Changelog
+
+### v3.19.0 (Ottobre 2026) — interfaccia in inglese, italiano selezionabile
+
+**`cardiac_fp_analyzer/i18n.py`** (senza Qt): `tr(text)` cerca il testo sorgente inglese nel catalogo della lingua corrente e lo restituisce com'è se manca o se la lingua è l'inglese; `set_language(code)` (`'en'` / `'it'`, normalizzazione di `it_IT`, `it-IT`, `Italian`), `language()`, `catalog(code)`; i testi con valori sono modelli (`tr('{0} beats included').format(n)`) e i segnaposto restano nella traduzione. **`cardiac_fp_analyzer/translations/it.py`**: `CATALOG` inglese → italiano (545 voci: GUI, etichette e suggerimenti delle Impostazioni, giudizio di qualità, deriva, stato della revisione, descrizione del filtraggio, parole di stato dei battiti). **`pyside_app/i18n.py`**: `configured_language()` / `save_language()` su `QSettings` `ui/language` (inglese se assente), `apply_language(app, code)` imposta il catalogo e installa `qtbase_it` / `qt_it` dalle traduzioni di PySide6 per i pulsanti standard; `main()` la chiama prima di costruire la finestra; menu **View ▸ Language** (`QActionGroup`, scelta salvata subito, effetto al prossimo avvio). `QLocale()` non viene toccata: gli appunti usano il separatore decimale del sistema.
+
+**Sorgenti.** Ogni `self.tr("…")` della GUI è diventato `tr("…")` con il testo inglese (`pyside_app.i18n.tr`, importato in ogni modulo); le etichette, i suggerimenti e i nomi delle pagine di `settings_dialog_helpers.SPEC` sono in inglese e passano per `tr` al momento della visualizzazione (`Signal`, `Detection`, `Repolarisation`, `QC`, `Inclusion`). Nel pacchetto: `quality_summary` (`_reason_text` al posto di `_reason_it`, titoli `Problems` / `To verify` / `Good` / `Good (notes)`), `drift` (`motivo`, `nota`, `drift_text`), `review.status_text()` e i messaggi degli errori di correzione, `filtering.describe_filtering` (`testo` = `Filtering: …`), `review_helpers` (`LEVEL_LABEL`, etichette delle righe, `BEAT_COLUMNS` con `Depolarisation` / `Repolarisation`, `SOURCE_WORDS` + `source_word()` per mostrare `aggiunto` → *added* senza cambiare ciò che il sidecar salva), `analyze` (motivi di camera in inglese come il resto della pipeline: `irregular rhythm` / `conduction lost` / `silent tissue`). Le chiavi (`da_rivedere`, `verde`, `battito_mancante`, campi dei dizionari) non cambiano.
+
+**Test.** `tests/test_i18n.py`: ogni letterale `tr()` di `cardiac_fp_analyzer` e `pyside_app` ha una voce nel catalogo con gli stessi segnaposto; etichette delle Impostazioni e delle tabelle coperte; testi del pacchetto, del pannello Revisione e delle Impostazioni in italiano quando selezionato; impostazione della GUI (default, salvataggio, valore ignoto). I test esistenti sono stati allineati ai testi inglesi.
 
 ### v3.18.0 (Ottobre 2026) — export nel formato Results del laboratorio
 

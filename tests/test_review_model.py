@@ -151,7 +151,7 @@ def test_from_result_and_recompute(tmp_path):
     assert sum(b.repol is not None for b in st.beats) >= st.n_beats() // 2
     m = st.measures()
     assert m['bp_s'] == pytest.approx(2.0, rel=0.02)
-    assert r['metadata']['processing']['testo'].startswith('Filtraggio:')
+    assert r['metadata']['processing']['testo'].startswith('Filtering:')
     st.remove_beat(0)
     new = st.recompute(r, cfg)
     assert len(new['beat_indices_raw']) == st.n_beats()
@@ -173,7 +173,7 @@ def test_enforce_min_rr_keeps_the_larger_spike():
 def test_describe_filtering_text():
     cfg = AnalysisConfig()
     d = describe_filtering(cfg, 2000.0, {'sample_mode': 'Average', 'decimation_factor': 5, 'original_sample_rate': 10000.0})
-    assert 'notch 50/100/150 Hz' in d['testo'] and 'decimazione ×5' in d['testo'] and 'Average' in d['testo']
+    assert 'notch 50/100/150 Hz' in d['testo'] and 'decimation ×5' in d['testo'] and 'Average' in d['testo']
     assert d['software'][1]['passo'] == 'passa-banda'
 
 
@@ -186,7 +186,7 @@ def test_quality_levels_on_synthetic_cases():
     bad = dict(good, summary=dict(good['summary'], not_analysable=True,
                                   not_analysable_reason='median beat amplitude 1.20× the noise floor (< 1.6): no depolarisation pattern'))
     q = summarise_quality(bad)
-    assert q['livello'] == 'rosso' and 'segnale debole' in q['problemi'][0]['testo']
+    assert q['livello'] == 'rosso' and 'weak signal' in q['problemi'][0]['testo']
     gaps = dict(good, beat_indices_raw=np.array([1000, 5000, 9000, 17000, 21000, 29000, 33000, 37000, 45000, 49000, 53000, 57000]))
     q = summarise_quality(gaps)
     assert q['livello'] == 'giallo' and any(p['codice'] == 'battiti_mancanti' for p in q['problemi'])
@@ -239,13 +239,13 @@ def test_problems_flag_gaps_close_beats_and_missing_repol():
 def test_approval_and_closure_are_saved_and_lock_the_corrections(tmp_path):
     from cardiac_fp_analyzer.review import RecordingClosedError
     st, beats, reps = _state()
-    assert st.status == 'da_rivedere' and not st.approved and not st.locked and st.status_text() == 'da rivedere'
+    assert st.status == 'da_rivedere' and not st.approved and not st.locked and st.status_text() == 'to review'
     st.approve('Rossi, Mario')
     assert st.approved and st.approved_by == 'Rossi, Mario' and st.approved_at and 'Rossi' in st.status_text()
     st.remove_beat(0)                                   # a correction withdraws the approval
     assert st.status == 'da_rivedere'
     st.close('Rossi, Mario')                            # closing approves first
-    assert st.locked and st.closed_at and st.status_text().startswith('chiuso')
+    assert st.locked and st.closed_at and st.status_text().startswith('closed')
     with pytest.raises(RecordingClosedError):
         st.remove_beat(0)
     with pytest.raises(RecordingClosedError):

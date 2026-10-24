@@ -1,8 +1,8 @@
 ---
 title: "Cardiac FP Analyzer — Manuale utente"
-subtitle: "Versione 3.18.0 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
+subtitle: "Versione 3.19.0 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
 author: "Marco Rasponi · github.com/ringo977/cardiac-fp-analyzer"
-date: "24 ottobre 2026"
+date: "25 ottobre 2026"
 lang: it
 ---
 
@@ -224,9 +224,11 @@ Sui file MCS `analyze_single_file(path, channel='auto')` analizza il chip come u
 
 ## 5.1 Finestra principale
 
-Menu **File**: *Apri registrazione…* (Ctrl+O; CSV, `.h5`, `.npz`), *Impostazioni…* (Ctrl+, ; su Mac nel menu dell'app), *Esci* (Ctrl+Q). Menu **Studi**: *Mostra pannello studi* (Ctrl+Shift+P). Menu **Visualizza ▸ Tema**: scuro / chiaro. Scorciatoie: Ctrl++ / Ctrl+− zoom, Ctrl+0 vista intera.
+Menu **File**: *Apri registrazione…* (Ctrl+O; CSV, `.h5`, `.npz`, `.nwb`), *Impostazioni…* (Ctrl+, ; su Mac nel menu dell'app), *Esci* (Ctrl+Q). Menu **Studi**: *Mostra pannello studi* (Ctrl+Shift+P). Menu **Visualizza ▸ Tema**: scuro / chiaro; **Visualizza ▸ Lingua**: inglese / italiano. Scorciatoie: Ctrl++ / Ctrl+− zoom, Ctrl+0 vista intera.
 
 Quattro schede: **Segnale**, **Battiti**, **Parametri**, **Aritmie**. Il titolo della finestra riporta il file, e per i chip la camera e l'elettrodo (`camera A · E24`).
+
+**Lingua** (dalla v3.19). L'interfaccia è in inglese; **Visualizza ▸ Lingua ▸ Italiano** la porta in italiano (menu, schede, pannello Revisione, coda, impostazioni con i loro suggerimenti, messaggi, giudizio di qualità, testi della deriva e dello stato, riga del filtraggio). La scelta si salva subito e ha effetto al prossimo avvio del programma. Questo manuale usa i nomi italiani; con l'interfaccia in inglese le corrispondenze sono dirette (*Revisione* = Review, *Coda di revisione* = Review queue, *Ricalcola misure* = Recompute measures, *Rifai l'analisi* = Redo analysis, *Approvato* = Approved, *Chiudi 🔒* = Close 🔒, *Esporta Results…* = Export Results…, *Impostazioni* = Settings, pagine *Segnale / Detection / Ripolarizzazione / QC / Inclusione* = Signal / Detection / Repolarisation / QC / Inclusion). I numeri negli appunti (*Copia misure*, *Copia battiti*) seguono sempre il formato del sistema, non la lingua dell'interfaccia. Le chiavi dei file (`.review.json`, risultati JSON, fogli Excel) non cambiano con la lingua; cambiano solo i testi per l'operatore (per esempio la nota dello stato nel foglio Results).
 
 ## 5.2 Scheda Segnale
 

@@ -124,11 +124,11 @@ class TestTooltipFor:
     def test_error_shows_message(self):
         r = FileResult(status='error', error='no signal')
         assert "no signal" in _tooltip_for(r)
-        assert "Errore" in _tooltip_for(r)
+        assert "Error" in _tooltip_for(r)
 
     def test_error_without_message_still_labels_itself(self):
         r = FileResult(status='error')
-        assert _tooltip_for(r) == "Errore"
+        assert _tooltip_for(r) == "Error"
 
     def test_ok_shows_channel_and_counts_when_equal(self):
         r = FileResult(
@@ -137,7 +137,7 @@ class TestTooltipFor:
         )
         t = _tooltip_for(r)
         assert "EL1" in t
-        assert "14 battiti" in t
+        assert "14 beats" in t
         # No "inclusi" suffix when all beats are included.
         assert "/" not in t
 
@@ -149,14 +149,14 @@ class TestTooltipFor:
         t = _tooltip_for(r)
         assert "EL2" in t
         assert "10/14" in t
-        assert "inclusi" in t
+        assert "included" in t
 
     def test_ok_without_counts_still_shows_channel(self):
         r = FileResult(
             status='ok', channel_analyzed='EL1',
             n_included=0, n_total=0,
         )
-        assert _tooltip_for(r) == "Canale: EL1"
+        assert _tooltip_for(r) == "Channel: EL1"
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -315,7 +315,7 @@ class TestBatchWorkerRun:
         idx, fr = cap.events[0]
         assert idx == 0
         assert fr.status == 'error'
-        assert 'vuota' in fr.error.lower()
+        assert 'returned nothing' in fr.error.lower()
         # Even the "None-pipeline → error" branch must carry the
         # fingerprint — otherwise re-analysing wouldn't clear the
         # stale ● badge on the next run.
@@ -552,15 +552,15 @@ class TestTooltipForStale:
             n_included=14, n_total=14, fingerprint='old',
         )
         t = _tooltip_for(r, stale=True)
-        assert "non aggiornato" in t.lower() or "config cambiata" in t
+        assert "out of date" in t.lower() or "settings changed" in t
         # Underlying ok detail is still there.
         assert "EL1" in t
-        assert "14 battiti" in t
+        assert "14 beats" in t
 
     def test_stale_error_prefixed_with_reason(self):
         r = FileResult(status='error', error='boom', fingerprint='old')
         t = _tooltip_for(r, stale=True)
-        assert "non aggiornato" in t.lower() or "config cambiata" in t
+        assert "out of date" in t.lower() or "settings changed" in t
         assert "boom" in t
 
     def test_fresh_unchanged(self):
@@ -1080,7 +1080,7 @@ class TestTooltipForWithMetrics:
         )
         tip = _tooltip_for(r)
         assert "EL1" in tip
-        assert "14 battiti" in tip
+        assert "14 beats" in tip
         assert "FPDc: 410 ms" in tip
         assert "58 BPM" in tip
 
@@ -1093,7 +1093,7 @@ class TestTooltipForWithMetrics:
         )
         tip = _tooltip_for(r)
         assert "EL1" in tip
-        assert "14 battiti" in tip
+        assert "14 beats" in tip
         assert "FPDc" not in tip
 
 
@@ -1893,7 +1893,7 @@ class TestCollectBatchInputs:
         assert ("g1", "gone.csv") in missing
         fr = missing[("g1", "gone.csv")]
         assert fr.status == "error"
-        assert "non trovato" in fr.error.lower()
+        assert "not found" in fr.error.lower()
         assert fr.error.endswith("gone.csv")
 
     def test_cross_group_study_wide(self, tmp_path):

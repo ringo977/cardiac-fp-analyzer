@@ -31,11 +31,12 @@ from PySide6.QtWidgets import (
 )
 
 from cardiac_fp_analyzer.quality_summary import LEVEL_COLOURS, summarise_quality
+from pyside_app.i18n import tr
 
 from .review_helpers import BEAT_COLUMNS, format_beat_rows, format_measures, processing_text
 
 N_MEASURE_ROWS = 13
-MEASURE_HEADERS = ("Misura", "Valore", "%", "Δ baseline")
+MEASURE_HEADERS = ("Measure", "Value", "%", "Δ baseline")
 
 
 def _locale_number(text: str) -> str:
@@ -80,7 +81,7 @@ class ReviewPanel(QWidget):
         lay.setSpacing(4)
 
         # ── judgement ──
-        self._badge = QLabel(self.tr("Nessuna registrazione"))
+        self._badge = QLabel(tr("No recordings"))
         self._badge.setWordWrap(True)
         self._badge.setStyleSheet("padding: 4px 6px; border-radius: 6px; background: #e6e6e6; color: #222;")
         lay.addWidget(self._badge)
@@ -91,13 +92,14 @@ class ReviewPanel(QWidget):
 
         # ── review state ──
         rows = QHBoxLayout()
-        self._chk_approved = QCheckBox(self.tr("Approvato"))
-        self._chk_approved.setToolTip(self.tr("Registrazione rivista e approvata dall'operatore (salvato nel .review.json); "
-                                              "una nuova correzione toglie l'approvazione"))
+        self._chk_approved = QCheckBox(tr("Approved"))
+        self._chk_approved.setToolTip(tr("Recording reviewed and approved by the operator (saved "
+                                         "in the .review.json); a new correction withdraws the "
+                                         "approval"))
         self._chk_approved.toggled.connect(self._on_approve_toggled)
-        self._btn_close = QPushButton(self.tr("Chiudi 🔒"))
-        self._btn_close.setToolTip(self.tr("Chiude definitivamente la registrazione: approvata e bloccata contro "
-                                           "le modifiche (Sblocca per riaprirla)"))
+        self._btn_close = QPushButton(tr("Close 🔒"))
+        self._btn_close.setToolTip(tr("Closes the recording for good: approved and locked against "
+                                      "changes (Unlock to reopen it)"))
         self._btn_close.clicked.connect(self._on_close_clicked)
         self._status_lbl = QLabel("")
         self._status_lbl.setStyleSheet("color: #666;")
@@ -114,10 +116,10 @@ class ReviewPanel(QWidget):
         self._legend.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self._legend.setStyleSheet("padding: 0 4px;")
         self._btn_prev_problem = QPushButton("◀")
-        self._btn_next_problem = QPushButton(self.tr("Prossimo tratto ▶"))
-        self._btn_prev_problem.setToolTip(self.tr("Tratto evidenziato precedente (Ctrl+Shift+G)"))
-        self._btn_next_problem.setToolTip(self.tr("Va al prossimo tratto evidenziato: battito mancante, battiti troppo "
-                                                  "vicini, ripolarizzazione assente (Ctrl+G)"))
+        self._btn_next_problem = QPushButton(tr("Next stretch ▶"))
+        self._btn_prev_problem.setToolTip(tr("Previous highlighted stretch (Ctrl+Shift+G)"))
+        self._btn_next_problem.setToolTip(tr("Goes to the next highlighted stretch: missing beat, "
+                                             "beats too close, repolarisation missing (Ctrl+G)"))
         self._btn_prev_problem.setFixedWidth(28)
         self._btn_prev_problem.clicked.connect(lambda: self.next_problem_requested.emit(-1))
         self._btn_next_problem.clicked.connect(lambda: self.next_problem_requested.emit(1))
@@ -128,11 +130,11 @@ class ReviewPanel(QWidget):
 
         # ── view ──
         row = QHBoxLayout()
-        row.addWidget(QLabel(self.tr("Vista:")))
-        self._rb_filt = QRadioButton(self.tr("Filtrato"))
-        self._rb_raw = QRadioButton(self.tr("Grezzo"))
-        self._rb_ops = QRadioButton(self.tr("1–40 Hz"))
-        self._rb_ops.setToolTip(self.tr("La vista degli operatori: notch 50 Hz + passa-banda 1–40 Hz di ordine 1"))
+        row.addWidget(QLabel(tr("View:")))
+        self._rb_filt = QRadioButton(tr("Filtered"))
+        self._rb_raw = QRadioButton(tr("Raw"))
+        self._rb_ops = QRadioButton(tr("1–40 Hz"))
+        self._rb_ops.setToolTip(tr("The operators' view: 50 Hz notch + 1–40 Hz band-pass of order 1"))
         self._rb_filt.setChecked(True)
         grp = QButtonGroup(self)
         for rb, kind in ((self._rb_filt, "filtrato"), (self._rb_raw, "grezzo"), (self._rb_ops, "operatori")):
@@ -144,16 +146,16 @@ class ReviewPanel(QWidget):
 
         # ── actions (short rows: the dock may be narrow) ──
         row2 = QHBoxLayout()
-        self._btn_undo = QPushButton(self.tr("Annulla"))
-        self._btn_redo = QPushButton(self.tr("Ripeti"))
-        self._btn_undo.setToolTip(self.tr("Annulla l'ultima correzione (Ctrl+Z)"))
-        self._btn_redo.setToolTip(self.tr("Ripeti la correzione annullata (Ctrl+Shift+Z)"))
+        self._btn_undo = QPushButton(tr("Undo"))
+        self._btn_redo = QPushButton(tr("Redo"))
+        self._btn_undo.setToolTip(tr("Undo the last correction (Ctrl+Z)"))
+        self._btn_redo.setToolTip(tr("Redo the undone correction (Ctrl+Shift+Z)"))
         self._btn_undo.clicked.connect(self.undo_requested.emit)
         self._btn_redo.clicked.connect(self.redo_requested.emit)
-        self._btn_pos = QPushButton(self.tr("picco +"))
-        self._btn_neg = QPushButton(self.tr("picco −"))
-        self._btn_pos.setToolTip(self.tr("Ripolarizzazione sul picco positivo per tutti i battiti (tasto P)"))
-        self._btn_neg.setToolTip(self.tr("Ripolarizzazione sul picco negativo per tutti i battiti (tasto N)"))
+        self._btn_pos = QPushButton(tr("peak +"))
+        self._btn_neg = QPushButton(tr("peak −"))
+        self._btn_pos.setToolTip(tr("Repolarisation on the positive peak for all beats (key P)"))
+        self._btn_neg.setToolTip(tr("Repolarisation on the negative peak for all beats (key N)"))
         self._btn_pos.clicked.connect(lambda: self.polarity_requested.emit(1))
         self._btn_neg.clicked.connect(lambda: self.polarity_requested.emit(-1))
         for b in (self._btn_undo, self._btn_redo, self._btn_pos, self._btn_neg):
@@ -161,33 +163,35 @@ class ReviewPanel(QWidget):
         lay.addLayout(row2)
 
         row3 = QHBoxLayout()
-        self._btn_restore = QPushButton(self.tr("Ripristina tolti"))
-        self._btn_restore.setToolTip(self.tr("Rimette tutti i rilevamenti tolti dai veti (croci grigie)"))
+        self._btn_restore = QPushButton(tr("Restore removed"))
+        self._btn_restore.setToolTip(tr("Puts back all the detections removed by the vetoes (grey crosses)"))
         self._btn_restore.clicked.connect(self.restore_all_requested.emit)
-        self._btn_recompute = QPushButton(self.tr("Ricalcola misure"))
-        self._btn_recompute.setToolTip(self.tr("Rilancia la pipeline (qualità, ripolarizzazione, parametri, aritmie) "
-                                               "sui battiti correnti: le correzioni restano"))
+        self._btn_recompute = QPushButton(tr("Recompute measures"))
+        self._btn_recompute.setToolTip(tr("Runs the pipeline again (quality, repolarisation, "
+                                          "parameters, arrhythmias) on the current beats: the "
+                                          "corrections stay"))
         self._btn_recompute.clicked.connect(self.recompute_requested.emit)
-        self._btn_reanalyse = QPushButton(self.tr("Rifai l'analisi"))
-        self._btn_reanalyse.setToolTip(self.tr("Rilancia il rilevamento automatico con le impostazioni correnti e scarta "
-                                               "le correzioni in memoria (quelle salvate restano nel .review.json finché "
-                                               "non salvi di nuovo)"))
+        self._btn_reanalyse = QPushButton(tr("Redo analysis"))
+        self._btn_reanalyse.setToolTip(tr("Runs the automatic detection again with the current "
+                                          "settings and discards the corrections in memory (the "
+                                          "saved ones stay in the .review.json until you save "
+                                          "again)"))
         self._btn_reanalyse.clicked.connect(self.reanalyse_requested.emit)
         for b in (self._btn_restore, self._btn_recompute, self._btn_reanalyse):
             row3.addWidget(b)
         lay.addLayout(row3)
 
         row4 = QHBoxLayout()
-        self._btn_save = QPushButton(self.tr("Salva correzioni"))
-        self._btn_save.setToolTip(self.tr("Scrive il file .review.json accanto alla registrazione (Ctrl+S)"))
+        self._btn_save = QPushButton(tr("Save corrections"))
+        self._btn_save.setToolTip(tr("Writes the .review.json file next to the recording (Ctrl+S)"))
         self._btn_save.clicked.connect(self.save_requested.emit)
-        self._btn_copy_measures = QPushButton(self.tr("Copia misure"))
-        self._btn_copy_measures.setToolTip(self.tr("Copia le misure negli appunti (testo con tabulazioni e intestazioni, "
-                                                   "da incollare in Excel)"))
+        self._btn_copy_measures = QPushButton(tr("Copy measures"))
+        self._btn_copy_measures.setToolTip(tr("Copy the measures to the clipboard (tab-separated "
+                                              "text with headers, to paste into Excel)"))
         self._btn_copy_measures.clicked.connect(self.copy_measures)
-        self._btn_copy_beats = QPushButton(self.tr("Copia battiti"))
-        self._btn_copy_beats.setToolTip(self.tr("Copia la tabella dei battiti negli appunti (testo con tabulazioni e "
-                                                "intestazioni, da incollare in Excel)"))
+        self._btn_copy_beats = QPushButton(tr("Copy beats"))
+        self._btn_copy_beats.setToolTip(tr("Copy the beats table to the clipboard (tab-separated "
+                                           "text with headers, to paste into Excel)"))
         self._btn_copy_beats.clicked.connect(self.copy_beats)
         for b in (self._btn_save, self._btn_copy_measures, self._btn_copy_beats):
             row4.addWidget(b)
@@ -200,7 +204,7 @@ class ReviewPanel(QWidget):
         tl.setContentsMargins(0, 0, 0, 0)
         tl.setSpacing(2)
         self._measures = QTableWidget(N_MEASURE_ROWS, 4)
-        self._measures.setHorizontalHeaderLabels([self.tr(h) for h in MEASURE_HEADERS])
+        self._measures.setHorizontalHeaderLabels([tr(h) for h in MEASURE_HEADERS])
         self._measures.verticalHeader().setVisible(False)
         self._measures.verticalHeader().setDefaultSectionSize(19)
         self._measures.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -231,7 +235,7 @@ class ReviewPanel(QWidget):
         self._split.addWidget(top)
 
         self._table = QTableWidget(0, len(BEAT_COLUMNS))
-        self._table.setHorizontalHeaderLabels(list(BEAT_COLUMNS))
+        self._table.setHorizontalHeaderLabels([tr(h) for h in BEAT_COLUMNS])
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -272,7 +276,7 @@ class ReviewPanel(QWidget):
     def refresh(self) -> None:
         st = self._state
         if st is None:
-            self._badge.setText(self.tr("Nessuna registrazione"))
+            self._badge.setText(tr("No recordings"))
             self._badge.setStyleSheet("padding: 4px 6px; border-radius: 6px; background: #e6e6e6; color: #222;")
             self._problems.setText("")
             self._problems.setToolTip("")
@@ -287,12 +291,12 @@ class ReviewPanel(QWidget):
         if self._quality is not None:
             q = self._quality
             col = LEVEL_COLOURS[q["livello"]]
-            self._badge.setText(self.tr("{0} — {1} battiti").format(q["titolo"], st.n_beats()))
+            self._badge.setText(tr("{0} — {1} beats").format(q["titolo"], st.n_beats()))
             self._badge.setStyleSheet(f"padding: 4px 6px; border-radius: 6px; background: {col}; color: white; font-weight: bold;")
             probs = ["• " + p["testo"] for p in q["problemi"]]
             shown = probs[:3]
             if len(probs) > 3:
-                shown.append(self.tr("… e altri {0} (passa il mouse qui)").format(len(probs) - 3))
+                shown.append(tr("… and {0} more (hover here)").format(len(probs) - 3))
             self._problems.setText("\n".join(shown))
             self._problems.setToolTip("\n".join(probs))
         locked = bool(getattr(st, 'locked', False))
@@ -304,7 +308,7 @@ class ReviewPanel(QWidget):
         try:
             self._chk_approved.setChecked(bool(getattr(st, 'approved', False)))
             self._chk_approved.setEnabled(not locked)
-            self._btn_close.setText(self.tr("Sblocca 🔓") if locked else self.tr("Chiudi 🔒"))
+            self._btn_close.setText(tr("Unlock 🔓") if locked else tr("Close 🔒"))
         finally:
             self._syncing = False
         self._status_lbl.setText(st.status_text() if hasattr(st, 'status_text') else "")
@@ -349,7 +353,7 @@ class ReviewPanel(QWidget):
         """The per-beat table as tab-separated text with a header row (numbers in the system locale)."""
         if self._state is None:
             return ""
-        lines = ["\t".join(BEAT_COLUMNS)]
+        lines = ["\t".join(tr(h) for h in BEAT_COLUMNS)]
         for r in format_beat_rows(self._state.per_beat_rows()):
             lines.append("\t".join(_locale_number(c) if j < 6 else c for j, c in enumerate(r)))
         return "\n".join(lines) + "\n"
@@ -357,7 +361,7 @@ class ReviewPanel(QWidget):
     def measures_tsv(self) -> str:
         if self._state is None:
             return ""
-        lines = ["\t".join(MEASURE_HEADERS)]
+        lines = ["\t".join(tr(h) for h in MEASURE_HEADERS)]
         for label, val, pct, var in format_measures(self._state.measures(reference=self._reference), self._reference):
             lines.append("\t".join((label, _locale_number(val), _locale_number(pct), _locale_number(var))))
         return "\n".join(lines) + "\n"
@@ -366,13 +370,13 @@ class ReviewPanel(QWidget):
         text = self.beats_tsv()
         if text:
             QApplication.clipboard().setText(text)
-            self.message.emit(self.tr("{0} battiti copiati negli appunti (incolla in Excel)").format(text.count("\n") - 1))
+            self.message.emit(tr("{0} beats copied to the clipboard (paste into Excel)").format(text.count("\n") - 1))
 
     def copy_measures(self) -> None:
         text = self.measures_tsv()
         if text:
             QApplication.clipboard().setText(text)
-            self.message.emit(self.tr("Misure copiate negli appunti (incolla in Excel)"))
+            self.message.emit(tr("Measures copied to the clipboard (paste into Excel)"))
 
     # ── slots ──────────────────────────────────────────────────────────
 
@@ -396,5 +400,5 @@ class ReviewPanel(QWidget):
         for tipo, label in PROBLEM_LABELS.items():
             if counts.get(tipo):
                 r, g, b = PROBLEM_COLOURS[tipo]
-                parts.append(f'<span style="color:rgb({r},{g},{b})">■</span> {label} ({counts[tipo]})')
+                parts.append(f'<span style="color:rgb({r},{g},{b})">■</span> {tr(label)} ({counts[tipo]})')
         return ('<span style="color:#666">' + ' · '.join(parts) + '</span>') if parts else ''

@@ -24,20 +24,20 @@ def test_rising_rate_and_falling_fpd():
     f = d['fpd']
     assert f['significativa'] and f['pendenza_ms_min'] == pytest.approx(-120.0, abs=1) and f['variazione_pct'] == pytest.approx(-12.2, abs=0.3)
     txt = drift_text(d)
-    assert txt.startswith('frequenza +9.9 % in 61 s') and 'FPD -12.2 %' in txt
+    assert txt.startswith('rate +9.9 % in 61 s') and 'FPD -12.2 %' in txt
 
 
 def test_short_constant_and_outliers():
     t = np.arange(0, 20, 2.0)                          # 10 beats, 18 s, constant
     d = rate_drift(t)
-    assert not d['affidabile'] and 'intervalli' in d['motivo'] and not d['significativa']
-    assert d['pendenza_bpm_min'] == pytest.approx(0.0, abs=1e-9) and 'estrapolata' in d['nota']
+    assert not d['affidabile'] and 'intervals' in d['motivo'] and not d['significativa']
+    assert d['pendenza_bpm_min'] == pytest.approx(0.0, abs=1e-9) and 'extrapolated' in d['nota']
     t = _times(30.0, 30.0, 70.0)
     t = np.delete(t, 10)                                # a missing beat
     t = np.sort(np.append(t, t[20] + 0.3))              # a detection in excess
     d = rate_drift(t)
     assert d['affidabile'] and d['n_intervalli'] == len(t) - 1 - 2 and abs(d['pendenza_bpm_min']) < 0.05
-    assert rate_drift([0.0, 1.0])['motivo'] == 'troppo pochi battiti'
+    assert rate_drift([0.0, 1.0])['motivo'] == 'too few beats'
 
 
 def test_review_state_and_measures_carry_the_drift():
@@ -59,5 +59,5 @@ def test_quality_summary_flags_a_drifting_rate():
            'beat_indices_raw': (t * FS).astype(int)}
     q = summarise_quality(res)
     codes = {p['codice']: p for p in q['problemi']}
-    assert 'deriva' in codes and codes['deriva']['gravita'] == 'medio' and 'frequenza in deriva: +19 %' in codes['deriva']['testo']
+    assert 'deriva' in codes and codes['deriva']['gravita'] == 'medio' and 'rate drifting: +19 %' in codes['deriva']['testo']
     assert q['livello'] == 'giallo'

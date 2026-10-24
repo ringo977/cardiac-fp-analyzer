@@ -598,7 +598,7 @@ def _apply_chamber_consensus(result, df, fs, file_info, config, verbose):
     if ch['rhythm_status'] != 'regular':
         # irregular rhythm, conduction lost or silent tissue: no FPD, the
         # recording is reported as not analysable with the chamber's reason
-        reason = {'irregular': 'ritmo irregolare', 'conduction_lost': 'conduzione persa', 'silent': 'tessuto fermo'}[ch['rhythm_status']]
+        reason = {'irregular': 'irregular rhythm', 'conduction_lost': 'conduction lost', 'silent': 'silent tissue'}[ch['rhythm_status']]
         s['not_analysable'] = True
         s['not_analysable_reason'] = f"{reason}: {ch['status_reason']}"
         s['fpd_reliable'] = False

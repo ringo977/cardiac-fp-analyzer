@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from cardiac_fp_analyzer.quality_summary import LEVEL_COLOURS
+from pyside_app.i18n import tr
 
 from .review_helpers import queue_entry, queue_sort_key
 from .workers import analysis_pool
@@ -124,12 +125,12 @@ class ReviewQueue(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         row = QHBoxLayout()
-        self._btn_files = QPushButton(self.tr("Aggiungi file…"))
-        self._btn_folder = QPushButton(self.tr("Aggiungi cartella…"))
-        self._btn_clear = QPushButton(self.tr("Svuota"))
-        self._btn_export = QPushButton(self.tr("Esporta Results…"))
-        self._btn_export.setToolTip(self.tr("Scrive il foglio Excel nel formato Results del laboratorio "
-                                            "(CHIP X, CHIP X raw) con le registrazioni della coda"))
+        self._btn_files = QPushButton(tr("Add files…"))
+        self._btn_folder = QPushButton(tr("Add folder…"))
+        self._btn_clear = QPushButton(tr("Clear"))
+        self._btn_export = QPushButton(tr("Export Results…"))
+        self._btn_export.setToolTip(tr("Writes the Excel workbook in the lab's Results format "
+                                       "(CHIP X, CHIP X raw) with the recordings of the queue"))
         self._btn_files.clicked.connect(self._add_files)
         self._btn_folder.clicked.connect(self._add_folder)
         self._btn_clear.clicked.connect(self.clear)
@@ -139,16 +140,16 @@ class ReviewQueue(QWidget):
         row.addStretch()
         row.addWidget(self._btn_export)
         lay.addLayout(row)
-        self._status = QLabel(self.tr("Aggiungi file o una cartella: ogni tessuto viene analizzato e giudicato; "
-                                      "con due elettrodi dello stesso tessuto scegli quale usare con la spunta."))
+        self._status = QLabel(tr("Add files or a folder: every tissue is analysed and judged; with "
+                                 "two electrodes of the same tissue, tick the one to use."))
         self._status.setWordWrap(True)
         self._status.setStyleSheet("color: #777;")
         lay.addWidget(self._status)
         self._tree = QTreeWidget()
         self._tree.setColumnCount(10)
-        self._tree.setHeaderLabels([self.tr("Registrazione"), self.tr("Tessuto"), self.tr("Condizione"),
-                                    self.tr("Ingresso"), self.tr("Usa"), self.tr("Stato"), self.tr("Giudizio"),
-                                    self.tr("BP [s]"), self.tr("FPD [s]"), self.tr("Problemi")])
+        self._tree.setHeaderLabels([tr("Recording"), tr("Tissue"), tr("Condition"),
+                                    tr("Input"), tr("Use"), tr("Status"), tr("Judgement"),
+                                    tr("BP [s]"), tr("FPD [s]"), tr("Problems")])
         self._tree.setRootIsDecorated(True)
         self._tree.setAlternatingRowColors(True)
         self._tree.setTextElideMode(Qt.ElideMiddle)
@@ -185,27 +186,27 @@ class ReviewQueue(QWidget):
             i = len(self._entries)
             self._entries[i] = {'file': str(u['file']), 'nome': Path(u['file']).name, 'ingresso': u['electrode'],
                                 'camera': upd.get('chamber'), 'chip': upd.get('chip'), 'item': upd.get('item'),
-                                'livello': None, 'titolo': self.tr("in analisi…"), 'riassunto': '', 'rivista': False,
+                                'livello': None, 'titolo': tr("analysing…"), 'riassunto': '', 'rivista': False,
                                 'bp_s': None, 'fpd_s': None, 'record': None, 'condizione': '',
                                 'elettrodi': {}, 'scelto': None, 'due_elettrodi': both}
             self._pool.start(_QueueWorker(i, u, config, self._signals, both))
             self._pending += 1
             n += 1
         self._render()
-        msg = self.tr("{0} tessuti in analisi…").format(self._pending)
+        msg = tr("{0} tissues being analysed…").format(self._pending)
         if plan.get('sheets'):
-            msg += " " + self.tr("(identità da {0})").format(', '.join(plan['sheets']))
+            msg += " " + tr("(identity from {0})").format(', '.join(plan['sheets']))
         self._status.setText(msg)
         return n
 
     def _add_files(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, self.tr("Registrazioni da rivedere"), "",
-                                                self.tr("Registrazioni (*.csv *.h5 *.npz *.nwb);;Tutti i file (*)"))
+        paths, _ = QFileDialog.getOpenFileNames(self, tr("Recordings to review"), "",
+                                                tr("Recordings (*.csv *.h5 *.npz *.nwb);;All files (*)"))
         if paths:
             self.add_paths(paths)
 
     def _add_folder(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, self.tr("Cartella con le registrazioni"))
+        d = QFileDialog.getExistingDirectory(self, tr("Folder with the recordings"))
         if d:
             self.add_paths([d])
 
@@ -213,7 +214,7 @@ class ReviewQueue(QWidget):
         self._entries.clear()
         self._pending = 0
         self._render()
-        self._status.setText(self.tr("Coda vuota."))
+        self._status.setText(tr("Queue empty."))
 
     # ── results ──────────────────────────────────────────────────────
 
@@ -241,7 +242,8 @@ class ReviewQueue(QWidget):
         self._render()
         done = sum(1 for e in self._entries.values() if e.get('livello'))
         counts = {lv: sum(1 for e in self._entries.values() if e.get('livello') == lv) for lv in ('rosso', 'giallo', 'verde')}
-        self._status.setText(self.tr("{0} tessuti analizzati ({1} in corso) — rossi {2}, gialli {3}, verdi {4}").format(
+        self._status.setText(tr("{0} tissues analysed ({1} in progress) — red {2}, yellow {3}, "
+                                "green {4}").format(
             done, self._pending, counts['rosso'], counts['giallo'], counts['verde']))
 
     def _find(self, path: str, channel: str, chamber=None):
@@ -305,19 +307,19 @@ class ReviewQueue(QWidget):
         src = sub if sub is not None else e
         rec = src.get('record') or {}
         chip, ch, item = rec.get('chip', e.get('chip')), rec.get('chamber', e.get('camera')), rec.get('item', e.get('item'))
-        tissue = ' '.join(s for s in (f"chip {chip}" if chip else '', f"ch{ch}" if ch not in (None, '') else '',
+        tissue = ' '.join(s for s in (f"{tr('chip')} {chip}" if chip else '', f"ch{ch}" if ch not in (None, '') else '',
                                       f"({item})" if item else '') if s)
         title = src.get('titolo') or ''
         state = rec.get('stato') or 'da_rivedere'
         state_txt = _STATE_MARK.get(state, '')
         if sub is None and e.get('rivista') and state == 'da_rivedere':
-            state_txt = self.tr("rivista")
+            state_txt = tr("reviewed")
         if sub is None:
             inp = str(e.get('scelto') or e.get('analizzato') or e.get('ingresso') or '').upper()
             if e.get('due_elettrodi') and e.get('scelto'):
-                inp += ' ' + self.tr("(usato)")
+                inp += ' ' + tr("(used)")
         else:
-            inp = str(label).upper() + (' · ' + self.tr("scelta del software") if sub.get('scelta_software') else '')
+            inp = str(label).upper() + (' · ' + tr("software choice") if sub.get('scelta_software') else '')
         it = QTreeWidgetItem([e['nome'] if sub is None else '', tissue if sub is None else '',
                               (rec.get('condition') or src.get('condizione') or '') if sub is None else '', inp, '',
                               state_txt, title, f"{src['bp_s']:.3f}" if src.get('bp_s') else "—",
@@ -330,13 +332,14 @@ class ReviewQueue(QWidget):
         it.setData(COL_FILE, Qt.UserRole, (e['file'], label or e.get('scelto') or e.get('ingresso'), e.get('camera')))
         it.setToolTip(COL_FILE, e['file'])
         it.setToolTip(COL_PROBLEMS, src.get('riassunto', ''))
-        it.setToolTip(COL_STATE, rec.get('stato_testo') or self.tr("da rivedere"))
+        it.setToolTip(COL_STATE, rec.get('stato_testo') or tr("to review"))
         if state == 'chiuso':
             it.setForeground(COL_STATE, QBrush(QColor('#888888')))
         if sub is not None:
             it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
             it.setCheckState(COL_USE, Qt.Checked if e.get('scelto') == label else Qt.Unchecked)
-            it.setToolTip(COL_USE, self.tr("Usa questo elettrodo per le misure del tessuto (salvato nel .review.json)"))
+            it.setToolTip(COL_USE, tr("Use this electrode for the measures of the tissue (saved in "
+                                      "the .review.json)"))
         return it
 
     def _render(self) -> None:
@@ -389,22 +392,22 @@ class ReviewQueue(QWidget):
     def _export(self) -> None:
         recs = self.records()
         if not recs:
-            QMessageBox.information(self, self.tr("Esporta Results"), self.tr("Nessuna registrazione analizzata."))
+            QMessageBox.information(self, tr("Export Results"), tr("No recording analysed."))
             return
         first = Path(recs[0]['file'])
         exp = str(recs[0].get('experiment') or '').replace(' ', '') or 'Results'
         suggested = str(first.parent / f"{exp}_FP_analysis.xlsx")
-        path, _ = QFileDialog.getSaveFileName(self, self.tr("Foglio Results"), suggested, self.tr("Excel (*.xlsx)"))
+        path, _ = QFileDialog.getSaveFileName(self, tr("Results workbook"), suggested, tr("Excel (*.xlsx)"))
         if not path:
             return
         try:
             n = self.export_results(path)
         except Exception as exc:    # noqa: BLE001 — report, don't crash the GUI
             logger.exception("results export")
-            QMessageBox.warning(self, self.tr("Esporta Results"), str(exc))
+            QMessageBox.warning(self, tr("Export Results"), str(exc))
             return
         pending = sum(1 for e in self._entries.values() if not e.get('livello'))
-        msg = self.tr("{0} registrazioni scritte in {1}").format(n, Path(path).name)
+        msg = tr("{0} recordings written to {1}").format(n, Path(path).name)
         if pending:
-            msg += " " + self.tr("({0} ancora in analisi, non incluse)").format(pending)
+            msg += " " + tr("({0} still being analysed, not included)").format(pending)
         self._status.setText(msg)

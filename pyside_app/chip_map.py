@@ -19,6 +19,8 @@ from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
+from pyside_app.i18n import tr
+
 CELL = 22          # px per electrode
 GAP = 3
 ROW_H = 30
@@ -97,7 +99,7 @@ class ChipMapWidget(QWidget):
         for ch in self._layout.chambers:
             # chamber label
             p.setPen(QPen(QColor('#cfcfd8')))
-            text = f'camera {ch.name}'
+            text = f'{tr("chamber")} {ch.name}'
             if self._summary.get(ch.name):
                 text += f'  ·  {self._summary[ch.name]}'
             p.drawText(QRectF(4, y, LABEL_W - 8, ROW_H - 8), Qt.AlignVCenter | Qt.AlignLeft, text)
@@ -142,10 +144,11 @@ class ChipMapWidget(QWidget):
             sc = self._scores.get(e, {})
             ch = self._layout.chamber_of(e) if self._layout else None
             if ch is not None and e in ch.stimulation:
-                self.setToolTip(f'{e} — elettrodo di stimolazione (non usato per le misure)')
+                self.setToolTip(f'{e} — ' + tr('stimulation electrode (not used for the measures)'))
             elif sc.get('score') is not None and math.isfinite(sc['score']):
-                self.setToolTip(f"{e} — punteggio {sc['score']:.1f}: {sc['n_beats']} spike, periodo {sc['period_ms']:.0f} ms, "
-                                f"CV {sc['cv_pct']:.1f} %, SNR {sc['snr']:.1f}, ripolarizzazione {sc['repol_snr']:.1f}")
+                self.setToolTip(f"{e} — " + tr("score {0:.1f}: {1} spikes, period {2:.0f} ms, CV {3:.1f} %, SNR {4:.1f}, "
+                                                 "repolarisation {5:.1f}").format(sc['score'], sc['n_beats'], sc['period_ms'],
+                                                                                   sc['cv_pct'], sc['snr'], sc['repol_snr']))
             else:
-                self.setToolTip(f"{e} — {sc.get('reason') or 'nessun battito'}")
+                self.setToolTip(f"{e} — {sc.get('reason') or tr('no beats')}")
         super().mouseMoveEvent(event)

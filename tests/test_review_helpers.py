@@ -41,7 +41,7 @@ def test_queue_entry_and_sort_order(tmp_path):
     e2 = queue_entry(tmp_path / 'a.csv', 'el2', None, bad)
     e3 = queue_entry(tmp_path / 'b.csv', 'el1', None, None, error='boom')
     assert e1['livello'] == 'verde' and e1['bp_s'] == 2.0 and e1['fpd_s'] == 0.9 and e1['n_battiti'] == 30
-    assert e2['livello'] == 'rosso' and 'solo 2' in e2['riassunto']
+    assert e2['livello'] == 'rosso' and 'only 2' in e2['riassunto']
     assert e3['livello'] == 'rosso' and e3['errore'] == 'boom'
     order = sorted([e1, e2, e3], key=queue_sort_key)
     assert [e['livello'] for e in order] == ['rosso', 'rosso', 'verde']
@@ -56,12 +56,12 @@ def test_format_measures_and_rows():
     rows = format_measures(m)
     assert rows[0] == ('Beating Period [s]', '2.190', '108.5', '+8.5')
     assert rows[5][1] == '367' and rows[-1][1] == '41 %'
-    assert len(rows) == 13 and rows[6][0].startswith('Deriva frequenza')
+    assert len(rows) == 13 and rows[6][0].startswith('Rate drift')
     beats = format_beat_rows([{'n': 1, 'dep_s': 0.4278, 'bp_s': 2.273, 'rep_s': 1.6148, 'fpd_s': 1.187, 'amp_uV': 352.5,
                                'stato': 'auto', 'stato_rip': 'corretto'},
                               {'n': 2, 'dep_s': 2.7, 'bp_s': None, 'rep_s': None, 'fpd_s': None, 'amp_uV': 10.0,
                                'stato': 'aggiunto', 'stato_rip': 'assente'}])
-    assert beats[0] == ('1', '0.428', '2.273', '1.615', '1.187', '352', 'auto', 'corretto')
+    assert beats[0] == ('1', '0.428', '2.273', '1.615', '1.187', '352', 'auto', 'corrected')
     assert beats[1][2] == '—' and len(beats[0]) == len(BEAT_COLUMNS)
     assert processing_text({'metadata': {'processing': {'testo': 'Filtraggio: x'}}}) == 'Filtraggio: x'
     assert processing_text(None) == ''

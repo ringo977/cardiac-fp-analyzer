@@ -13,10 +13,15 @@ from pathlib import Path
 import numpy as np
 from scipy import signal as sg
 
+from cardiac_fp_analyzer.i18n import tr
 from cardiac_fp_analyzer.quality_summary import summarise_quality
 
 LEVEL_ORDER = {'rosso': 0, 'giallo': 1, 'verde': 2}
-LEVEL_LABEL = {'rosso': 'Problemi', 'giallo': 'Da verificare', 'verde': 'Buono'}
+LEVEL_LABEL = {'rosso': 'Problems', 'giallo': 'To verify', 'verde': 'Good'}   # English source: show with tr()
+
+# display words of the beat sources saved in the sidecar (``BeatMark.source`` / ``repol_source``)
+SOURCE_WORDS = {'auto': 'auto', 'corretto': 'corrected', 'aggiunto': 'added', 'ripristinato': 'restored',
+                'propagato': 'propagated', 'assente': 'missing', 'ambiguo': 'ambiguous'}
 
 MEASURE_LABELS = (
     ('bp_s', 'Beating Period [s]', '{:.3f}'),
@@ -28,7 +33,7 @@ MEASURE_LABELS = (
 )
 
 BEAT_COLUMNS = ('#', 'Dep. time [s]', 'Beating Period [s]', 'Rep. time [s]', 'FPD [s]', 'Dep. Voltage [µV]',
-                'Depolarizzazione', 'Ripolarizzazione')
+                'Depolarisation', 'Repolarisation')
 
 
 def operators_view(raw, fs):
@@ -72,7 +77,7 @@ def queue_entry(path, channel, chamber, result, error=None, record=None):
     record of the recording, ``results_export.record_from_state``) the measures shown are the review
     model's — the same the operator sees in the panel and that the Results export writes."""
     e = {'file': str(path), 'nome': Path(path).name, 'ingresso': channel, 'camera': chamber, 'errore': error,
-         'livello': 'rosso', 'titolo': 'Errore', 'riassunto': error or '', 'problemi': [], 'bp_s': None, 'fpd_s': None,
+         'livello': 'rosso', 'titolo': tr('Error'), 'riassunto': error or '', 'problemi': [], 'bp_s': None, 'fpd_s': None,
          'n_battiti': 0, 'analizzato': None, 'rivista': False, 'record': record, 'condizione': ''}
     if result is None:
         return e
@@ -115,34 +120,39 @@ def format_measures(m, reference=None):
     d = m.get('drift') or {}
     if m.get('drift_pct') is not None:
         txt = f"{m['drift_pct']:+.1f} % ({m['drift_bpm_min']:+.2f} bpm/min)"
-        note = '' if d.get('affidabile') else 'stima incerta'
+        note = '' if d.get('affidabile') else tr('uncertain estimate')
         if d.get('affidabile') and not d.get('significativa'):
             note = '≈ 0'
-        rows.append(('Deriva frequenza', txt, note, ''))
+        rows.append((tr('Rate drift'), txt, note, ''))
     else:
-        rows.append(('Deriva frequenza', '—', '', ''))
+        rows.append((tr('Rate drift'), '—', '', ''))
     if m.get('fpd_drift_pct') is not None:
         f = d.get('fpd') or {}
-        rows.append(('Deriva FPD', f"{m['fpd_drift_pct']:+.1f} % ({f.get('pendenza_ms_min', 0):+.1f} ms/min)",
-                     '' if f.get('affidabile') else 'stima incerta', ''))
+        rows.append((tr('FPD drift'), f"{m['fpd_drift_pct']:+.1f} % ({f.get('pendenza_ms_min', 0):+.1f} ms/min)",
+                     '' if f.get('affidabile') else tr('uncertain estimate'), ''))
     else:
-        rows.append(('Deriva FPD', '—', '', ''))
-    extra = [('Battiti', f"{m.get('n_battiti', 0)}", '', ''),
-             ('Intervalli esclusi dal BP', f"{m.get('intervalli_esclusi', 0)}", '', ''),
-             ('Battiti con FPD', f"{m.get('n_fpd', 0)}", '', ''),
-             ('Rilevamenti tolti dai veti', f"{m.get('n_vetoed', 0)}", '', ''),
-             ('Burst di rumore (tempo)', f"{100 * m.get('burst_frac', 0):.0f} %", '', '')]
+        rows.append((tr('FPD drift'), '—', '', ''))
+    extra = [(tr('Beats'), f"{m.get('n_battiti', 0)}", '', ''),
+             (tr('Intervals excluded from BP'), f"{m.get('intervalli_esclusi', 0)}", '', ''),
+             (tr('Beats with FPD'), f"{m.get('n_fpd', 0)}", '', ''),
+             (tr('Detections removed by the vetoes'), f"{m.get('n_vetoed', 0)}", '', ''),
+             (tr('Noise bursts (time)'), f"{100 * m.get('burst_frac', 0):.0f} %", '', '')]
     return rows + extra
 
 
+def source_word(token):
+    """Display word (current language) of a beat source token (``'aggiunto'`` → 'added' / 'aggiunto')."""
+    return tr(SOURCE_WORDS.get(token, token))
+
+
 def format_beat_rows(rows):
-    """Strings for the per-beat table (``BEAT_COLUMNS``)."""
+    """Strings for the per-beat table (``BEAT_COLUMNS``); the sources as display words."""
     def f(v, fmt):
         return fmt.format(v) if v is not None else '—'
     out = []
     for r in rows:
         out.append((str(r['n']), f(r['dep_s'], '{:.3f}'), f(r['bp_s'], '{:.3f}'), f(r['rep_s'], '{:.3f}'),
-                    f(r['fpd_s'], '{:.3f}'), f(r['amp_uV'], '{:.0f}'), r['stato'], r['stato_rip']))
+                    f(r['fpd_s'], '{:.3f}'), f(r['amp_uV'], '{:.0f}'), source_word(r['stato']), source_word(r['stato_rip'])))
     return out
 
 
@@ -153,4 +163,4 @@ def processing_text(result):
 
 
 __all__ = ['operators_view', 'inputs_of', 'queue_entry', 'queue_sort_key', 'format_measures', 'format_beat_rows',
-           'processing_text', 'MEASURE_LABELS', 'BEAT_COLUMNS', 'LEVEL_ORDER', 'LEVEL_LABEL']
+           'source_word', 'processing_text', 'MEASURE_LABELS', 'BEAT_COLUMNS', 'LEVEL_ORDER', 'LEVEL_LABEL', 'SOURCE_WORDS']

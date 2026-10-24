@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.16.0
+**Versione**: 3.19.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali) o con sistemi **Multi Channel Systems** (file HDF5 del protocollo MCS RawData, fino a 64 elettrodi).
@@ -175,6 +175,10 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.19.0 (Ottobre 2026) — interfaccia in inglese, italiano selezionabile
+
+L'inglese è ora la lingua sorgente di ogni testo per l'operatore (GUI, giudizio di qualità, deriva, stato della revisione, riga del filtraggio); l'italiano è un catalogo (`cardiac_fp_analyzer/translations/it.py`, 545 voci) che si sceglie da **Visualizza ▸ Lingua** e vale dal prossimo avvio (salvato nelle impostazioni dell'app, `ui/language`). `cardiac_fp_analyzer.i18n` (`tr`, `set_language`, senza Qt) e `pyside_app.i18n` (impostazione, traduzioni di Qt per i pulsanti standard). Le chiavi dei file (`.review.json`, risultati, fogli) non cambiano; i valori salvati dei battiti (`aggiunto`, `corretto`, …) restano quelli e vengono mostrati tradotti. Il test `tests/test_i18n.py` verifica che ogni testo del codice abbia la voce italiana con gli stessi segnaposto. Il manuale resta in italiano (§5.1 *Lingua* con le corrispondenze).
 
 ### v3.18.0 (Ottobre 2026) — export nel formato Results del laboratorio
 

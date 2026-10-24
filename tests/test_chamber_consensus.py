@@ -149,7 +149,7 @@ def test_summary_override_and_reference_through_batch(tmp_path):
     # irregular dose: not analysable with the chamber's reason
     ri = analyze_single_file(irr, channel='auto', verbose=False, config=cfg,
                              file_info_update={**upd, 'chamber_reference': r['chamber']['reference']})
-    assert ri['summary']['not_analysable'] and 'irregolare' in ri['summary']['not_analysable_reason']
+    assert ri['summary']['not_analysable'] and 'irregular' in ri['summary']['not_analysable_reason']
     assert np.isnan(ri['summary']['fpdc_ms_mean']) and ri['summary']['fpd_reliable'] is False
     # batch: the dose follows the baseline's wave
     out = batch_analyze(tmp_path, channel='auto', output_dir=tmp_path / 'out', verbose=False, config=cfg, n_workers=1)

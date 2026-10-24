@@ -37,6 +37,8 @@ from pathlib import Path
 import numpy as np
 from scipy import signal as sg
 
+from .i18n import tr
+
 logger = logging.getLogger(__name__)
 
 REVIEW_SUFFIX = '.review.json'
@@ -147,7 +149,7 @@ class ReviewState:
 
     def _begin(self):
         if self.locked:
-            raise RecordingClosedError('registrazione chiusa: sbloccarla per correggere')
+            raise RecordingClosedError(tr('recording closed: unlock it to correct'))
         self._history.append(self._snapshot())
         self._future.clear()
         if self.status == STATUS_APPROVED:
@@ -192,11 +194,13 @@ class ReviewState:
             self.status, self.closed_at = STATUS_APPROVED, ''
 
     def status_text(self):
+        """The workflow state as the operator reads it (current language of ``cardiac_fp_analyzer.i18n``)."""
         if self.status == STATUS_CLOSED:
-            return f"chiuso il {self.closed_at[:16].replace('T', ' ')}" + (f" ({self.approved_by})" if self.approved_by else '')
+            return (tr('closed on {0}').format(self.closed_at[:16].replace('T', ' '))
+                    + (f" ({self.approved_by})" if self.approved_by else ''))
         if self.status == STATUS_APPROVED:
-            return f"approvato da {self.approved_by or '?'} il {self.approved_at[:16].replace('T', ' ')}"
-        return 'da rivedere'
+            return tr('approved by {0} on {1}').format(self.approved_by or '?', self.approved_at[:16].replace('T', ' '))
+        return tr('to review')
 
     @property
     def can_undo(self):
@@ -329,7 +333,7 @@ class ReviewState:
         if snap:
             sample = self._snap_to_extremum(sample)
         if sample <= b.dep:
-            raise ValueError('la ripolarizzazione deve seguire la depolarizzazione')
+            raise ValueError(tr('the repolarisation must follow the depolarisation'))
         self._begin()
         b.repol, b.repol_source = sample, 'corretto'
         if not propagate:
@@ -449,7 +453,7 @@ class ReviewState:
         if prom < 3.0 * self._noise():
             # no recognisable wave at the chosen point: the criterion cannot be inferred, nothing is moved
             return {'spostati': 0, 'ambigui': len(self.beats) - 1, 'invariati': 0, 'criterio': None,
-                    'motivo': 'nessuna onda riconoscibile nel punto scelto: criterio non deducibile'}
+                    'motivo': tr('no recognisable wave at the chosen point: criterion cannot be inferred')}
         self.criterion = {'polarita': sign, 'latenza_s': lat, 'tolleranza_s': max(tol_min_s, tol_frac * lat),
                           'prominenza_minima': 0.3 * prom, 'battito_di_riferimento': k}
         self.polarity = sign

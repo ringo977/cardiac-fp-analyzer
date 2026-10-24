@@ -55,7 +55,7 @@ def test_review_state_and_panel_after_open(app, csv_path):
     assert "Beating Period" in panel._measure_rows[0][0].text()
     assert panel._measure_rows[0][1].text().startswith("2.0")
     assert panel._badge.text()
-    assert panel._processing.text().startswith("Filtraggio:")
+    assert panel._processing.text().startswith("Filtering:")
 
     # a correction through the state, then undo from the window
     n = st.n_beats()
@@ -83,7 +83,7 @@ def test_review_state_and_panel_after_open(app, csv_path):
     w._review_after_edit()
     probs = w.viewer.problems()
     assert any(p["tipo"] == "battito_mancante" for p in probs) and len(w.viewer._problem_regions) == len(probs)
-    assert "battito mancante" in panel._legend.text()
+    assert "missing beat" in panel._legend.text()
     w._review_next_problem(1)
     assert w.viewer.selected_beat() is not None
     w._review_next_problem(-1)
@@ -105,7 +105,7 @@ def test_review_state_and_panel_after_open(app, csv_path):
 
     # approval (tick) and closure (lock) through the panel, persisted, shown in the queue
     panel._chk_approved.setChecked(True)
-    assert st.approved and st.approved_by and "approvato" in panel._status_lbl.text()
+    assert st.approved and st.approved_by and "approved" in panel._status_lbl.text()
     assert not w._signal_tab._btn_recompute.styleSheet() or "pending" not in w._signal_tab._btn_recompute.styleSheet().lower()
     assert w.windowTitle().endswith("✓")
     # a new correction withdraws the approval and the panel follows
@@ -119,7 +119,7 @@ def test_review_state_and_panel_after_open(app, csv_path):
     from cardiac_fp_analyzer.review import ReviewState
     assert ReviewState.saved_status(csv_path) == {"el1": "approvato"}
     panel._btn_close.click()
-    assert st.locked and panel._btn_close.text().startswith("Sblocca") and not panel._btn_pos.isEnabled()
+    assert st.locked and panel._btn_close.text().startswith("Unlock") and not panel._btn_pos.isEnabled()
     n_before = st.n_beats()
     w._review_delete_selected()                       # refused while closed
     w._review_polarity(-1)
@@ -139,12 +139,12 @@ def test_review_state_and_panel_after_open(app, csv_path):
     panel.copy_beats()
     text = QApplication.clipboard().text()
     assert text.splitlines()[0] == "\t".join(("#", "Dep. time [s]", "Beating Period [s]", "Rep. time [s]", "FPD [s]",
-                                               "Dep. Voltage [µV]", "Depolarizzazione", "Ripolarizzazione"))
+                                               "Dep. Voltage [µV]", "Depolarisation", "Repolarisation"))
     assert len(text.splitlines()) == w._review_state.n_beats() + 1
     panel.copy_measures()
-    assert QApplication.clipboard().text().startswith("Misura\tValore\t%\tΔ baseline\nBeating Period [s]\t")
+    assert QApplication.clipboard().text().startswith("Measure\tValue\t%\tΔ baseline\nBeating Period [s]\t")
     # the measures table has the Results labels and the drift rows
-    assert panel._measures.rowCount() == 13 and "Deriva" in panel._measure_rows[6][0].text()
+    assert panel._measures.rowCount() == 13 and "drift" in panel._measure_rows[6][0].text()
 
     # 'Rifai l'analisi' drops the corrections in memory but leaves the sidecar alone
     w._review_state.remove_beat(0)
@@ -236,7 +236,7 @@ def test_review_queue_groups_the_electrodes_of_one_tissue(app, single_tissue_csv
     assert e["record"] is e["elettrodi"]["el1"]["record"] and e["record"]["electrode"] == "el1"
     top = q._tree.topLevelItem(0)
     assert top.childCount() == 2 and top.child(0).checkState(4) == Qt.Checked and top.child(1).checkState(4) == Qt.Unchecked
-    assert "(usato)" in top.text(3) and q.records()[0]["electrode"] == "el1"
+    assert "(used)" in top.text(3) and q.records()[0]["electrode"] == "el1"
     # the operator picks EL2: the tissue row follows, the choice is saved and 'auto' honours it
     assert q.choose_electrode(str(single_tissue_csv), "el2")
     e = q.entries()[0]

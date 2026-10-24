@@ -57,8 +57,10 @@ from cardiac_fp_analyzer.template_quality import (
     template_representativity,
 )
 from pyside_app import dialogs as _dialogs
+from pyside_app import i18n as _i18n
 from pyside_app import theme
 from pyside_app.chip_map import ChipMapWidget
+from pyside_app.i18n import tr
 from pyside_app.review_panel import ReviewPanel
 from pyside_app.review_queue import ReviewQueue
 from pyside_app.signal_viewer import SignalViewer
@@ -144,9 +146,9 @@ def _export_plot_png(plot_widget: pg.PlotWidget, parent: QWidget) -> None:
     """
     path, _ = QFileDialog.getSaveFileName(
         parent,
-        parent.tr("Esporta PNG"),
+        tr("Export PNG"),
         "",
-        parent.tr("PNG files (*.png);;All files (*)"),
+        tr("PNG files (*.png);;All files (*)"),
     )
     if not path:
         return
@@ -161,7 +163,7 @@ def _export_plot_png(plot_widget: pg.PlotWidget, parent: QWidget) -> None:
     except Exception as e:   # noqa: BLE001 — surface any export error
         QMessageBox.critical(
             parent,
-            parent.tr("Errore esportazione"),
+            tr("Export error"),
             f"{type(e).__name__}: {e}",
         )
 
@@ -182,20 +184,20 @@ def _add_zoom_mode_buttons(
     """
     vb = plot_widget.getPlotItem().vb
 
-    lbl = QLabel(parent.tr("Zoom:"))
+    lbl = QLabel(tr("Zoom:"))
     lbl.setStyleSheet("color: #888; padding-right: 2px;")
     bar.addWidget(lbl)
 
-    btn_pan = QPushButton(parent.tr("Pan"))
-    btn_pan.setToolTip(parent.tr(
-        "Pan — trascina il grafico per scorrere"
+    btn_pan = QPushButton(tr("Pan"))
+    btn_pan.setToolTip(tr(
+        "Pan — drag the plot to scroll"
     ))
     btn_pan.setCheckable(True)
     btn_pan.setChecked(True)
 
-    btn_box = QPushButton(parent.tr("Box"))
-    btn_box.setToolTip(parent.tr(
-        "Zoom area — trascina un rettangolo per ingrandirlo"
+    btn_box = QPushButton(tr("Box"))
+    btn_box.setToolTip(tr(
+        "Zoom area — drag a rectangle to enlarge it"
     ))
     btn_box.setCheckable(True)
 
@@ -278,10 +280,11 @@ class _SignalTab(QWidget):
         # Hidden for two-input CSV files; for a µHeart file it lists the
         # chambers of the layout and the channel combo lists the
         # electrodes of the chosen chamber.
-        self._lbl_chamber = QLabel(self.tr("Camera:"))
+        self._lbl_chamber = QLabel(tr("Chamber:"))
         self._combo_chamber = QComboBox()
-        self._combo_chamber.setToolTip(self.tr(
-            "Camera del chip (un microtessuto per camera). L'analisi usa solo gli elettrodi della camera."
+        self._combo_chamber.setToolTip(tr(
+            "Chip chamber (one microtissue per chamber). The analysis uses only the electrodes of "
+            "the chamber."
         ))
         self._combo_chamber.currentIndexChanged.connect(self._on_chamber_combo_changed)
         bar.addWidget(self._lbl_chamber)
@@ -289,14 +292,14 @@ class _SignalTab(QWidget):
         self._lbl_chamber.setVisible(False)
         self._combo_chamber.setVisible(False)
 
-        bar.addWidget(QLabel(self.tr("Canale:")))
+        bar.addWidget(QLabel(tr("Channel:")))
         self._combo_channel = QComboBox()
         for v in _CHANNEL_VALUES:
             self._combo_channel.addItem(_channel_label(v), userData=v)
         self._combo_channel.setCurrentIndex(0)  # Auto
-        self._combo_channel.setToolTip(self.tr(
-            "Scegli il canale da analizzare. 'Auto' usa il canale "
-            "con SNR migliore (vedi selezione automatica)."
+        self._combo_channel.setToolTip(tr(
+            "Choose the channel to analyse. 'Auto' uses the channel with the best SNR (see "
+            "automatic selection)."
         ))
         self._combo_channel.currentIndexChanged.connect(
             self._on_channel_combo_changed
@@ -311,16 +314,16 @@ class _SignalTab(QWidget):
         bar.addWidget(self._lbl_analyzed_ch)
         bar.addSpacing(18)
 
-        bar.addWidget(QLabel(self.tr("Modalità:")))
-        self._rb_view = QRadioButton(self.tr("Visualizza"))
-        self._rb_edit = QRadioButton(self.tr("Edit"))
+        bar.addWidget(QLabel(tr("Mode:")))
+        self._rb_view = QRadioButton(tr("View"))
+        self._rb_edit = QRadioButton(tr("Edit"))
         self._rb_view.setChecked(True)
         grp = QButtonGroup(self)
         for rb in (self._rb_view, self._rb_edit):
             grp.addButton(rb)
             bar.addWidget(rb)
         bar.addSpacing(24)
-        self._cb_raw = QCheckBox(self.tr("Mostra raw"))
+        self._cb_raw = QCheckBox(tr("Show raw"))
         bar.addWidget(self._cb_raw)
         bar.addStretch()
 
@@ -346,10 +349,10 @@ class _SignalTab(QWidget):
         # regardless of trackpad / mouse configuration.
         self._btn_zoom_in = QPushButton("＋")
         self._btn_zoom_out = QPushButton("−")
-        self._btn_fit = QPushButton(self.tr("Auto"))
-        self._btn_zoom_in.setToolTip(self.tr("Zoom avanti (Ctrl++)"))
-        self._btn_zoom_out.setToolTip(self.tr("Zoom indietro (Ctrl+-)"))
-        self._btn_fit.setToolTip(self.tr("Adatta alla finestra (Ctrl+0)"))
+        self._btn_fit = QPushButton(tr("Auto"))
+        self._btn_zoom_in.setToolTip(tr("Zoom in (Ctrl++)"))
+        self._btn_zoom_out.setToolTip(tr("Zoom out (Ctrl+-)"))
+        self._btn_fit.setToolTip(tr("Fit to window (Ctrl+0)"))
         for b in (self._btn_zoom_in, self._btn_zoom_out, self._btn_fit):
             b.setFixedHeight(24)
             bar2.addWidget(b)
@@ -357,9 +360,9 @@ class _SignalTab(QWidget):
         # PNG export — replicates the "Download plot as PNG" button that
         # Plotly's modebar offers. Useful when the user wants to drop a
         # figure into a report without screenshotting the window chrome.
-        self._btn_png = QPushButton(self.tr("PNG"))
-        self._btn_png.setToolTip(self.tr(
-            "Esporta la vista corrente come immagine PNG"
+        self._btn_png = QPushButton(tr("PNG"))
+        self._btn_png.setToolTip(tr(
+            "Export the current view as a PNG image"
         ))
         self._btn_png.setFixedHeight(24)
         bar2.addWidget(self._btn_png)
@@ -375,10 +378,10 @@ class _SignalTab(QWidget):
         #    kept scoped to the button only so the platform theme
         #    still drives the rest of the toolbar.
         bar2.addStretch()
-        self._btn_recompute = QPushButton(self.tr("Ricalcola"))
+        self._btn_recompute = QPushButton(tr("Recompute"))
         self._btn_recompute.setFixedHeight(24)
-        self._btn_recompute.setToolTip(self.tr(
-            "Ricalcola Parametri e Aritmie dai battiti attuali"
+        self._btn_recompute.setToolTip(tr(
+            "Recompute Parameters and Arrhythmias from the current beats"
         ))
         self._btn_recompute.setEnabled(False)
         self._btn_recompute.clicked.connect(self.recompute_requested.emit)
@@ -458,16 +461,15 @@ class _SignalTab(QWidget):
                 " padding: 0 8px;"
                 "}"
             )
-            self._btn_recompute.setText(self.tr("Ricalcola •"))
-            self._btn_recompute.setToolTip(self.tr(
-                "Ci sono modifiche non ancora applicate — clicca per "
-                "aggiornare Parametri e Aritmie."
+            self._btn_recompute.setText(tr("Recompute •"))
+            self._btn_recompute.setToolTip(tr(
+                "There are changes not yet applied — click to update Parameters and Arrhythmias."
             ))
         else:
             self._btn_recompute.setStyleSheet("")
-            self._btn_recompute.setText(self.tr("Ricalcola"))
-            self._btn_recompute.setToolTip(self.tr(
-                "Ricalcola Parametri e Aritmie dai battiti attuali"
+            self._btn_recompute.setText(tr("Recompute"))
+            self._btn_recompute.setToolTip(tr(
+                "Recompute Parameters and Arrhythmias from the current beats"
             ))
 
     # ─── Channel selector (task #82) ───────────────────────────────
@@ -508,7 +510,7 @@ class _SignalTab(QWidget):
         try:
             self._combo_chamber.clear()
             for c in layout.chambers:
-                txt = self.tr("{0}").format(c.name)
+                txt = tr("{0}").format(c.name)
                 if summary and summary.get(c.name):
                     txt += f"  ({summary[c.name]})"
                 self._combo_chamber.addItem(txt, userData=c.name)
@@ -584,7 +586,7 @@ class _SignalTab(QWidget):
             return
         if self.channel_choice() == CHANNEL_AUTO:
             self._lbl_analyzed_ch.setText(
-                self.tr("→ {0}").format(value.upper())
+                tr("→ {0}").format(value.upper())
             )
         else:
             self._lbl_analyzed_ch.setText("")
@@ -642,13 +644,13 @@ class _BeatsTab(QWidget):
     # Aritmie tab (and Streamlit's ``st.warning``) so the visual language
     # stays coherent across tabs.
     _BANNER_WARN_BG = "#b26a00"
-    # Risky-rhythm labels get a short IT translation in the banner body —
+    # Risky-rhythm labels get a short readable form in the banner body (shown through ``tr()``) —
     # we avoid exposing the raw classifier enum to the user.
     _RHYTHM_LABELS = {
-        "chaotic": "caotico",
-        "ambiguous": "ambiguo",
+        "chaotic": "chaotic",
+        "ambiguous": "ambiguous",
         "alternans_2_to_1": "alternans 2:1",
-        "trimodal": "trimodale",
+        "trimodal": "trimodal",
     }
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -678,7 +680,7 @@ class _BeatsTab(QWidget):
         up_lay = QVBoxLayout(upper)
         up_lay.setContentsMargins(0, 0, 0, 0)
 
-        self._hdr = QLabel(self.tr("Nessun segnale caricato."))
+        self._hdr = QLabel(tr("No signal loaded."))
         self._hdr.setStyleSheet("font-weight: bold; padding: 4px;")
         up_lay.addWidget(self._hdr)
 
@@ -729,13 +731,13 @@ class _BeatsTab(QWidget):
         self._zoom_mode_btns = _add_zoom_mode_buttons(
             self._plot, self, plot_bar,
         )
-        self._btn_plot_auto = QPushButton(self.tr("Auto"))
-        self._btn_plot_auto.setToolTip(self.tr("Adatta la vista ai dati"))
+        self._btn_plot_auto = QPushButton(tr("Auto"))
+        self._btn_plot_auto.setToolTip(tr("Fit the view to the data"))
         self._btn_plot_auto.setFixedHeight(24)
         plot_bar.addWidget(self._btn_plot_auto)
-        self._btn_plot_png = QPushButton(self.tr("PNG"))
-        self._btn_plot_png.setToolTip(self.tr(
-            "Esporta la vista corrente come immagine PNG"
+        self._btn_plot_png = QPushButton(tr("PNG"))
+        self._btn_plot_png.setToolTip(tr(
+            "Export the current view as a PNG image"
         ))
         self._btn_plot_png.setFixedHeight(24)
         plot_bar.addWidget(self._btn_plot_png)
@@ -757,10 +759,10 @@ class _BeatsTab(QWidget):
         # style as the Aritmie tab, same keys as the Streamlit view, so
         # the bilingual captions only need to be kept in sync once.
         tile_row = QHBoxLayout()
-        self._tile_fpd = _make_metric_tile(self.tr("FPD (ms)"))
-        self._tile_fpdc = _make_metric_tile(self.tr("FPDcF (ms)"))
-        self._tile_spike = _make_metric_tile(self.tr("Spike amp (mV)"))
-        self._tile_conf = _make_metric_tile(self.tr("FPD confidence"))
+        self._tile_fpd = _make_metric_tile(tr("FPD (ms)"))
+        self._tile_fpdc = _make_metric_tile(tr("FPDcF (ms)"))
+        self._tile_spike = _make_metric_tile(tr("Spike amp (mV)"))
+        self._tile_conf = _make_metric_tile(tr("FPD confidence"))
         for tile in (self._tile_fpd, self._tile_fpdc,
                      self._tile_spike, self._tile_conf):
             tile_row.addWidget(tile["frame"], stretch=1)
@@ -778,8 +780,8 @@ class _BeatsTab(QWidget):
         # ``included_changed`` only once (not once per row) — keeps the
         # Ricalcola pending-state UI snappy on long beat lists.
         bar = QHBoxLayout()
-        self._btn_all = QPushButton(self.tr("Seleziona tutti"))
-        self._btn_none = QPushButton(self.tr("Deseleziona tutti"))
+        self._btn_all = QPushButton(tr("Select all"))
+        self._btn_none = QPushButton(tr("Deselect all"))
         for b in (self._btn_all, self._btn_none):
             b.setFixedHeight(24)
             bar.addWidget(b)
@@ -788,10 +790,9 @@ class _BeatsTab(QWidget):
         self._btn_none.clicked.connect(lambda: self._set_all_included(False))
         lo_lay.addLayout(bar)
 
-        hint = QLabel(self.tr(
-            "Doppio-click su una riga per centrare il viewer sul battito.  "
-            "Deseleziona la checkbox per escludere il battito dal prossimo "
-            "ricalcolo."
+        hint = QLabel(tr(
+            "Double-click a row to centre the viewer on the beat.  Untick the checkbox to exclude "
+            "the beat from the next recompute."
         ))
         hint.setStyleSheet("color: #888; padding: 0 4px 4px 4px;")
         hint.setWordWrap(True)
@@ -799,11 +800,11 @@ class _BeatsTab(QWidget):
 
         self._table = QTableWidget(0, 5)
         self._table.setHorizontalHeaderLabels([
-            self.tr("Includi"),
-            self.tr("#"),
-            self.tr("t (s)"),
-            self.tr("RR (ms)"),
-            self.tr("Stato"),
+            tr("Include"),
+            tr("#"),
+            tr("t (s)"),
+            tr("RR (ms)"),
+            tr("Status"),
         ])
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -957,8 +958,8 @@ class _BeatsTab(QWidget):
         ever wired up) while still tracking the theme colour.
         """
         fg = theme.label_color()
-        self._plot.setLabel("bottom", self.tr("Tempo (ms)"), color=fg)
-        self._plot.setLabel("left", self.tr("Ampiezza (mV)"), color=fg)
+        self._plot.setLabel("bottom", tr("Time (ms)"), color=fg)
+        self._plot.setLabel("left", tr("Amplitude (mV)"), color=fg)
 
     def _on_theme_changed(self, _mode: str) -> None:
         """Live-repaint the Battiti template plot on theme toggle."""
@@ -974,7 +975,7 @@ class _BeatsTab(QWidget):
             self._table.setRowCount(0)
             n = len(indices)
             if n == 0 or time_vector is None or len(time_vector) == 0:
-                self._hdr.setText(self.tr("Nessun battito."))
+                self._hdr.setText(tr("No beats."))
                 self._table.setSortingEnabled(True)
                 return
             tv_len = int(len(time_vector))
@@ -1085,20 +1086,19 @@ class _BeatsTab(QWidget):
 
         reasons: list[str] = []
         if risky_rhythm:
-            label = self._RHYTHM_LABELS.get(rhythm_type, rhythm_type)
-            reasons.append(self.tr("ritmo classificato '{0}'").format(label))
+            label = tr(self._RHYTHM_LABELS.get(rhythm_type, rhythm_type))
+            reasons.append(tr("rhythm classified '{0}'").format(label))
         if dispersive_fpd:
-            reasons.append(self.tr(
-                "dispersione FPD elevata (CV = {0:.0f}%)"
+            reasons.append(tr(
+                "high FPD dispersion (CV = {0:.0f}%)"
             ).format(fpd_cv * 100.0))
 
-        self._banner_title.setText(self.tr(
-            "Template potenzialmente non rappresentativo"
+        self._banner_title.setText(tr(
+            "Template possibly not representative"
         ))
-        self._banner_body.setText(self.tr(
-            "Il template medio potrebbe mascherare la morfologia reale: "
-            "{0}. Verifica il tracciato sovrapposto prima di trarre "
-            "conclusioni sulla FPD."
+        self._banner_body.setText(tr(
+            "The mean template may hide the real morphology: {0}. Check the overlaid traces before "
+            "drawing conclusions on the FPD."
         ).format(" · ".join(reasons)))
         self._banner.setVisible(True)
 
@@ -1117,7 +1117,7 @@ class _BeatsTab(QWidget):
         if result is None:
             self._amp_scale = 1.0
             self._amp_unit = "mV"
-            self._plot.setLabel("left", self.tr("Ampiezza (mV)"))
+            self._plot.setLabel("left", tr("Amplitude (mV)"))
             return
 
         bd = result.get("beats_data") or []
@@ -1130,7 +1130,7 @@ class _BeatsTab(QWidget):
             # No beats yet or missing fs — leave the plot empty.
             self._amp_scale = 1.0
             self._amp_unit = "mV"
-            self._plot.setLabel("left", self.tr("Ampiezza (mV)"))
+            self._plot.setLabel("left", tr("Amplitude (mV)"))
             return
 
         # Pick uV vs mV from the first beat's peak-to-peak amplitude,
@@ -1141,11 +1141,11 @@ class _BeatsTab(QWidget):
         if ptp < 1e-3:
             self._amp_scale = 1e6
             self._amp_unit = "uV"
-            self._plot.setLabel("left", self.tr("Ampiezza (µV)"))
+            self._plot.setLabel("left", tr("Amplitude (µV)"))
         else:
             self._amp_scale = 1e3
             self._amp_unit = "mV"
-            self._plot.setLabel("left", self.tr("Ampiezza (mV)"))
+            self._plot.setLabel("left", tr("Amplitude (mV)"))
 
         # Down-sample the beat list to ≤ 30 evenly-spaced entries so
         # heavy recordings don't stall the plot.
@@ -1175,7 +1175,7 @@ class _BeatsTab(QWidget):
             pen_tmpl = pg.mkPen(color=(220, 40, 40), width=2.5)
             self._plot.plot(
                 x_tmpl, np.asarray(tmpl) * self._amp_scale, pen=pen_tmpl,
-                name=self.tr("Template"),
+                name=tr("Template"),
             )
 
     def _render_tiles(self, result: dict | None) -> None:
@@ -1246,11 +1246,11 @@ class _BeatsTab(QWidget):
             except (TypeError, ValueError):
                 f = float("nan")
             if f != f:   # NaN
-                return self.tr("No FPD")
-            return self.tr("OK")
+                return tr("No FPD")
+            return tr("OK")
         # No params for this beat — either rejected or provisional.
         if sample_idx in self._analyzed_indices:
-            return self.tr("Scartato")
+            return tr("Discarded")
         return "—"
 
     def _update_header_count(self) -> None:
@@ -1263,12 +1263,12 @@ class _BeatsTab(QWidget):
         )
         n_inc = n - n_excl
         if n == 0:
-            self._hdr.setText(self.tr("Nessun battito."))
+            self._hdr.setText(tr("No beats."))
         elif n_excl == 0:
-            self._hdr.setText(self.tr("{0} battiti inclusi").format(n))
+            self._hdr.setText(tr("{0} beats included").format(n))
         else:
-            self._hdr.setText(self.tr(
-                "{0} battiti inclusi, {1} esclusi (su {2})"
+            self._hdr.setText(tr(
+                "{0} beats included, {1} excluded (out of {2})"
             ).format(n_inc, n_excl, n))
 
     # ─── Internal: signal handlers ────────────────────────────────
@@ -1430,19 +1430,19 @@ class _ParamsTab(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
 
         # Per-beat table ------------------------------------------------
-        self._hdr_beat = QLabel(self.tr("Parametri per battito"))
+        self._hdr_beat = QLabel(tr("Per-beat parameters"))
         self._hdr_beat.setStyleSheet("font-weight: bold; padding: 4px;")
         layout.addWidget(self._hdr_beat)
 
         self._per_beat = QTableWidget(0, 7)
         self._per_beat.setHorizontalHeaderLabels([
-            self.tr("Beat"),
-            self.tr("RR (ms)"),
-            self.tr("Spike amp (mV)"),
-            self.tr("FPD (ms)"),
-            self.tr("FPDcF (ms)"),
-            self.tr("Rise time (ms)"),
-            self.tr("Max dV/dt"),
+            tr("Beat"),
+            tr("RR (ms)"),
+            tr("Spike amp (mV)"),
+            tr("FPD (ms)"),
+            tr("FPDcF (ms)"),
+            tr("Rise time (ms)"),
+            tr("Max dV/dt"),
         ])
         self._per_beat.verticalHeader().setVisible(False)
         self._per_beat.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -1456,7 +1456,7 @@ class _ParamsTab(QWidget):
         layout.addWidget(self._per_beat, stretch=2)
 
         # Summary table -------------------------------------------------
-        self._hdr_sum = QLabel(self.tr("Riepilogo"))
+        self._hdr_sum = QLabel(tr("Summary"))
         self._hdr_sum.setStyleSheet(
             "font-weight: bold; padding: 8px 4px 4px 4px;"
         )
@@ -1464,10 +1464,10 @@ class _ParamsTab(QWidget):
 
         self._summary = QTableWidget(0, 4)
         self._summary.setHorizontalHeaderLabels([
-            self.tr("Parametro"),
-            self.tr("Media"),
-            self.tr("SD"),
-            self.tr("CV%"),
+            tr("Parameter"),
+            tr("Mean"),
+            tr("SD"),
+            tr("CV%"),
         ])
         self._summary.verticalHeader().setVisible(False)
         self._summary.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -1543,7 +1543,7 @@ class _ParamsTab(QWidget):
 
         # Keep the header counts in sync with the current content.
         self._hdr_beat.setText(
-            self.tr("Parametri per battito — {0} righe").format(len(all_p))
+            tr("Per-beat parameters — {0} rows").format(len(all_p))
         )
 
 
@@ -1589,7 +1589,7 @@ class _ArrhythmiaTab(QWidget):
         banner_lay = QHBoxLayout(self._banner)
         banner_lay.setContentsMargins(12, 8, 12, 8)
 
-        self._lbl_class = QLabel(self.tr("Nessun referto."))
+        self._lbl_class = QLabel(tr("No report."))
         self._lbl_class.setStyleSheet(
             "color: white; font-size: 16px; font-weight: bold;"
         )
@@ -1611,7 +1611,7 @@ class _ArrhythmiaTab(QWidget):
         root.addWidget(self._banner)
 
         # ── Flags ────────────────────────────────────────────────
-        self._hdr_flags = QLabel(self.tr("Flag rilevate"))
+        self._hdr_flags = QLabel(tr("Flags detected"))
         self._hdr_flags.setStyleSheet(
             "font-weight: bold; padding: 8px 4px 2px 4px;"
         )
@@ -1624,7 +1624,7 @@ class _ArrhythmiaTab(QWidget):
         root.addWidget(self._flags_list)
 
         # ── Residual metrics (4 tiles) ───────────────────────────
-        self._hdr_resid = QLabel(self.tr("Analisi residuo"))
+        self._hdr_resid = QLabel(tr("Residual analysis"))
         self._hdr_resid.setStyleSheet(
             "font-weight: bold; padding: 8px 4px 2px 4px;"
         )
@@ -1632,12 +1632,12 @@ class _ArrhythmiaTab(QWidget):
 
         resid_row = QHBoxLayout()
         self._tile_morph = self._make_metric_tile(
-            self.tr("Morphology instability")
+            tr("Morphology instability")
         )
-        self._tile_ead = self._make_metric_tile(self.tr("EAD incidence"))
-        self._tile_stv = self._make_metric_tile(self.tr("STV FPDcF (ms)"))
+        self._tile_ead = self._make_metric_tile(tr("EAD incidence"))
+        self._tile_stv = self._make_metric_tile(tr("STV FPDcF (ms)"))
         self._tile_base = self._make_metric_tile(
-            self.tr("Baseline-relative")
+            tr("Baseline-relative")
         )
         for tile in (self._tile_morph, self._tile_ead,
                      self._tile_stv, self._tile_base):
@@ -1645,7 +1645,7 @@ class _ArrhythmiaTab(QWidget):
         root.addLayout(resid_row)
 
         # ── Events table ─────────────────────────────────────────
-        self._hdr_events = QLabel(self.tr("Eventi"))
+        self._hdr_events = QLabel(tr("Events"))
         self._hdr_events.setStyleSheet(
             "font-weight: bold; padding: 8px 4px 2px 4px;"
         )
@@ -1653,9 +1653,9 @@ class _ArrhythmiaTab(QWidget):
 
         self._events_tbl = QTableWidget(0, 3)
         self._events_tbl.setHorizontalHeaderLabels([
-            self.tr("Battito"),
-            self.tr("Tipo"),
-            self.tr("Dettagli"),
+            tr("Beat"),
+            tr("Type"),
+            tr("Details"),
         ])
         self._events_tbl.verticalHeader().setVisible(False)
         self._events_tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -1690,19 +1690,19 @@ class _ArrhythmiaTab(QWidget):
         """
         ar = (result or {}).get("arrhythmia_report")
         if ar is None:
-            self._lbl_class.setText(self.tr("Nessun referto disponibile."))
+            self._lbl_class.setText(tr("No report available."))
             self._lbl_score.setText("")
             self._bar_score.setValue(0)
             self._apply_banner_style(self._BANNER_NEUTRAL)
             self._flags_list.clear()
             self._flags_list.addItem(
-                QListWidgetItem(self.tr("Nessuna flag (referto assente)."))
+                QListWidgetItem(tr("No flags (report missing)."))
             )
             for tile in (self._tile_morph, self._tile_ead,
                          self._tile_stv, self._tile_base):
                 tile["value"].setText("—")
             self._events_tbl.setRowCount(0)
-            self._hdr_events.setText(self.tr("Eventi"))
+            self._hdr_events.setText(tr("Events"))
             return
 
         # ── Banner ──────────────────────────────────────────────
@@ -1721,7 +1721,7 @@ class _ArrhythmiaTab(QWidget):
         self._apply_banner_style(color)
         self._lbl_class.setText(classification)
         self._lbl_score.setText(
-            self.tr("Risk score: {0}/100").format(score)
+            tr("Risk score: {0}/100").format(score)
         )
         self._bar_score.setValue(score)
 
@@ -1730,7 +1730,7 @@ class _ArrhythmiaTab(QWidget):
         flags = list(getattr(ar, "flags", []) or [])
         if not flags:
             item = QListWidgetItem(
-                self.tr("Nessuna flag aritmica rilevata.")
+                tr("No arrhythmia flag detected.")
             )
             item.setForeground(Qt.darkGreen)
             self._flags_list.addItem(item)
@@ -1739,7 +1739,7 @@ class _ArrhythmiaTab(QWidget):
                 sev = str(f.get("severity", "info")).lower()
                 label, hex_color = self._SEV_LABEL.get(
                     sev, ("???", "#555555"))
-                text = self.tr("[{0}] {1} — {2}").format(
+                text = tr("[{0}] {1} — {2}").format(
                     label,
                     f.get("type", "?"),
                     f.get("description", ""),
@@ -1771,7 +1771,7 @@ class _ArrhythmiaTab(QWidget):
             self._tile_base["value"].setText("—")
         else:
             self._tile_base["value"].setText(
-                self.tr("Sì") if br else self.tr("No")
+                tr("Yes") if br else tr("No")
             )
 
         # ── Events table ───────────────────────────────────────
@@ -1794,14 +1794,14 @@ class _ArrhythmiaTab(QWidget):
         self._events_tbl.setSortingEnabled(True)
         self._events_tbl.sortItems(0, Qt.AscendingOrder)
         self._hdr_events.setText(
-            self.tr("Eventi — {0}").format(len(events))
+            tr("Events — {0}").format(len(events))
         )
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(self.tr("cardiac-fp-analyzer"))
+        self.setWindowTitle(tr("cardiac-fp-analyzer"))
         self.resize(1400, 800)
 
         # ─── Tabs ──────────────────────────────────────────────────
@@ -1812,10 +1812,10 @@ class MainWindow(QMainWindow):
         self._beats_tab = _BeatsTab()
         self._params_tab = _ParamsTab()
         self._arrhythmia_tab = _ArrhythmiaTab()
-        self._tabs.addTab(self._signal_tab, self.tr("Segnale"))
-        self._tabs.addTab(self._beats_tab, self.tr("Battiti"))
-        self._tabs.addTab(self._params_tab, self.tr("Parametri"))
-        self._tabs.addTab(self._arrhythmia_tab, self.tr("Aritmie"))
+        self._tabs.addTab(self._signal_tab, tr("Signal"))
+        self._tabs.addTab(self._beats_tab, tr("Beats"))
+        self._tabs.addTab(self._params_tab, tr("Parameters"))
+        self._tabs.addTab(self._arrhythmia_tab, tr("Arrhythmias"))
         self.setCentralWidget(self._tabs)
 
         # ─── Analysis state ────────────────────────────────────────
@@ -1890,21 +1890,21 @@ class MainWindow(QMainWindow):
         self._chip: dict | None = None
 
         # ─── Menu ──────────────────────────────────────────────────
-        m_file = self.menuBar().addMenu(self.tr("&File"))
-        act_open = QAction(self.tr("&Apri registrazione..."), self)
+        m_file = self.menuBar().addMenu(tr("&File"))
+        act_open = QAction(tr("&Open recording..."), self)
         act_open.setShortcut("Ctrl+O")
         act_open.triggered.connect(self._on_open)
         m_file.addAction(act_open)
         m_file.addSeparator()
         # Impostazioni dialog (task #74) — Cmd+, on macOS, Ctrl+, elsewhere.
         # Qt maps "Ctrl+," to "Cmd+," automatically on mac.
-        act_settings = QAction(self.tr("&Impostazioni..."), self)
+        act_settings = QAction(tr("&Settings..."), self)
         act_settings.setShortcut("Ctrl+,")
         act_settings.setMenuRole(QAction.PreferencesRole)  # mac: → app menu
         act_settings.triggered.connect(self._on_settings)
         m_file.addAction(act_settings)
         m_file.addSeparator()
-        act_quit = QAction(self.tr("&Esci"), self)
+        act_quit = QAction(tr("&Quit"), self)
         act_quit.setShortcut("Ctrl+Q")
         act_quit.triggered.connect(self.close)
         m_file.addAction(act_quit)
@@ -1917,7 +1917,7 @@ class MainWindow(QMainWindow):
         # 21 CFR Part 58 and CDISC ``STUDYID`` — see the module
         # docstring of ``cardiac_fp_analyzer.study`` for rationale.
         self._study_panel = StudyPanel()
-        self._study_dock = QDockWidget(self.tr("Studi"), self)
+        self._study_dock = QDockWidget(tr("Studies"), self)
         self._study_dock.setObjectName("studies-dock")
         self._study_dock.setWidget(self._study_panel)
         self._study_dock.setAllowedAreas(
@@ -1935,9 +1935,9 @@ class MainWindow(QMainWindow):
         self._study_panel.file_activated.connect(self._on_study_file_activated)
         self._study_panel.study_changed.connect(self._on_study_changed)
 
-        m_studies = self.menuBar().addMenu(self.tr("&Studi"))
+        m_studies = self.menuBar().addMenu(tr("&Studies"))
         act_toggle_studies = self._study_dock.toggleViewAction()
-        act_toggle_studies.setText(self.tr("&Mostra pannello studi"))
+        act_toggle_studies.setText(tr("&Show studies panel"))
         act_toggle_studies.setShortcut("Ctrl+Shift+P")
         m_studies.addAction(act_toggle_studies)
 
@@ -1945,13 +1945,13 @@ class MainWindow(QMainWindow):
         # left dock with the review queue, menu and keyboard shortcuts.
         self._review_state = None
         self._review_panel = ReviewPanel()
-        self._review_dock = QDockWidget(self.tr("Revisione"), self)
+        self._review_dock = QDockWidget(tr("Review"), self)
         self._review_dock.setObjectName("review-dock")
         self._review_dock.setWidget(self._review_panel)
         self._review_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self.addDockWidget(Qt.RightDockWidgetArea, self._review_dock)
         self._review_queue = ReviewQueue(lambda: self._config)
-        self._queue_dock = QDockWidget(self.tr("Coda di revisione"), self)
+        self._queue_dock = QDockWidget(tr("Review queue"), self)
         self._queue_dock.setObjectName("review-queue-dock")
         self._queue_dock.setWidget(self._review_queue)
         self._queue_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
@@ -1977,35 +1977,35 @@ class MainWindow(QMainWindow):
         self.viewer.review_report.connect(lambda msg: self.statusBar().showMessage(msg, 8000))
         self.viewer.beats_changed.connect(self._review_panel.refresh)
 
-        m_review = self.menuBar().addMenu(self.tr("&Revisione"))
+        m_review = self.menuBar().addMenu(tr("&Review"))
         act_queue = self._queue_dock.toggleViewAction()
-        act_queue.setText(self.tr("&Coda di revisione"))
+        act_queue.setText(tr("Review &queue"))
         act_queue.setShortcut("Ctrl+Shift+R")
         m_review.addAction(act_queue)
         act_panel = self._review_dock.toggleViewAction()
-        act_panel.setText(self.tr("Pannello &misure"))
+        act_panel.setText(tr("&Measures panel"))
         m_review.addAction(act_panel)
         m_review.addSeparator()
-        act_undo = QAction(self.tr("&Annulla correzione"), self)
+        act_undo = QAction(tr("&Undo correction"), self)
         act_undo.setShortcut(QKeySequence(QKeySequence.Undo))
         act_undo.triggered.connect(self._review_undo)
         m_review.addAction(act_undo)
-        act_redo = QAction(self.tr("&Ripeti correzione"), self)
+        act_redo = QAction(tr("&Redo correction"), self)
         act_redo.setShortcut(QKeySequence(QKeySequence.Redo))
         act_redo.triggered.connect(self._review_redo)
         m_review.addAction(act_redo)
-        act_save = QAction(self.tr("&Salva correzioni"), self)
+        act_save = QAction(tr("&Save corrections"), self)
         act_save.setShortcut(QKeySequence(QKeySequence.Save))
         act_save.triggered.connect(self._review_save)
         m_review.addAction(act_save)
         m_review.addSeparator()
-        for text, key, slot in ((self.tr("Battito precedente"), "Left", lambda: self._review_step(-1)),
-                                (self.tr("Battito successivo"), "Right", lambda: self._review_step(1)),
-                                (self.tr("Prossimo tratto da controllare"), "Ctrl+G", lambda: self._review_next_problem(1)),
-                                (self.tr("Tratto da controllare precedente"), "Ctrl+Shift+G", lambda: self._review_next_problem(-1)),
-                                (self.tr("Togli il battito selezionato"), "Delete", self._review_delete_selected),
-                                (self.tr("Ripolarizzazione: picco positivo"), "P", lambda: self._review_polarity(1)),
-                                (self.tr("Ripolarizzazione: picco negativo"), "N", lambda: self._review_polarity(-1))):
+        for text, key, slot in ((tr("Previous beat"), "Left", lambda: self._review_step(-1)),
+                                (tr("Next beat"), "Right", lambda: self._review_step(1)),
+                                (tr("Next stretch to check"), "Ctrl+G", lambda: self._review_next_problem(1)),
+                                (tr("Previous stretch to check"), "Ctrl+Shift+G", lambda: self._review_next_problem(-1)),
+                                (tr("Remove the selected beat"), "Delete", self._review_delete_selected),
+                                (tr("Repolarisation: positive peak"), "P", lambda: self._review_polarity(1)),
+                                (tr("Repolarisation: negative peak"), "N", lambda: self._review_polarity(-1))):
             a = QAction(text, self)
             a.setShortcut(QKeySequence(key))
             a.triggered.connect(slot)
@@ -2017,16 +2017,16 @@ class MainWindow(QMainWindow):
         # theme always carries a ✓ — no radio-button widget needed.
         # QSettings persistence + live re-apply to every plot is handled
         # in ``theme.py``; the menu is just a UI over that model.
-        m_view = self.menuBar().addMenu(self.tr("&Visualizza"))
-        m_theme = m_view.addMenu(self.tr("&Tema"))
+        m_view = self.menuBar().addMenu(tr("&View"))
+        m_theme = m_view.addMenu(tr("&Theme"))
         self._theme_group = QActionGroup(self)
         self._theme_group.setExclusive(True)
-        self._act_theme_dark = QAction(self.tr("Scuro"), self)
+        self._act_theme_dark = QAction(tr("Dark"), self)
         self._act_theme_dark.setCheckable(True)
         self._act_theme_dark.setData("dark")
         self._theme_group.addAction(self._act_theme_dark)
         m_theme.addAction(self._act_theme_dark)
-        self._act_theme_light = QAction(self.tr("Chiaro"), self)
+        self._act_theme_light = QAction(tr("Light"), self)
         self._act_theme_light.setCheckable(True)
         self._act_theme_light.setData("light")
         self._theme_group.addAction(self._act_theme_light)
@@ -2038,6 +2038,24 @@ class MainWindow(QMainWindow):
         (self._act_theme_dark if current == "dark"
          else self._act_theme_light).setChecked(True)
         self._theme_group.triggered.connect(self._on_theme_menu_triggered)
+
+        # Language submenu (v3.19): English / Italiano, exclusive and checkable like the theme.  The
+        # choice is saved at once in QSettings (``pyside_app.i18n``) and takes effect at the next start,
+        # because every widget sets its texts when it is built.
+        m_lang = m_view.addMenu(tr("&Language"))
+        m_lang.setToolTip(tr("Language of menus, panels and messages (takes effect at the next start)"))
+        self._lang_group = QActionGroup(self)
+        self._lang_group.setExclusive(True)
+        self._lang_actions = {}
+        for code in _i18n.LANGUAGES:
+            a = QAction(tr(_i18n.LANGUAGE_NAMES[code]), self)
+            a.setCheckable(True)
+            a.setData(code)
+            self._lang_group.addAction(a)
+            m_lang.addAction(a)
+            self._lang_actions[code] = a
+        self._lang_actions.get(_i18n.configured_language(), self._lang_actions["en"]).setChecked(True)
+        self._lang_group.triggered.connect(self._on_language_menu_triggered)
 
         # ─── Keyboard shortcuts (global) ───────────────────────────
         # Registered at the MainWindow level so they fire no matter
@@ -2059,7 +2077,7 @@ class MainWindow(QMainWindow):
         # ─── Status bar ────────────────────────────────────────────
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage(
-            self.tr("Pronto — File ▶ Apri registrazione (CSV, MCS .h5, .npz o NWB) per iniziare.")
+            tr("Ready — File ▶ Open recording (CSV, MCS .h5, .npz or NWB) to begin.")
         )
 
     # ─── Convenience accessors ────────────────────────────────────
@@ -2122,7 +2140,7 @@ class MainWindow(QMainWindow):
             dtype=int,
         )
         self.statusBar().showMessage(
-            self.tr("Ricalcolo in corso ({0} battiti)...").format(len(bi_edited))
+            tr("Recomputing ({0} beats)...").format(len(bi_edited))
         )
         QApplication.processEvents()
 
@@ -2150,11 +2168,11 @@ class MainWindow(QMainWindow):
                 )
         except Exception as e:   # noqa: BLE001 — surface any pipeline error
             QMessageBox.critical(
-                self, self.tr("Errore ricalcolo"),
+                self, tr("Recompute error"),
                 f"{type(e).__name__}: {e}",
             )
             self.statusBar().showMessage(
-                self.tr("Errore durante il ricalcolo.")
+                tr("Error during the recompute.")
             )
             return
 
@@ -2248,18 +2266,16 @@ class MainWindow(QMainWindow):
                     )
                     save_overrides(str(self._current_csv_path), ov)
                     if ov.is_empty():
-                        sidecar_info = self.tr(" · correzioni azzerate")
+                        sidecar_info = tr(" · corrections cleared")
                     else:
-                        sidecar_info = self.tr(
-                            " · salvate +{0}/-{1}"
+                        sidecar_info = tr(
+                            " · saved +{0}/-{1}"
                         ).format(len(ov.added_s), len(ov.removed_s))
                 except OSError as e:   # disk full, permissions, etc.
                     QMessageBox.warning(
-                        self, self.tr("Salvataggio correzioni"),
-                        self.tr(
-                            "Non è stato possibile salvare il file di "
-                            "correzioni ({0}).  Il ricalcolo è comunque "
-                            "valido."
+                        self, tr("Saving corrections"),
+                        tr(
+                            "The corrections file could not be saved ({0}).  The recompute is still valid."
                         ).format(e),
                     )
 
@@ -2280,14 +2296,13 @@ class MainWindow(QMainWindow):
         n_out = int(len(kept_bi))
         if n_in > 0 and n_out < n_in:
             dropped = n_in - n_out
-            self.statusBar().showMessage(self.tr(
-                "Ricalcolo completato — {0} battiti inclusi "
-                "({1} filtrati da QC/ritmo/RR su {2}){3}"
+            self.statusBar().showMessage(tr(
+                "Recompute completed — {0} beats included ({1} filtered by QC/rhythm/RR out of {2}){3}"
             ).format(n_out, dropped, n_in, sidecar_info))
         else:
             self.statusBar().showMessage(
-                self.tr(
-                    "Ricalcolo completato — {0} battiti inclusi{1}"
+                tr(
+                    "Recompute completed — {0} beats included{1}"
                 ).format(n_out, sidecar_info)
             )
 
@@ -2302,14 +2317,14 @@ class MainWindow(QMainWindow):
             return
         if self._review_state is not None and self._review_state.undo():
             self._review_after_edit()
-            self.statusBar().showMessage(self.tr("Correzione annullata"), 3000)
+            self.statusBar().showMessage(tr("Correction undone"), 3000)
 
     def _review_redo(self) -> None:
         if self._review_locked():
             return
         if self._review_state is not None and self._review_state.redo():
             self._review_after_edit()
-            self.statusBar().showMessage(self.tr("Correzione ripetuta"), 3000)
+            self.statusBar().showMessage(tr("Correction redone"), 3000)
 
     def _review_step(self, step: int) -> None:
         if self._review_state is None:
@@ -2321,7 +2336,7 @@ class MainWindow(QMainWindow):
         """True (and a status-bar message) when the current recording is closed."""
         st = self._review_state
         if st is not None and getattr(st, 'locked', False):
-            self.statusBar().showMessage(self.tr("Registrazione chiusa: Sblocca per modificarla"), 4000)
+            self.statusBar().showMessage(tr("Recording closed: Unlock to change it"), 4000)
             return True
         return False
 
@@ -2333,7 +2348,7 @@ class MainWindow(QMainWindow):
         try:
             st.save(str(self._current_csv_path))
         except OSError as exc:
-            QMessageBox.warning(self, self.tr("Salvataggio"), str(exc))
+            QMessageBox.warning(self, tr("Saving"), str(exc))
             return
         fi = (self._current_result or {}).get("file_info") or {}
         self._review_queue.mark_reviewed(str(self._current_csv_path), st.channel, fi.get("chamber"),
@@ -2360,17 +2375,17 @@ class MainWindow(QMainWindow):
             return
         if st.can_undo or st.changes().get('corrected'):
             ans = QMessageBox.question(
-                self, self.tr("Rifai l'analisi"),
-                self.tr("Le correzioni fatte a questa registrazione verranno scartate (quelle salvate nel .review.json "
-                        "restano finché non salvi di nuovo). Rifare l'analisi automatica?"),
+                self, tr("Redo analysis"),
+                tr("The corrections made to this recording will be discarded (those saved in the "
+                   ".review.json stay until you save again). Redo the automatic analysis?"),
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if ans != QMessageBox.Yes:
                 return
         self._ignore_sidecar_once = True
         channel = st.channel if st.channel in ("el1", "el2") else CHANNEL_AUTO
         self._run_analysis(str(self._current_csv_path), channel)
-        self.statusBar().showMessage(self.tr("Analisi automatica rifatta: correzioni in memoria scartate "
-                                             "(il .review.json resta finché non salvi)"), 8000)
+        self.statusBar().showMessage(tr("Automatic analysis redone: corrections in memory "
+                                        "discarded (the .review.json stays until you save)"), 8000)
 
     def _review_approve(self, on: bool) -> None:
         st = self._review_state
@@ -2378,10 +2393,10 @@ class MainWindow(QMainWindow):
             return
         if on:
             st.approve()
-            msg = self.tr("Registrazione approvata da {0}").format(st.approved_by)
+            msg = tr("Recording approved by {0}").format(st.approved_by)
         else:
             st.unapprove()
-            msg = self.tr("Approvazione tolta")
+            msg = tr("Approval withdrawn")
         self._review_persist_state()
         self.statusBar().showMessage(msg, 5000)
 
@@ -2391,10 +2406,10 @@ class MainWindow(QMainWindow):
             return
         if close:
             st.close()
-            msg = self.tr("Registrazione chiusa (bloccata)")
+            msg = tr("Recording closed (locked)")
         else:
             st.reopen()
-            msg = self.tr("Registrazione sbloccata: resta approvata")
+            msg = tr("Recording unlocked: it stays approved")
         self._review_persist_state()
         self.statusBar().showMessage(msg, 5000)
 
@@ -2406,12 +2421,12 @@ class MainWindow(QMainWindow):
         from .signal_viewer import PROBLEM_LABELS
         prob = self.viewer.goto_next_problem(step)
         if prob is None:
-            self.statusBar().showMessage(self.tr("Nessun tratto evidenziato in questa registrazione"), 4000)
+            self.statusBar().showMessage(tr("No highlighted stretch in this recording"), 4000)
             return
         self._review_panel.select_row(self.viewer.selected_beat())
         t = prob['start'] / self._review_state.fs
-        self.statusBar().showMessage(self.tr("{0} a {1:.1f} s (battito #{2})").format(
-            PROBLEM_LABELS.get(prob['tipo'], prob['tipo']), t, prob['k'] + 1), 6000)
+        self.statusBar().showMessage(tr("{0} at {1:.1f} s (beat #{2})").format(
+            tr(PROBLEM_LABELS.get(prob['tipo'], prob['tipo'])), t, prob['k'] + 1), 6000)
 
     def _review_select(self, k: int) -> None:
         if self._review_state is None:
@@ -2435,8 +2450,8 @@ class MainWindow(QMainWindow):
         rep = st.set_polarity(sign)
         self._review_after_edit()
         if rep:
-            self.statusBar().showMessage(self.tr(
-                "Ripolarizzazione sul picco {0}: spostati {1}, invariati {2}, ambigui {3}").format(
+            self.statusBar().showMessage(tr(
+                "Repolarisation on the {0} peak: moved {1}, unchanged {2}, ambiguous {3}").format(
                 "positivo" if sign > 0 else "negativo", rep.get("spostati", 0), rep.get("invariati", 0),
                 rep.get("ambigui", 0)), 8000)
 
@@ -2449,7 +2464,7 @@ class MainWindow(QMainWindow):
             if st.restore_vetoed(v) is not None:
                 n += 1
         self._review_after_edit()
-        self.statusBar().showMessage(self.tr("{0} rilevamenti ripristinati").format(n), 5000)
+        self.statusBar().showMessage(tr("{0} detections restored").format(n), 5000)
 
     def _review_save(self) -> None:
         st = self._review_state
@@ -2458,13 +2473,13 @@ class MainWindow(QMainWindow):
         try:
             p = st.save(str(self._current_csv_path))
         except OSError as exc:
-            QMessageBox.warning(self, self.tr("Salvataggio correzioni"), str(exc))
+            QMessageBox.warning(self, tr("Saving corrections"), str(exc))
             return
         fi = (self._current_result or {}).get("file_info") or {}
         # the queue's record (used by the Results export) follows the saved corrections
         self._review_queue.mark_reviewed(str(self._current_csv_path), st.channel, fi.get("chamber"),
                                          state=st, result=self._current_result)
-        self.statusBar().showMessage(self.tr("Correzioni salvate in {0}").format(p.name), 5000)
+        self.statusBar().showMessage(tr("Corrections saved to {0}").format(p.name), 5000)
 
     def _open_from_queue(self, path: str, channel: str, chamber) -> None:
         """A double click in the review queue: open that recording (input or chamber)."""
@@ -2484,9 +2499,10 @@ class MainWindow(QMainWindow):
     def _on_open(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            self.tr("Apri registrazione (CSV, MCS HDF5, .npz compatto o NWB)"),
+            tr("Open a recording (CSV, MCS HDF5, compact .npz or NWB)"),
             "",
-            self.tr("Recordings (*.csv *.h5 *.npz *.nwb);;CSV files (*.csv);;MCS HDF5 (*.h5);;MCS compact (*.npz);;NWB (*.nwb);;All files (*)"),
+            tr("Recordings (*.csv *.h5 *.npz *.nwb);;CSV files (*.csv);;MCS HDF5 (*.h5);;MCS "
+               "compact (*.npz);;NWB (*.nwb);;All files (*)"),
         )
         if not path:
             return
@@ -2569,14 +2585,14 @@ class MainWindow(QMainWindow):
         from cardiac_fp_analyzer.loader import electrode_columns, is_recording_file, load_recording
         if Path(path).suffix.lower() == '.csv' or not is_recording_file(path):
             return None
-        self.statusBar().showMessage(self.tr("Lettura di {0}...").format(Path(path).name))
+        self.statusBar().showMessage(tr("Reading {0}...").format(Path(path).name))
         QApplication.processEvents()
         metadata, df = load_recording(path)
         cols = electrode_columns(df)
         layout = layout_for(cols, getattr(self._config, 'chamber_layout', 'auto'))
         if layout is None:
             return None
-        self.statusBar().showMessage(self.tr("Valutazione dei {0} elettrodi...").format(len(cols)))
+        self.statusBar().showMessage(tr("Scoring the {0} electrodes...").format(len(cols)))
         QApplication.processEvents()
         stim = [e for c in layout.chambers for e in c.stimulation]
         scores = quick_electrode_scores(df, metadata['sample_rate'], cols, cfg=self._config, exclude=stim)
@@ -2584,9 +2600,18 @@ class MainWindow(QMainWindow):
         for c in layout.chambers:
             per = [scores[e]['period_ms'] for e in c.recording
                    if e in scores and np.isfinite(scores[e].get('score', np.nan))]
-            summary[c.name] = (self.tr("{0} ms").format(f"{np.median(per):.0f}") if per
-                               else self.tr("nessun battito"))
+            summary[c.name] = (tr("{0} ms").format(f"{np.median(per):.0f}") if per
+                               else tr("no beats"))
         return {'path': path, 'metadata': metadata, 'df': df, 'layout': layout, 'scores': scores, 'summary': summary}
+
+    def _on_language_menu_triggered(self, action: QAction) -> None:
+        """Save the interface language chosen in View → Language; it is applied at the next start."""
+        code = action.data()
+        if code in _i18n.LANGUAGES and code != _i18n.configured_language():
+            _i18n.save_language(code)
+            self.statusBar().showMessage(tr("The interface language changes at the next start of the application."), 8000)
+            QMessageBox.information(self, tr("Language"),
+                                    tr("The interface language changes at the next start of the application."))
 
     def _on_theme_menu_triggered(self, action: QAction) -> None:
         """Persist the selected theme and notify subscribers.
@@ -2646,7 +2671,7 @@ class MainWindow(QMainWindow):
         widgets after an error.
         """
         self.statusBar().showMessage(
-            self.tr("Analisi in corso: {0}...").format(Path(path).name)
+            tr("Analysing: {0}...").format(Path(path).name)
         )
         QApplication.processEvents()
 
@@ -2689,18 +2714,18 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:   # noqa: BLE001 — we want to show *any* error
             QMessageBox.critical(
-                self, self.tr("Errore analisi"),
+                self, tr("Analysis error"),
                 f"{type(e).__name__}: {e}",
             )
-            self._clear_results(self.tr("Errore durante l'analisi."))
+            self._clear_results(tr("Error during the analysis."))
             return
 
         if result is None:
             QMessageBox.warning(
-                self, self.tr("Nessun risultato"),
-                self.tr("La pipeline ha ritornato None (vedi log)."),
+                self, tr("No results"),
+                tr("The pipeline returned None (see log)."),
             )
-            self._clear_results(self.tr("Analisi ritornata vuota."))
+            self._clear_results(tr("The analysis returned nothing."))
             return
 
         # Cache the result for the Ricalcola path BEFORE ``viewer.set_result``
@@ -2736,12 +2761,12 @@ class MainWindow(QMainWindow):
             if self._ignore_sidecar_once:
                 self._ignore_sidecar_once = False          # 'Rifai l'analisi': the saved corrections stay on disk
             elif ReviewState.load_into(self._review_state, path):
-                self.statusBar().showMessage(self.tr("Correzioni salvate caricate per {0}").format(
+                self.statusBar().showMessage(tr("Saved corrections loaded for {0}").format(
                     self._review_state.channel), 5000)
         except Exception as exc:   # noqa: BLE001 — the viewer must still open
             logger.exception("review state")
             self._review_state = None
-            self.statusBar().showMessage(self.tr("Revisione non disponibile: {0}").format(exc), 8000)
+            self.statusBar().showMessage(tr("Review not available: {0}").format(exc), 8000)
         self.viewer.set_review_state(self._review_state)
         self._suppress_pending = True
         try:
@@ -2766,7 +2791,7 @@ class MainWindow(QMainWindow):
         chamber = result.get("file_info", {}).get("chamber")
         self._signal_tab.chip_map.set_selected(analyzed or None)
         self._update_window_title(
-            Path(path).name, f"{self.tr('camera')} {chamber} · {analyzed}" if chamber and analyzed else analyzed,
+            Path(path).name, f"{tr('chamber')} {chamber} · {analyzed}" if chamber and analyzed else analyzed,
         )
 
         # Make sure the Segnale tab is visible after a successful load
@@ -2777,11 +2802,11 @@ class MainWindow(QMainWindow):
             _channel_label(analyzed) if analyzed else _channel_label(channel)
         )
         if channel == CHANNEL_AUTO and analyzed:
-            ch_suffix = self.tr("{0} (auto)").format(ch_label)
+            ch_suffix = tr("{0} (auto)").format(ch_label)
         else:
             ch_suffix = ch_label
         self.statusBar().showMessage(
-            self.tr("{0} — {1} — {2} battiti inclusi").format(
+            tr("{0} — {1} — {2} beats included").format(
                 Path(path).name, ch_suffix, self.viewer.beat_count(),
             )
         )
@@ -2912,7 +2937,7 @@ class MainWindow(QMainWindow):
         if s is None:
             return
         self.statusBar().showMessage(
-            self.tr("Studio: {0} — {1} gruppi").format(
+            tr("Study: {0} — {1} groups").format(
                 s.name, len(s.groups),
             )
         )
@@ -2926,12 +2951,12 @@ class MainWindow(QMainWindow):
         known it's appended so the user sees "chipD_ch1.csv — EL1"
         without having to look at the Signal tab.
         """
-        base = self.tr("Cardiac FP Analyzer")
+        base = tr("Cardiac FP Analyzer")
         if not filename:
             self.setWindowTitle(base)
             return
         if channel:
-            self.setWindowTitle(f"{filename} — {channel if channel.startswith(('camera', 'E')) else channel.upper()} · {base}")
+            self.setWindowTitle(f"{filename} — {channel if ' ' in channel or channel.startswith('E') else channel.upper()} · {base}")
         else:
             self.setWindowTitle(f"{filename} · {base}")
 
@@ -2946,6 +2971,8 @@ def main() -> int:
     QApplication.setOrganizationDomain("cardiac-fp-analyzer")
     QApplication.setApplicationName("Cardiac FP Analyzer")
     app = QApplication(sys.argv)
+    # interface language (QSettings ``ui/language``; English by default) — before any widget is built
+    _i18n.apply_language(app)
     w = MainWindow()
     w.show()
     return app.exec()

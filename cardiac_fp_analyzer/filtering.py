@@ -17,6 +17,8 @@ from functools import lru_cache
 import numpy as np
 from scipy import signal
 
+from .i18n import tr
+
 # ── Cached coefficient computation ──────────────────────────────────
 
 @lru_cache(maxsize=16)
@@ -155,22 +157,22 @@ def describe_filtering(config, fs, metadata=None):
     gain = float(md.get('gain_applied', getattr(config, 'amplifier_gain', 1.0)) or 1.0)
     parts = []
     if md.get('format') == 'nwb':
-        parts.append('file NWB (volt all\'elettrodo, conversione del file applicata)')
+        parts.append(tr('NWB file (volts at the electrode, file conversion applied)'))
     if dev.get('filtri'):
-        parts.append('strumento: ' + dev['filtri'] if isinstance(dev['filtri'], str) else 'strumento: ' + ', '.join(
-            f"{k} {v}" for k, v in dev['filtri'].items()))
+        parts.append(tr('instrument: {0}').format(dev['filtri'] if isinstance(dev['filtri'], str)
+                                                  else ', '.join(f"{k} {v}" for k, v in dev['filtri'].items())))
     if dev.get('modalita_campionamento'):
-        parts.append(f"campionamento {dev['modalita_campionamento']}")
+        parts.append(tr('sampling {0}').format(dev['modalita_campionamento']))
     if dec:
-        parts.append(f"decimazione ×{dec['fattore']} ({dec['da_hz']:.0f} → {dec['a_hz']:.0f} Hz, FIR fase zero)")
+        parts.append(tr('decimation ×{0} ({1:.0f} → {2:.0f} Hz, zero-phase FIR)').format(dec['fattore'], dec['da_hz'], dec['a_hz']))
     for st in steps:
         if st['passo'] == 'notch':
             parts.append('notch ' + '/'.join(f'{f:g}' for f in st['frequenze_hz']) + f" Hz (Q {st['q']:g})")
         elif st['passo'] == 'passa-banda':
-            parts.append(f"passa-banda {st['basso_hz']:g}–{st['alto_hz']:g} Hz Butterworth ordine {st['ordine']} fase zero")
+            parts.append(tr('band-pass {0:g}–{1:g} Hz Butterworth order {2} zero phase').format(st['basso_hz'], st['alto_hz'], st['ordine']))
         else:
-            parts.append(f"Savitzky–Golay {st['finestra_campioni']} campioni ({st['finestra_ms']:g} ms) grado {st['grado']}")
+            parts.append(tr('Savitzky–Golay {0} samples ({1:g} ms) degree {2}').format(st['finestra_campioni'], st['finestra_ms'], st['grado']))
     if gain != 1.0:
-        parts.append(f'guadagno ÷{gain:g}')
+        parts.append(tr('gain ÷{0:g}').format(gain))
     return {'dispositivo': dev, 'decimazione': dec, 'software': steps, 'guadagno': gain,
-            'frequenza_campionamento_hz': float(fs), 'testo': 'Filtraggio: ' + '; '.join(parts)}
+            'frequenza_campionamento_hz': float(fs), 'testo': tr('Filtering: {0}').format('; '.join(parts))}
