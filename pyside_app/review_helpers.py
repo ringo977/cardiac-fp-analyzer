@@ -97,10 +97,10 @@ def format_measures(m, reference=None):
         pct = m.get(key + '_pct'); var = m.get(key + '_var')
         rows.append((label, txt, f'{pct:.1f}' if pct is not None else '', f'{var:+.1f}' if var is not None else ''))
     extra = [('Battiti', f"{m.get('n_battiti', 0)}", '', ''),
-             ('Intervalli esclusi dal BP (battito mancante)', f"{m.get('intervalli_esclusi', 0)}", '', ''),
+             ('Intervalli esclusi dal BP', f"{m.get('intervalli_esclusi', 0)}", '', ''),
              ('Battiti con FPD', f"{m.get('n_fpd', 0)}", '', ''),
-             ('Rilevamenti tolti dai veti (ripristinabili)', f"{m.get('n_vetoed', 0)}", '', ''),
-             ('Burst di rumore (frazione del tempo)', f"{100 * m.get('burst_frac', 0):.0f} %", '', '')]
+             ('Rilevamenti tolti dai veti', f"{m.get('n_vetoed', 0)}", '', ''),
+             ('Burst di rumore (tempo)', f"{100 * m.get('burst_frac', 0):.0f} %", '', '')]
     return rows + extra
 
 

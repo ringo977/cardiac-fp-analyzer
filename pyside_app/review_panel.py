@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QRadioButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -84,18 +85,23 @@ class ReviewPanel(QWidget):
         self._btn_redo.clicked.connect(self.redo_requested.emit)
         row2.addWidget(self._btn_undo)
         row2.addWidget(self._btn_redo)
-        row2.addSpacing(10)
-        row2.addWidget(QLabel(self.tr("Ripolarizzazione:")))
+        row2.addStretch()
+        lay.addLayout(row2)
+
+        # Short rows: a long single row of buttons would set the dock's minimum width and push the
+        # main window beyond a laptop screen.
+        row2b = QHBoxLayout()
+        row2b.addWidget(QLabel(self.tr("Ripolarizzazione:")))
         self._btn_pos = QPushButton(self.tr("picco +"))
         self._btn_neg = QPushButton(self.tr("picco −"))
         self._btn_pos.setToolTip(self.tr("Usa il picco positivo per tutti i battiti (tasto P)"))
         self._btn_neg.setToolTip(self.tr("Usa il picco negativo per tutti i battiti (tasto N)"))
         self._btn_pos.clicked.connect(lambda: self.polarity_requested.emit(1))
         self._btn_neg.clicked.connect(lambda: self.polarity_requested.emit(-1))
-        row2.addWidget(self._btn_pos)
-        row2.addWidget(self._btn_neg)
-        row2.addStretch()
-        lay.addLayout(row2)
+        row2b.addWidget(self._btn_pos)
+        row2b.addWidget(self._btn_neg)
+        row2b.addStretch()
+        lay.addLayout(row2b)
 
         row3 = QHBoxLayout()
         self._btn_restore = QPushButton(self.tr("Ripristina tolti"))
@@ -117,6 +123,7 @@ class ReviewPanel(QWidget):
         box.setFrameShape(QFrame.StyledPanel)
         g = QGridLayout(box)
         g.setContentsMargins(6, 4, 6, 4)
+        g.setColumnStretch(0, 1)
         for j, h in enumerate((self.tr("Misura"), self.tr("Valore"), "%", self.tr("Δ baseline"))):
             lbl = QLabel(h)
             lbl.setStyleSheet("font-weight: bold;")
@@ -127,6 +134,11 @@ class ReviewPanel(QWidget):
             for j, c in enumerate(cells):
                 if j:
                     c.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                else:
+                    # The label column wraps and never dictates the dock's minimum width: long
+                    # Results labels would otherwise push the main window beyond a laptop screen.
+                    c.setWordWrap(True)
+                    c.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
                 g.addWidget(c, i + 1, j)
             self._measure_rows.append(cells)
         lay.addWidget(box)
@@ -144,9 +156,11 @@ class ReviewPanel(QWidget):
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.verticalHeader().setVisible(False)
+        self._table.setMinimumWidth(0)
         self._table.cellDoubleClicked.connect(lambda r, _c: self.beat_selected.emit(r))
         lay.addWidget(self._table, stretch=1)
 
+        self.setMinimumWidth(300)
         self.set_state(None, None)
 
     # ── rendering ──────────────────────────────────────────────────────

@@ -322,6 +322,10 @@ class _SignalTab(QWidget):
         bar.addWidget(self._cb_raw)
         bar.addStretch()
 
+        # Second toolbar row (zoom, export, recompute): one long row would set the central widget's
+        # minimum width above 1100 px and, with the Revisione dock, push the window beyond a laptop screen.
+        bar2 = QHBoxLayout()
+
         # Zoom-mode toggle (Plotly-style modebar — Fase 2.E).  Gives
         # the user explicit Pan vs Box-zoom control without relying on
         # trackpad/right-drag conventions that differ per platform.
@@ -331,7 +335,7 @@ class _SignalTab(QWidget):
         # ``project_streamlit_zoom_modes`` — they double as the UI for
         # the Ctrl++ / Ctrl+- / Ctrl+0 keyboard shortcuts.
         self._zoom_mode_btns = _add_zoom_mode_buttons(
-            self.viewer, self, bar,
+            self.viewer, self, bar2,
         )
 
         # Zoom controls.  pyqtgraph's default wheel/right-drag zoom is
@@ -346,7 +350,7 @@ class _SignalTab(QWidget):
         self._btn_fit.setToolTip(self.tr("Adatta alla finestra (Ctrl+0)"))
         for b in (self._btn_zoom_in, self._btn_zoom_out, self._btn_fit):
             b.setFixedHeight(24)
-            bar.addWidget(b)
+            bar2.addWidget(b)
 
         # PNG export — replicates the "Download plot as PNG" button that
         # Plotly's modebar offers. Useful when the user wants to drop a
@@ -356,7 +360,7 @@ class _SignalTab(QWidget):
             "Esporta la vista corrente come immagine PNG"
         ))
         self._btn_png.setFixedHeight(24)
-        bar.addWidget(self._btn_png)
+        bar2.addWidget(self._btn_png)
 
         # ── "Ricalcola" button ───────────────────────────────────
         # Recomputes Parametri + Aritmie from the viewer's current
@@ -368,7 +372,7 @@ class _SignalTab(QWidget):
         #    flips this via set_recompute_pending).  Style-sheet is
         #    kept scoped to the button only so the platform theme
         #    still drives the rest of the toolbar.
-        bar.addSpacing(12)
+        bar2.addStretch()
         self._btn_recompute = QPushButton(self.tr("Ricalcola"))
         self._btn_recompute.setFixedHeight(24)
         self._btn_recompute.setToolTip(self.tr(
@@ -376,9 +380,10 @@ class _SignalTab(QWidget):
         ))
         self._btn_recompute.setEnabled(False)
         self._btn_recompute.clicked.connect(self.recompute_requested.emit)
-        bar.addWidget(self._btn_recompute)
+        bar2.addWidget(self._btn_recompute)
 
         layout.addLayout(bar)
+        layout.addLayout(bar2)
 
         # Chip map (multi-chamber chips): one row per chamber, one cell per
         # electrode coloured by the quick electrode score; hidden for CSV.
@@ -1950,6 +1955,8 @@ class MainWindow(QMainWindow):
         self._queue_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self.addDockWidget(Qt.LeftDockWidgetArea, self._queue_dock)
         self._queue_dock.hide()
+        # Initial widths: the trace keeps most of the window; both docks can be dragged wider.
+        self.resizeDocks([self._review_dock, self._queue_dock], [430, 420], Qt.Horizontal)
         self._review_panel.undo_requested.connect(self._review_undo)
         self._review_panel.redo_requested.connect(self._review_redo)
         self._review_panel.recompute_requested.connect(self._on_recompute)

@@ -149,7 +149,9 @@ class SignalViewer(pg.PlotWidget):
         """
         fg = theme.label_color()
         self.setLabel("bottom", self.tr("Tempo (s)"), color=fg)
-        self.setLabel("left", self.tr("Ampiezza (µV)"), color=fg)
+        # The traces are in volts (amplifier gain already removed); pyqtgraph picks the SI prefix
+        # (µV, mV) for the ticks and the title, so no "×1e-06" factor appears.
+        self.setLabel("left", self.tr("Ampiezza"), units="V", color=fg)
 
     def _on_theme_changed(self, _mode: str) -> None:
         """Repaint on live theme toggle.
