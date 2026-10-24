@@ -43,7 +43,7 @@ _SNAP_WINDOW_S = 0.200
 
 # Highlighted stretches of the review mode (ReviewState.problems): RGB
 PROBLEM_COLOURS = {
-    'battito_mancante': (231, 76, 60),          # red — a depolarisation probably missing
+    'battito_mancante': (243, 156, 18),         # orange — a depolarisation probably missing (red is the marker)
     'battiti_vicini': (52, 152, 219),           # blue — detections too close (one in excess)
     'ripolarizzazione_assente': (155, 89, 182), # violet — beat without repolarisation
 }
@@ -481,8 +481,9 @@ class SignalViewer(pg.PlotWidget):
                 a, b = max(0, int(a)), min(n - 1, int(b))
                 if b <= a:
                     continue
+                # bursts in grey: the coloured stretches are the problems the operator has to look at
                 reg = pg.LinearRegionItem(values=(float(self._time[a]), float(self._time[b])), movable=False,
-                                          brush=pg.mkBrush(245, 194, 122, 70), pen=pg.mkPen(None))
+                                          brush=pg.mkBrush(170, 170, 170, 70), pen=pg.mkPen(None))
                 reg.setZValue(-10)
                 self.addItem(reg)
                 self._burst_regions.append(reg)

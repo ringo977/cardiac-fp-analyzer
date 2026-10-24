@@ -241,7 +241,7 @@ class ReviewPanel(QWidget):
             counts[p['tipo']] = counts.get(p['tipo'], 0) + 1
         parts = []
         if st.bursts:
-            parts.append('<span style="color:#f5c27a">■</span> burst')
+            parts.append('<span style="color:#aaaaaa">■</span> burst')
         for tipo, label in PROBLEM_LABELS.items():
             if counts.get(tipo):
                 r, g, b = PROBLEM_COLOURS[tipo]
