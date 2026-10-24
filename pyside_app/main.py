@@ -1968,6 +1968,9 @@ class MainWindow(QMainWindow):
         self._review_panel.next_problem_requested.connect(self._review_next_problem)
         self._review_panel.approve_requested.connect(self._review_approve)
         self._review_panel.close_requested.connect(self._review_close)
+        self._review_panel.reanalyse_requested.connect(self._review_reanalyse)
+        self._review_panel.message.connect(lambda m: self.statusBar().showMessage(m, 5000))
+        self._ignore_sidecar_once = False
         self._review_queue.open_requested.connect(self._open_from_queue)
         self.viewer.review_report.connect(lambda msg: self.statusBar().showMessage(msg, 8000))
         self.viewer.beats_changed.connect(self._review_panel.refresh)
@@ -2333,8 +2336,39 @@ class MainWindow(QMainWindow):
         fi = (self._current_result or {}).get("file_info") or {}
         self._review_queue.mark_reviewed(str(self._current_csv_path), st.channel, fi.get("chamber"),
                                          state=st, result=self._current_result)
-        self._review_panel.refresh()
-        self.viewer.refresh_from_state()
+        self._review_panel.refresh()          # the beats did not change: no 'Ricalcola' pending
+        self._update_review_title()
+
+    def _update_review_title(self) -> None:
+        st = self._review_state
+        title = self.windowTitle().replace(" 🔒", "").replace(" ✓", "")
+        if st is not None and getattr(st, 'locked', False):
+            title += " 🔒"
+        elif st is not None and getattr(st, 'approved', False):
+            title += " ✓"
+        self.setWindowTitle(title)
+
+    def _review_reanalyse(self) -> None:
+        """Redo the automatic analysis of the open recording, dropping the corrections held in memory."""
+        st = self._review_state
+        if st is None or self._current_csv_path is None:
+            return
+        if getattr(st, 'locked', False):
+            self._review_locked()
+            return
+        if st.can_undo or st.changes().get('corrected'):
+            ans = QMessageBox.question(
+                self, self.tr("Rifai l'analisi"),
+                self.tr("Le correzioni fatte a questa registrazione verranno scartate (quelle salvate nel .review.json "
+                        "restano finché non salvi di nuovo). Rifare l'analisi automatica?"),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ans != QMessageBox.Yes:
+                return
+        self._ignore_sidecar_once = True
+        channel = st.channel if st.channel in ("el1", "el2") else CHANNEL_AUTO
+        self._run_analysis(str(self._current_csv_path), channel)
+        self.statusBar().showMessage(self.tr("Analisi automatica rifatta: correzioni in memoria scartate "
+                                             "(il .review.json resta finché non salvi)"), 8000)
 
     def _review_approve(self, on: bool) -> None:
         st = self._review_state
@@ -2697,7 +2731,9 @@ class MainWindow(QMainWindow):
         from cardiac_fp_analyzer.review import ReviewState
         try:
             self._review_state = ReviewState.from_result(result, self._config)
-            if ReviewState.load_into(self._review_state, path):
+            if self._ignore_sidecar_once:
+                self._ignore_sidecar_once = False          # 'Rifai l'analisi': the saved corrections stay on disk
+            elif ReviewState.load_into(self._review_state, path):
                 self.statusBar().showMessage(self.tr("Correzioni salvate caricate per {0}").format(
                     self._review_state.channel), 5000)
         except Exception as exc:   # noqa: BLE001 — the viewer must still open
@@ -2714,6 +2750,7 @@ class MainWindow(QMainWindow):
         self._arrhythmia_tab.set_result(result)
         self._review_panel.set_state(self._review_state, result)
         self._review_panel.set_view_buttons(self.viewer.view())
+        self._update_review_title()
         # Fresh load: Parametri + Aritmie are in sync, so clear any
         # leftover "pending" styling and enable the Ricalcola button.
         self._signal_tab.set_recompute_enabled(True)

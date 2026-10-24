@@ -150,6 +150,9 @@ class ReviewState:
             raise RecordingClosedError('registrazione chiusa: sbloccarla per correggere')
         self._history.append(self._snapshot())
         self._future.clear()
+        if self.status == STATUS_APPROVED:
+            # what was approved is no longer what is on screen: the operator approves again when done
+            self.unapprove()
 
     # ── approval / closure ─────────────────────────────────────────────────
 
@@ -204,17 +207,21 @@ class ReviewState:
         return bool(self._future)
 
     def undo(self):
-        if not self._history:
+        if not self._history or self.locked:
             return False
         self._future.append(self._snapshot())
         self._restore(self._history.pop())
+        if self.status == STATUS_APPROVED:
+            self.unapprove()                # the beats changed: approve again when done
         return True
 
     def redo(self):
-        if not self._future:
+        if not self._future or self.locked:
             return False
         self._history.append(self._snapshot())
         self._restore(self._future.pop())
+        if self.status == STATUS_APPROVED:
+            self.unapprove()
         return True
 
     # ── lookup ─────────────────────────────────────────────────────────────

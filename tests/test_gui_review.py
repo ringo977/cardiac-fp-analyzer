@@ -107,6 +107,16 @@ def test_review_state_and_panel_after_open(app, csv_path):
     # approval (tick) and closure (lock) through the panel, persisted, shown in the queue
     panel._chk_approved.setChecked(True)
     assert st.approved and st.approved_by and "approvato" in panel._status_lbl.text()
+    assert not w._signal_tab._btn_recompute.styleSheet() or "pending" not in w._signal_tab._btn_recompute.styleSheet().lower()
+    assert w.windowTitle().endswith("✓")
+    # a new correction withdraws the approval and the panel follows
+    n0 = st.n_beats()
+    st.remove_beat(0)
+    w._review_after_edit()
+    assert not st.approved and not panel._chk_approved.isChecked()
+    w._review_undo()
+    assert st.n_beats() == n0
+    panel._chk_approved.setChecked(True)
     from cardiac_fp_analyzer.review import ReviewState
     assert ReviewState.saved_status(csv_path) == {"el1": "approvato"}
     panel._btn_close.click()
@@ -125,6 +135,28 @@ def test_review_state_and_panel_after_open(app, csv_path):
     # reopening loads the sidecar
     w._run_analysis(str(csv_path), "el1")
     assert w._review_state.polarity == 1
+
+    # clipboard copies: tab-separated with headers, as many lines as beats
+    panel.copy_beats()
+    text = QApplication.clipboard().text()
+    assert text.splitlines()[0] == "\t".join(("#", "Dep. time [s]", "Beating Period [s]", "Rep. time [s]", "FPD [s]",
+                                               "Dep. Voltage [µV]", "Depolarizzazione", "Ripolarizzazione"))
+    assert len(text.splitlines()) == w._review_state.n_beats() + 1
+    panel.copy_measures()
+    assert QApplication.clipboard().text().startswith("Misura\tValore\t%\tΔ baseline\nBeating Period [s]\t")
+    # the measures table has the Results labels and the drift rows
+    assert panel._measures.rowCount() == 13 and "Deriva" in panel._measure_rows[6][0].text()
+
+    # 'Rifai l'analisi' drops the corrections in memory but leaves the sidecar alone
+    w._review_state.remove_beat(0)
+    w._review_state.save(str(csv_path))
+    n_saved = w._review_state.n_beats()
+    w._ignore_sidecar_once = True
+    w._run_analysis(str(csv_path), "el1")
+    assert w._review_state.n_beats() == n_saved + 1 and w._review_state.polarity is None
+    assert ReviewState.saved_status(csv_path) and sidecar.exists()
+    w._run_analysis(str(csv_path), "el1")             # a normal reopen loads the saved corrections again
+    assert w._review_state.n_beats() == n_saved
 
     # recompute keeps the state
     w._on_recompute()

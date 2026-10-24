@@ -242,8 +242,9 @@ def test_approval_and_closure_are_saved_and_lock_the_corrections(tmp_path):
     assert st.status == 'da_rivedere' and not st.approved and not st.locked and st.status_text() == 'da rivedere'
     st.approve('Rossi, Mario')
     assert st.approved and st.approved_by == 'Rossi, Mario' and st.approved_at and 'Rossi' in st.status_text()
-    st.remove_beat(0)                                   # approved recordings can still be corrected
-    st.close()
+    st.remove_beat(0)                                   # a correction withdraws the approval
+    assert st.status == 'da_rivedere'
+    st.close('Rossi, Mario')                            # closing approves first
     assert st.locked and st.closed_at and st.status_text().startswith('chiuso')
     with pytest.raises(RecordingClosedError):
         st.remove_beat(0)
@@ -262,3 +263,13 @@ def test_approval_and_closure_are_saved_and_lock_the_corrections(tmp_path):
     assert other.status == 'da_rivedere' and other.approved_by == ''
     other.close('Bianchi, Anna')                        # closing approves first
     assert other.approved_by == 'Bianchi, Anna' and other.locked
+
+
+def test_a_correction_withdraws_the_approval():
+    st, beats, reps = _state()
+    st.approve('Rossi, Mario')
+    st.remove_beat(0)
+    assert st.status == 'da_rivedere' and st.approved_by == ''
+    st.approve('Rossi, Mario')
+    st.undo()                                           # undo is a correction too: approve again when done
+    assert st.status == 'da_rivedere'
