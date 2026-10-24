@@ -16,6 +16,12 @@ Editing model (Phase 0, ADR-0001):
   make sense for that click: remove if a marker is near, add-here if not.
 - All edits mutate in-memory copies of the beat/repol index arrays and
   redraw. Recomputation of FPD/summary is Phase 1 (task #72).
+
+Review mode (v3.17): with ``set_review_state(state)`` the markers come from a
+``cardiac_fp_analyzer.review.ReviewState`` and every edit goes through its
+undoable operations; the viewer also shows the detections the vetoes removed
+(grey crosses, restorable), the noise-burst windows (shaded), the selected
+beat, and can display the trace as the operators see it (1–40 Hz view).
 """
 from __future__ import annotations
 
@@ -28,6 +34,7 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QMenu
 
 from . import theme
+from .review_helpers import operators_view
 
 # How close (in seconds) a click must be to an existing marker to be
 # treated as "on" that marker (i.e. the menu offers Remove instead of Add).
@@ -48,6 +55,8 @@ class SignalViewer(pg.PlotWidget):
     # the signal from the data lets us extend the viewer later without
     # having to rewire every slot.
     beats_changed = Signal()
+    # Review mode: one-line reports for the status bar (propagation outcome, refused edits).
+    review_report = Signal(str)
 
     def __init__(self, mode_getter: Callable[[], str]):
         super().__init__()
@@ -67,6 +76,13 @@ class SignalViewer(pg.PlotWidget):
         # behaviour the user is migrating from and keeps the plot legible
         # on first load; toggled on demand via set_show_raw().
         self._show_raw: bool = False
+        # Review mode (v3.17): the ReviewState the markers come from, the
+        # trace shown ('filtrato' | 'grezzo' | 'operatori'), the cached
+        # operators' view, the selected beat.
+        self._state = None
+        self._view: str = "filtrato"
+        self._ops_view: np.ndarray | None = None
+        self._selected: int | None = None
 
         # ─── Style ────────────────────────────────────────────────
         # Palette (background + axis pens + grid alpha) comes from
@@ -99,6 +115,15 @@ class SignalViewer(pg.PlotWidget):
             pen=pg.mkPen(None),
         )
         self.addItem(self._repol_scatter)
+        # Review mode items: detections removed by the vetoes (grey x), the
+        # selected beat (ring), the burst windows (shaded regions).
+        self._vetoed_scatter = pg.ScatterPlotItem(symbol="x", size=11, brush=pg.mkBrush("#9a9a9a"),
+                                                  pen=pg.mkPen("#9a9a9a"))
+        self.addItem(self._vetoed_scatter)
+        self._selected_scatter = pg.ScatterPlotItem(symbol="o", size=18, brush=pg.mkBrush(None),
+                                                    pen=pg.mkPen("#ffb000", width=2))
+        self.addItem(self._selected_scatter)
+        self._burst_regions: list = []
 
         # Mouse clicks on the scene → edit menu (in edit mode).
         self.scene().sigMouseClicked.connect(self._on_mouse_click)
@@ -151,10 +176,16 @@ class SignalViewer(pg.PlotWidget):
             dt = float(np.median(np.diff(self._time)))
             self._fs = (1.0 / dt) if dt > 0 else 1000.0
 
-        self._beats = np.asarray(
-            result.get("beat_indices_fpd", []), dtype=int
-        ).copy()
-        self._repol_idx = self._extract_repol_indices(result)
+        self._ops_view = None
+        self._selected = None
+        if self._state is not None:
+            self._beats = self._state.deps()
+            self._repol_idx = np.asarray([b.repol for b in self._state.beats if b.repol is not None], dtype=int)
+        else:
+            self._beats = np.asarray(
+                result.get("beat_indices_fpd", []), dtype=int
+            ).copy()
+            self._repol_idx = self._extract_repol_indices(result)
 
         amp = float(np.nanmax(self._signal) - np.nanmin(self._signal))
         self._marker_offset = 0.03 * amp if amp > 0 else 1.0
@@ -163,6 +194,73 @@ class SignalViewer(pg.PlotWidget):
         self.autoRange()
         # Let any listeners (e.g. the Battiti tab) refresh on file load.
         self.beats_changed.emit()
+
+    # ─── Review mode (v3.17) ─────────────────────────────────────
+    def set_review_state(self, state) -> None:
+        """Take the markers from ``state`` (a ReviewState) and route every edit through it. ``None`` leaves
+        review mode."""
+        self._state = state
+        self._selected = None
+        self._ops_view = None
+        self.refresh_from_state()
+
+    def review_state(self):
+        return self._state
+
+    def refresh_from_state(self) -> None:
+        """Redraw after the state changed (edit, undo, redo, propagation)."""
+        if self._state is None or self._signal is None:
+            self._redraw()
+            return
+        st = self._state
+        self._beats = st.deps()
+        self._repol_idx = np.asarray([b.repol for b in st.beats if b.repol is not None], dtype=int)
+        if self._selected is not None and self._selected >= len(st.beats):
+            self._selected = None
+        self._redraw()
+        self.beats_changed.emit()
+
+    def set_view(self, kind: str) -> None:
+        """Trace shown: 'filtrato' (software), 'grezzo' (unfiltered) or 'operatori' (notch 50 + 1–40 Hz)."""
+        if kind not in ("filtrato", "grezzo", "operatori"):
+            kind = "filtrato"
+        self._view = kind
+        self._redraw()
+
+    def view(self) -> str:
+        return self._view
+
+    def selected_beat(self) -> int | None:
+        return self._selected
+
+    def select_beat(self, k: int | None, center: bool = True) -> None:
+        if self._state is None or k is None or not (0 <= k < len(self._state.beats)):
+            self._selected = None
+        else:
+            self._selected = int(k)
+            if center and self._time is not None:
+                self.center_on(float(self._time[self._state.beats[k].dep]))
+        self._redraw()
+
+    def select_next(self, step: int = 1) -> None:
+        if self._state is None or not self._state.beats:
+            return
+        k = 0 if self._selected is None else (self._selected + step) % len(self._state.beats)
+        self.select_beat(k)
+
+    def _displayed_trace(self) -> np.ndarray | None:
+        if self._signal is None:
+            return None
+        if self._view == "grezzo" and self._raw is not None and len(self._raw) == len(self._signal):
+            return self._raw
+        if self._view == "operatori" and self._raw is not None and len(self._raw) == len(self._signal):
+            if self._ops_view is None:
+                y = operators_view(self._raw, self._fs)
+                # same scale as the filtered trace so the markers' offset still fits
+                sf = float(np.std(self._signal)); so = float(np.std(y))
+                self._ops_view = y * (sf / so) if so > 0 else y
+            return self._ops_view
+        return self._signal
 
     def set_show_raw(self, show: bool) -> None:
         """Toggle the raw-signal overlay.  Safe to call with no data."""
@@ -289,31 +387,58 @@ class SignalViewer(pg.PlotWidget):
     def _redraw(self) -> None:
         if self._signal is None or self._time is None:
             return
-        self._line.setData(self._time, self._signal)
+        trace = self._displayed_trace()
+        self._line.setData(self._time, trace)
         self._redraw_raw()
+        n = len(trace)
 
         # Depolarization markers (red, down-triangle) — placed just above
         # each beat's signal value so they track the actual spike.
         if len(self._beats) > 0:
-            safe = self._beats[
-                (self._beats >= 0) & (self._beats < len(self._signal))
-            ]
+            safe = self._beats[(self._beats >= 0) & (self._beats < n)]
             xs = self._time[safe]
-            ys = self._signal[safe] + self._marker_offset
+            ys = trace[safe] + self._marker_offset
             self._beats_scatter.setData(xs, ys)
         else:
             self._beats_scatter.setData([], [])
 
         # Repolarization markers (green, up-triangle) — same principle.
         if len(self._repol_idx) > 0:
-            safe = self._repol_idx[
-                (self._repol_idx >= 0) & (self._repol_idx < len(self._signal))
-            ]
+            safe = self._repol_idx[(self._repol_idx >= 0) & (self._repol_idx < n)]
             xs = self._time[safe]
-            ys = self._signal[safe] + self._marker_offset
+            ys = trace[safe] + self._marker_offset
             self._repol_scatter.setData(xs, ys)
         else:
             self._repol_scatter.setData([], [])
+
+        # Review mode: vetoed detections, selected beat, burst windows.
+        for reg in self._burst_regions:
+            self.removeItem(reg)
+        self._burst_regions = []
+        if self._state is not None:
+            vet = np.asarray([v for v in self._state.vetoed if 0 <= v < n], dtype=int)
+            if len(vet):
+                self._vetoed_scatter.setData(self._time[vet], trace[vet] + self._marker_offset)
+            else:
+                self._vetoed_scatter.setData([], [])
+            if self._selected is not None and self._selected < len(self._state.beats):
+                d = self._state.beats[self._selected].dep
+                if 0 <= d < n:
+                    self._selected_scatter.setData([self._time[d]], [trace[d] + self._marker_offset])
+            else:
+                self._selected_scatter.setData([], [])
+            for a, b in self._state.bursts:
+                a, b = max(0, int(a)), min(n - 1, int(b))
+                if b <= a:
+                    continue
+                reg = pg.LinearRegionItem(values=(float(self._time[a]), float(self._time[b])), movable=False,
+                                          brush=pg.mkBrush(245, 194, 122, 70), pen=pg.mkPen(None))
+                reg.setZValue(-10)
+                self.addItem(reg)
+                self._burst_regions.append(reg)
+        else:
+            self._vetoed_scatter.setData([], [])
+            self._selected_scatter.setData([], [])
 
     # ─── Hover (tooltip info) ────────────────────────────────────
     def _on_mouse_moved(self, evt) -> None:
@@ -347,7 +472,8 @@ class SignalViewer(pg.PlotWidget):
             self.hover_info.emit("")
             return
         t = float(self._time[i])
-        y = float(self._signal[i])
+        trace = self._displayed_trace()
+        y = float(trace[i])
 
         # Nearest beat (if any).  Offset is in ms, signed so the user
         # can tell whether the cursor is before (-) or after (+) the
@@ -377,6 +503,9 @@ class SignalViewer(pg.PlotWidget):
         ev.accept()
 
     def _show_edit_menu(self, x_click_s: float) -> None:
+        if self._state is not None:
+            self._show_review_menu(x_click_s)
+            return
         near_depol_i = self._nearest_marker_i(self._beats, x_click_s)
         near_repol_i = self._nearest_marker_i(self._repol_idx, x_click_s)
 
@@ -407,6 +536,61 @@ class SignalViewer(pg.PlotWidget):
         menu.addAction(self.tr("Annulla"))   # no handler — dismisses the menu
 
         menu.exec(QCursor.pos())
+
+    # ─── Review-mode menu (edits go through the ReviewState) ───────
+    def _show_review_menu(self, x_click_s: float) -> None:
+        st = self._state
+        i_click = int(np.argmin(np.abs(self._time - x_click_s)))
+        k_dep = st.beat_near(i_click, tol_s=_SNAP_WINDOW_S)
+        k_rep = st.repol_near(i_click, tol_s=_SNAP_WINDOW_S)
+        v = st.vetoed_near(i_click, tol_s=_SNAP_WINDOW_S)
+        # the beat this click belongs to (its depolarisation precedes the click)
+        deps = st.deps()
+        prev = int(np.searchsorted(deps, i_click, side="right") - 1) if len(deps) else -1
+
+        menu = QMenu(self)
+        if k_dep is not None:
+            act = menu.addAction(self.tr("Rimuovi depolarizzazione #{0}").format(k_dep + 1))
+            act.triggered.connect(lambda _c=False, k=k_dep: self._review_do(lambda: st.remove_beat(k)))
+            act = menu.addAction(self.tr("Sposta depolarizzazione #{0} qui").format(k_dep + 1))
+            act.triggered.connect(lambda _c=False, k=k_dep, i=i_click: self._review_do(lambda: st.move_beat(k, i)))
+        else:
+            act = menu.addAction(self.tr("Aggiungi depolarizzazione qui"))
+            act.triggered.connect(lambda _c=False, i=i_click: self._review_do(lambda: st.add_beat(i)))
+        if v is not None:
+            act = menu.addAction(self.tr("Ripristina il rilevamento tolto dai veti"))
+            act.triggered.connect(lambda _c=False, vv=v: self._review_do(lambda: st.restore_vetoed(vv)))
+        menu.addSeparator()
+        if k_rep is not None:
+            act = menu.addAction(self.tr("Rimuovi ripolarizzazione del battito #{0}").format(k_rep + 1))
+            act.triggered.connect(lambda _c=False, k=k_rep: self._review_do(lambda: st.clear_repol(k)))
+        if prev >= 0 and k_dep is None:
+            act = menu.addAction(self.tr("Ripolarizzazione del battito #{0} qui").format(prev + 1))
+            act.triggered.connect(lambda _c=False, k=prev, i=i_click: self._review_do(lambda: st.set_repol(k, i)))
+            act = menu.addAction(self.tr("Ripolarizzazione del battito #{0} qui e propaga il criterio a tutti").format(prev + 1))
+            act.triggered.connect(lambda _c=False, k=prev, i=i_click: self._review_do(
+                lambda: st.set_repol(k, i, propagate=True), report=True))
+        menu.addSeparator()
+        menu.addAction(self.tr("Annulla"))   # dismisses the menu
+        menu.exec(QCursor.pos())
+
+    def _review_do(self, op, report: bool = False) -> None:
+        """Run one state operation, redraw, notify. ``report`` → the propagation report goes to ``review_report``."""
+        try:
+            out = op()
+        except ValueError as exc:
+            self.review_report.emit(str(exc))
+            return
+        self.refresh_from_state()
+        if report and isinstance(out, dict):
+            if out.get("criterio") is None:
+                self.review_report.emit(out.get("motivo", self.tr("criterio non deducibile")))
+            else:
+                c = out["criterio"]
+                self.review_report.emit(self.tr(
+                    "Criterio propagato: onda {0} a {1:.0f} ms — spostati {2}, invariati {3}, ambigui {4}"
+                ).format("positiva" if c["polarita"] > 0 else "negativa", c["latenza_s"] * 1000,
+                         out["spostati"], out["invariati"], out["ambigui"]))
 
     def _nearest_marker_i(
         self, arr: np.ndarray, x_click_s: float

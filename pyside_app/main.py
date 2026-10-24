@@ -14,6 +14,7 @@ Run from the repo root:
 """
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -57,8 +58,12 @@ from cardiac_fp_analyzer.template_quality import (
 )
 from pyside_app import theme
 from pyside_app.chip_map import ChipMapWidget
+from pyside_app.review_panel import ReviewPanel
+from pyside_app.review_queue import ReviewQueue
 from pyside_app.signal_viewer import SignalViewer
 from pyside_app.study_panel import StudyPanel
+
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════
 #   Template representativity constants
@@ -1929,6 +1934,66 @@ class MainWindow(QMainWindow):
         act_toggle_studies.setShortcut("Ctrl+Shift+P")
         m_studies.addAction(act_toggle_studies)
 
+        # ─── Revisione (v3.17): right dock with measures + per-beat table,
+        # left dock with the review queue, menu and keyboard shortcuts.
+        self._review_state = None
+        self._review_panel = ReviewPanel()
+        self._review_dock = QDockWidget(self.tr("Revisione"), self)
+        self._review_dock.setObjectName("review-dock")
+        self._review_dock.setWidget(self._review_panel)
+        self._review_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.addDockWidget(Qt.RightDockWidgetArea, self._review_dock)
+        self._review_queue = ReviewQueue(lambda: self._config)
+        self._queue_dock = QDockWidget(self.tr("Coda di revisione"), self)
+        self._queue_dock.setObjectName("review-queue-dock")
+        self._queue_dock.setWidget(self._review_queue)
+        self._queue_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self._queue_dock)
+        self._queue_dock.hide()
+        self._review_panel.undo_requested.connect(self._review_undo)
+        self._review_panel.redo_requested.connect(self._review_redo)
+        self._review_panel.recompute_requested.connect(self._on_recompute)
+        self._review_panel.save_requested.connect(self._review_save)
+        self._review_panel.view_changed.connect(self.viewer.set_view)
+        self._review_panel.polarity_requested.connect(self._review_polarity)
+        self._review_panel.beat_selected.connect(self._review_select)
+        self._review_panel.restore_all_requested.connect(self._review_restore_all)
+        self._review_queue.open_requested.connect(self._open_from_queue)
+        self.viewer.review_report.connect(lambda msg: self.statusBar().showMessage(msg, 8000))
+        self.viewer.beats_changed.connect(self._review_panel.refresh)
+
+        m_review = self.menuBar().addMenu(self.tr("&Revisione"))
+        act_queue = self._queue_dock.toggleViewAction()
+        act_queue.setText(self.tr("&Coda di revisione"))
+        act_queue.setShortcut("Ctrl+Shift+R")
+        m_review.addAction(act_queue)
+        act_panel = self._review_dock.toggleViewAction()
+        act_panel.setText(self.tr("Pannello &misure"))
+        m_review.addAction(act_panel)
+        m_review.addSeparator()
+        act_undo = QAction(self.tr("&Annulla correzione"), self)
+        act_undo.setShortcut(QKeySequence(QKeySequence.Undo))
+        act_undo.triggered.connect(self._review_undo)
+        m_review.addAction(act_undo)
+        act_redo = QAction(self.tr("&Ripeti correzione"), self)
+        act_redo.setShortcut(QKeySequence(QKeySequence.Redo))
+        act_redo.triggered.connect(self._review_redo)
+        m_review.addAction(act_redo)
+        act_save = QAction(self.tr("&Salva correzioni"), self)
+        act_save.setShortcut(QKeySequence(QKeySequence.Save))
+        act_save.triggered.connect(self._review_save)
+        m_review.addAction(act_save)
+        m_review.addSeparator()
+        for text, key, slot in ((self.tr("Battito precedente"), "Left", lambda: self._review_step(-1)),
+                                (self.tr("Battito successivo"), "Right", lambda: self._review_step(1)),
+                                (self.tr("Togli il battito selezionato"), "Delete", self._review_delete_selected),
+                                (self.tr("Ripolarizzazione: picco positivo"), "P", lambda: self._review_polarity(1)),
+                                (self.tr("Ripolarizzazione: picco negativo"), "N", lambda: self._review_polarity(-1))):
+            a = QAction(text, self)
+            a.setShortcut(QKeySequence(key))
+            a.triggered.connect(slot)
+            m_review.addAction(a)
+
         # ─── Visualizza menu ───────────────────────────────────────
         # Hosts the Tema submenu (Scuro / Chiaro).  Built as exclusive
         # checkable actions via a QActionGroup so the currently-active
@@ -2059,10 +2124,13 @@ class MainWindow(QMainWindow):
 
         try:
             from cardiac_fp_analyzer.analyze import recompute_from_beats
-            new_result = recompute_from_beats(
-                self._current_result, bi_edited,
-                config=recompute_config, verbose=False,
-            )
+            if self._review_state is not None and not excluded:
+                new_result = self._review_state.recompute(self._current_result, config=recompute_config)
+            else:
+                new_result = recompute_from_beats(
+                    self._current_result, bi_edited,
+                    config=recompute_config, verbose=False,
+                )
         except Exception as e:   # noqa: BLE001 — surface any pipeline error
             QMessageBox.critical(
                 self, self.tr("Errore ricalcolo"),
@@ -2103,6 +2171,9 @@ class MainWindow(QMainWindow):
         # Refresh Parametri + Aritmie from the new result.
         self._params_tab.set_result(new_result)
         self._arrhythmia_tab.set_result(new_result)
+        if self._review_state is not None:
+            self.viewer.refresh_from_state()
+            self._review_panel.set_state(self._review_state, new_result)
 
         self._signal_tab.set_recompute_pending(False)
 
@@ -2202,6 +2273,93 @@ class MainWindow(QMainWindow):
                     "Ricalcolo completato — {0} battiti inclusi{1}"
                 ).format(n_out, sidecar_info)
             )
+
+    # ─── Revisione slots (v3.17) ──────────────────────────────────
+    def _review_after_edit(self) -> None:
+        self.viewer.refresh_from_state()
+        self._review_panel.refresh()
+        self._review_panel.select_row(self.viewer.selected_beat())
+
+    def _review_undo(self) -> None:
+        if self._review_state is not None and self._review_state.undo():
+            self._review_after_edit()
+            self.statusBar().showMessage(self.tr("Correzione annullata"), 3000)
+
+    def _review_redo(self) -> None:
+        if self._review_state is not None and self._review_state.redo():
+            self._review_after_edit()
+            self.statusBar().showMessage(self.tr("Correzione ripetuta"), 3000)
+
+    def _review_step(self, step: int) -> None:
+        if self._review_state is None:
+            return
+        self.viewer.select_next(step)
+        self._review_panel.select_row(self.viewer.selected_beat())
+
+    def _review_select(self, k: int) -> None:
+        if self._review_state is None:
+            return
+        self.viewer.select_beat(k)
+        self._tabs.setCurrentWidget(self._signal_tab)
+
+    def _review_delete_selected(self) -> None:
+        st = self._review_state
+        k = self.viewer.selected_beat()
+        if st is None or k is None:
+            return
+        st.remove_beat(k)
+        self.viewer.select_beat(min(k, st.n_beats() - 1) if st.n_beats() else None, center=False)
+        self._review_after_edit()
+
+    def _review_polarity(self, sign: int) -> None:
+        st = self._review_state
+        if st is None:
+            return
+        rep = st.set_polarity(sign)
+        self._review_after_edit()
+        if rep:
+            self.statusBar().showMessage(self.tr(
+                "Ripolarizzazione sul picco {0}: spostati {1}, invariati {2}, ambigui {3}").format(
+                "positivo" if sign > 0 else "negativo", rep.get("spostati", 0), rep.get("invariati", 0),
+                rep.get("ambigui", 0)), 8000)
+
+    def _review_restore_all(self) -> None:
+        st = self._review_state
+        if st is None or not st.vetoed:
+            return
+        n = 0
+        for v in list(st.vetoed):
+            if st.restore_vetoed(v) is not None:
+                n += 1
+        self._review_after_edit()
+        self.statusBar().showMessage(self.tr("{0} rilevamenti ripristinati").format(n), 5000)
+
+    def _review_save(self) -> None:
+        st = self._review_state
+        if st is None or self._current_csv_path is None:
+            return
+        try:
+            p = st.save(str(self._current_csv_path))
+        except OSError as exc:
+            QMessageBox.warning(self, self.tr("Salvataggio correzioni"), str(exc))
+            return
+        fi = (self._current_result or {}).get("file_info") or {}
+        self._review_queue.mark_reviewed(str(self._current_csv_path), st.channel, fi.get("chamber"))
+        self.statusBar().showMessage(self.tr("Correzioni salvate in {0}").format(p.name), 5000)
+
+    def _open_from_queue(self, path: str, channel: str, chamber) -> None:
+        """A double click in the review queue: open that recording (input or chamber)."""
+        self._current_group = None
+        self._current_csv_relpath = None
+        self._chip = None
+        if chamber:
+            self._run_analysis(path, CHANNEL_AUTO)
+            if self._chip is not None and self._signal_tab.chamber_choice() != chamber:
+                self._on_chamber_changed(chamber)
+        else:
+            if channel in self._signal_tab._channel_values:
+                self._signal_tab.set_channel(channel)
+            self._run_analysis(path, channel)
 
     # ─── Actions ──────────────────────────────────────────────────
     def _on_open(self) -> None:
@@ -2452,6 +2610,18 @@ class MainWindow(QMainWindow):
         # the first render shows "—" in RR/Stato until the user touches
         # something.
         self._beats_tab.set_result(result)
+        # Review state (v3.17): the software's proposal plus any saved corrections.
+        from cardiac_fp_analyzer.review import ReviewState
+        try:
+            self._review_state = ReviewState.from_result(result, self._config)
+            if ReviewState.load_into(self._review_state, path):
+                self.statusBar().showMessage(self.tr("Correzioni salvate caricate per {0}").format(
+                    self._review_state.channel), 5000)
+        except Exception as exc:   # noqa: BLE001 — the viewer must still open
+            logger.exception("review state")
+            self._review_state = None
+            self.statusBar().showMessage(self.tr("Revisione non disponibile: {0}").format(exc), 8000)
+        self.viewer.set_review_state(self._review_state)
         self._suppress_pending = True
         try:
             self.viewer.set_result(result)
@@ -2459,6 +2629,8 @@ class MainWindow(QMainWindow):
             self._suppress_pending = False
         self._params_tab.set_result(result)
         self._arrhythmia_tab.set_result(result)
+        self._review_panel.set_state(self._review_state, result)
+        self._review_panel.set_view_buttons(self.viewer.view())
         # Fresh load: Parametri + Aritmie are in sync, so clear any
         # leftover "pending" styling and enable the Ricalcola button.
         self._signal_tab.set_recompute_enabled(True)
@@ -2498,6 +2670,9 @@ class MainWindow(QMainWindow):
         Extracted to avoid the error-handling divergence that the
         previous ``_on_open`` had two near-identical copies of.
         """
+        self._review_state = None
+        self.viewer.set_review_state(None)
+        self._review_panel.set_state(None, None)
         self._params_tab.set_result(None)
         self._arrhythmia_tab.set_result(None)
         self._beats_tab.set_result(None)

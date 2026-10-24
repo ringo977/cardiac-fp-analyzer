@@ -252,7 +252,23 @@ Modello **Studio → Gruppo → File**: un gruppo è una condizione (baseline, o
 
 Il pannello lavora sui file che gli si aggiungono; la lettura di `samples.csv` e il flusso per camera dei chip sono oggi del batch da riga di comando.
 
-## 5.8 GUI web Streamlit (legacy)
+## 5.8 Revisione (dalla v3.17)
+
+La revisione è il flusso dell'operatore: il software propone depolarizzazioni e ripolarizzazioni, l'operatore corregge dove serve, le misure si aggiornano subito e le correzioni restano accanto ai dati.
+
+**Pannello Revisione** (a destra, menu Revisione ▸ Pannello misure). In alto il **giudizio** della registrazione — verde *Buono*, giallo *Da verificare*, rosso *Problemi* — con l'elenco dei problemi trovati (non analizzabile e perché, segnale debole, burst di rumore dell'incubatore e quanto tempo occupano, battiti mancanti, ritmo irregolare o con buchi, FPD non misurabile o incerto, rilevamenti tolti dai veti, ingresso senza tessuto, stato della camera). Poi la **vista** del tracciato: *Filtrato* (quello su cui lavora il software), *Grezzo*, *1–40 Hz (operatori)* (notch 50 Hz + passa-banda 1–40 Hz di ordine 1, la vista del software semi-automatico del laboratorio); le **misure** con le colonne dei fogli Results (Beating Period, St. dev., CV, FPD, FPD Fridericia, Dep. Amplitude in µV dal segnale non filtrato) e, sotto, il filtraggio applicato; la **tabella dei battiti** come il foglio "CHIP X raw" (tempo della depolarizzazione, periodo, tempo della ripolarizzazione, FPD, ampiezza, stato: *auto*, *corretto*, *aggiunto*, *ripristinato*; per la ripolarizzazione anche *propagato*, *ambiguo*, *assente*). Doppio clic su una riga: il tracciato si centra su quel battito.
+
+**Correzioni** (scheda Segnale, modalità *Edit*, clic sul tracciato). Vicino a una depolarizzazione: *Rimuovi* o *Sposta qui*; altrove: *Aggiungi depolarizzazione qui* (agganciata al picco entro ±10 ms, con la ripolarizzazione proposta); vicino a una croce grigia: *Ripristina il rilevamento tolto dai veti*; dopo una depolarizzazione: *Ripolarizzazione del battito #N qui* (agganciata all'estremo locale più vicino) oppure *… qui e propaga il criterio a tutti*. I burst di rumore sono evidenziati in arancio. Tastiera: ← → battito precedente/successivo (cerchio arancione), Canc toglie il battito selezionato, P / N ripolarizzazione sul picco positivo / negativo per tutti i battiti, Ctrl+Z / Ctrl+Shift+Z annulla e ripete qualsiasi correzione, Ctrl+S salva.
+
+**Propagazione del criterio.** Quando si sposta una ripolarizzazione e si chiede di propagare, il software deduce la polarità dell'onda scelta e la sua latenza dalla depolarizzazione e, in ogni altro battito, prende l'onda di quella polarità più evidente vicino a quella latenza (±15 %, almeno ±100 ms); i battiti senza un'onda così restano come sono e sono marcati *ambiguo*; se nel punto scelto non c'è un'onda riconoscibile non si muove nulla e la barra di stato lo dice. Oggi riconosce picchi positivi o negativi a una data latenza, non il ritorno alla linea di base.
+
+**Salvataggio.** *Salva correzioni* (Ctrl+S) scrive `<registrazione>.review.json` accanto al file, una voce per ingresso (el1/el2) o elettrodo; riaprendo il file le correzioni vengono ricaricate. *Ricalcola* rilancia la pipeline sui battiti correnti conservando le ripolarizzazioni corrette.
+
+**Coda di revisione** (a sinistra, Revisione ▸ Coda di revisione, Ctrl+Shift+R). *Aggiungi file…* o *Aggiungi cartella…*: ogni ingresso di un CSV a due tessuti e ogni camera di un chip viene analizzato in background con le impostazioni correnti e messo in lista con giudizio, periodo, FPD e problemi, prima le registrazioni con problemi; doppio clic per aprirla; dopo il salvataggio la riga è marcata *rivista*.
+
+Le tre opzioni della v3.17 (rilevamenti deboli, burst, ritmo con battiti mancanti) e l'intervallo minimo fisiologico tra depolarizzazioni sono in Impostazioni ▸ Detection e QC, disattivi di default.
+
+## 5.9 GUI web Streamlit (legacy)
 
 `pip install ".[streamlit]"` e `streamlit run app.py`: pagine *Analisi singolo file*, *Batch + Risk Map*, *Confronto farmaci*. In sola manutenzione: nessuna nuova funzione (le camere, i file MCS, il consenso vi arrivano solo attraverso la libreria).
 
