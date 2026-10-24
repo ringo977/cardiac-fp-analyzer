@@ -623,7 +623,7 @@ def find_recordings(data_dir, exclude=None):
     for p in sorted(Path(data_dir).rglob('*')):
         if not p.is_file() or (exclude is not None and exclude(p)):
             continue
-        if p.suffix.lower() == '.csv' or (p.suffix.lower() in ('.h5', '.hdf5', '.hdf', '.npz') and is_recording_file(p)):
+        if p.suffix.lower() == '.csv' or (p.suffix.lower() in ('.h5', '.hdf5', '.hdf', '.npz', '.nwb') and is_recording_file(p)):
             out.append(p)
     return out
 
@@ -725,7 +725,9 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
         # Divide by gain to obtain real voltage.  Default gain=1 (no-op).
         # MCS files are already in physical units (volts at the electrode):
         # no gain applies, whatever the configuration says.
-        gain = 1.0 if metadata.get('format') == 'mcs_hdf5' else config.amplifier_gain
+        # NWB files carry their own conversion (applied by the reader): no gain either.
+        gain = 1.0 if metadata.get('format') in ('mcs_hdf5', 'nwb') else config.amplifier_gain
+        metadata['gain_applied'] = gain
         if gain != 1.0:
             raw = raw / gain
             if verbose:

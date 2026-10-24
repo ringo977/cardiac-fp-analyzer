@@ -33,7 +33,7 @@ from .review_helpers import queue_entry, queue_sort_key
 from .workers import analysis_pool
 
 logger = logging.getLogger(__name__)
-_EXT = ('.csv', '.h5', '.npz')
+_EXT = ('.csv', '.h5', '.npz', '.nwb')
 
 
 class _QueueSignals(QObject):
@@ -152,7 +152,7 @@ class ReviewQueue(QWidget):
 
     def _add_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, self.tr("Registrazioni da rivedere"), "",
-                                                self.tr("Registrazioni (*.csv *.h5 *.npz);;Tutti i file (*)"))
+                                                self.tr("Registrazioni (*.csv *.h5 *.npz *.nwb);;Tutti i file (*)"))
         if paths:
             self.add_paths(paths)
 

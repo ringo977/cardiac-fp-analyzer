@@ -50,6 +50,9 @@ def inputs_of(path):
     p = Path(path)
     if p.suffix.lower() == '.csv':
         return [('el1', None), ('el2', None)]
+    if p.suffix.lower() == '.nwb':
+        from cardiac_fp_analyzer.nwb_io import recording_inputs
+        return [(r.get('label') or f'el{k + 1}', None) for k, r in enumerate(recording_inputs(p))] or [('auto', None)]
     try:
         from cardiac_fp_analyzer.chambers import layout_for
         from cardiac_fp_analyzer.loader import electrode_columns, is_recording_file, load_recording

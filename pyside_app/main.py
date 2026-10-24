@@ -2052,7 +2052,7 @@ class MainWindow(QMainWindow):
         # ─── Status bar ────────────────────────────────────────────
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage(
-            self.tr("Pronto — File ▶ Apri registrazione (CSV, MCS .h5 o .npz) per iniziare.")
+            self.tr("Pronto — File ▶ Apri registrazione (CSV, MCS .h5, .npz o NWB) per iniziare.")
         )
 
     # ─── Convenience accessors ────────────────────────────────────
@@ -2392,9 +2392,9 @@ class MainWindow(QMainWindow):
     def _on_open(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            self.tr("Apri registrazione (CSV, MCS HDF5 o .npz compatto)"),
+            self.tr("Apri registrazione (CSV, MCS HDF5, .npz compatto o NWB)"),
             "",
-            self.tr("Recordings (*.csv *.h5 *.npz);;CSV files (*.csv);;MCS HDF5 (*.h5);;MCS compact (*.npz);;All files (*)"),
+            self.tr("Recordings (*.csv *.h5 *.npz *.nwb);;CSV files (*.csv);;MCS HDF5 (*.h5);;MCS compact (*.npz);;NWB (*.nwb);;All files (*)"),
         )
         if not path:
             return

@@ -415,6 +415,10 @@ def plan_batch(csv_files, data_dir, infos=None, layout=None):
             continue
         if any(_is_under(f, d) for d in covered):
             report['not_in_sheet'].append(rel)
+        if f.suffix.lower() == '.nwb':
+            from .nwb_io import plan_units
+            units += plan_units(f, rel, info, report)
+            continue
         from_layout = _units_from_layout(f, rel, info, report, layout)
         units += from_layout if from_layout is not None else _units_from_name(f, rel, info, report)
     for i, u in enumerate(units):

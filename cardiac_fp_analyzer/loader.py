@@ -70,6 +70,9 @@ def recording_datetime(filepath):
     if Path(filepath).suffix.lower() == '.npz':
         from .mcs_hdf5 import npz_datetime
         return npz_datetime(filepath)
+    if Path(filepath).suffix.lower() == '.nwb':
+        from .nwb_io import recording_datetime as _nwb_datetime
+        return _nwb_datetime(filepath)
     try:
         with open(filepath, errors='replace') as f:
             for line in f:
@@ -82,11 +85,11 @@ def recording_datetime(filepath):
     return None
 
 
-RECORDING_SUFFIXES = ('.csv', '.h5', '.hdf5', '.hdf', '.npz')
+RECORDING_SUFFIXES = ('.csv', '.h5', '.hdf5', '.hdf', '.npz', '.nwb')
 
 
 def is_recording_file(filepath):
-    """A CSV, or an HDF5 file in the MCS raw-data layout."""
+    """A CSV, an HDF5 file in the MCS raw-data layout, a compact .npz copy or an NWB file."""
     p = Path(filepath)
     suf = p.suffix.lower()
     if suf == '.csv':
@@ -97,6 +100,9 @@ def is_recording_file(filepath):
     if suf == '.npz':
         from .mcs_hdf5 import is_mcs_npz
         return is_mcs_npz(p)
+    if suf == '.nwb':
+        from .nwb_io import is_nwb_file
+        return is_nwb_file(p)
     return False
 
 
@@ -117,6 +123,9 @@ def recording_channels(filepath):
     if p.suffix.lower() == '.npz':
         from .mcs_hdf5 import npz_channels
         return npz_channels(p)
+    if p.suffix.lower() == '.nwb':
+        from .nwb_io import recording_inputs
+        return [r.get('label') or f'el{k + 1}' for k, r in enumerate(recording_inputs(p))]
     return [f'el{c}' for c in input_columns(p)]
 
 
@@ -142,6 +151,9 @@ def load_recording(filepath, max_sample_rate=MAX_SAMPLE_RATE, **kwargs):
         kwargs.pop('stream', None)
         kwargs.pop('recording', None)
         return load_mcs_npz(p, max_sample_rate=max_sample_rate, **kwargs)
+    if p.suffix.lower() == '.nwb':
+        from .nwb_io import read_nwb
+        return read_nwb(p, max_sample_rate=max_sample_rate)
     metadata, df = load_csv(p, max_sample_rate=max_sample_rate)
     metadata.setdefault('format', 'csv')
     return metadata, df
@@ -422,6 +434,21 @@ def describe_recording(filepath):
     also be a 'Ch2 …' folder.
     """
     p = Path(filepath)
+    if p.suffix.lower() == '.nwb':
+        # identity written in the file (electrodes table); the folders only fill what it lacks
+        from .nwb_io import describe_nwb
+        info = describe_nwb(p)
+        dirs = p.parent.parts
+        exp = next((d for d in reversed(dirs) if _EXP_DIR.match(d) or d.startswith('EXP')), None)
+        day = next((d for d in reversed(dirs) if _DAY_DIR.match(d)), None)
+        if exp and not info.get('experiment'):
+            info['experiment'] = exp
+        if day and not info.get('day'):
+            info['day'] = day
+        if info.get('chip') is not None and info.get('channel') is not None and not info.get('dual_tissue') \
+                and not info.get('tissue'):
+            info['tissue'] = tissue_key(info.get('experiment'), info.get('day'), info['chip'], info['channel'])
+        return info
     info = parse_filename(p.name)
     dirs = p.parent.parts
     # 'startswith EXP' keeps folders the old rule accepted ('EXP_A').
@@ -574,6 +601,9 @@ def input_columns(filepath):
     number of data columns). [] when the header cannot be read or the file
     is not a CSV (MCS HDF5 files have electrode labels, not inputs). Reads
     only the header lines."""
+    if Path(filepath).suffix.lower() == '.nwb':
+        from .nwb_io import recording_inputs
+        return [str(r.get('input') or k + 1) for k, r in enumerate(recording_inputs(filepath))]
     if Path(filepath).suffix.lower() != '.csv':
         return []
     try:

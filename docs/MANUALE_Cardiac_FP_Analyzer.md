@@ -121,7 +121,19 @@ Nome dei file: `McsRecording_<chip>_<condizione>_Recording-<n>_…` → chip (es
 
 Formato `mcs_compact v1`: un array di codici ADC (int16/int32) per elettrodo e un `meta` JSON (passo dell'ADC in volt, passo temporale, etichette, file di origine). Si apre esattamente come il file HDF5 di origine (stessi metadati, stessa decimazione), senza h5py; i canali si leggono uno alla volta (circa 30 s per 64 canali × 5 minuti). Lo script di conversione è `PHOENIX/_report/scripts` (fuori dal pacchetto).
 
-## 3.4 Identità del tessuto dai nomi
+## 3.4 File NWB (dalla v3.18)
+
+Il software legge e scrive file **NWB 2** (Neurodata Without Borders), lo standard aperto per i dati elettrofisiologici su HDF5. Il convertitore `cardiac-fp-nwb` trasforma i CSV di WaveForms in `.nwb` conservando tutto: l'header completo nelle note, strumento e numero di serie, l'istante di inizio con il fuso orario, i campioni in volt all'oscilloscopio con il fattore di conversione (1 / guadagno) che dà i volt all'elettrodo, la modalità di campionamento e il trigger, e per ogni ingresso registrato (uno o due) l'identità del tessuto — chip, camera, test item, condizione, esperimento, giorno — presa dalla `samples.csv` dell'esperimento o dal nome del file (tabella `electrodes`, un gruppo di elettrodi per tessuto). La serie parte da t = 0: se l'asse dei tempi del CSV cominciava prima del trigger (−30 s), l'inizio della sessione è spostato indietro di altrettanto e il trigger è annotato nei commenti.
+
+```bash
+pip install ".[nwb]"                                   # pynwb (la lettura usa solo h5py)
+cardiac-fp-nwb "Exp 5/Day8" -o nwb/ --validate         # una cartella o singoli CSV; --validate usa nwbinspector
+cardiac-fp-nwb file.csv --lab "…" --institution "…" --experimenter "Cognome, Nome" --gain 10000 --tz Europe/Rome
+```
+
+Un `.nwb` si apre nella GUI, nella coda di revisione e nel batch come un CSV: i canali sono `el1` / `el2`, l'identità viene dal file stesso (una registrazione per tessuto se i due ingressi portano tessuti diversi) e la pipeline non applica il guadagno perché il file ha già la conversione. Un file con un solo ingresso dà `el1` (duplicato in `el2`, come per i CSV a un canale).
+
+## 3.5 Identità del tessuto dai nomi
 
 Per i CSV il software legge dalle cartelle e dal nome: esperimento (`Exp5`, `exp1`, `Exp12_Accelera`), giorno (`Day7`), chip (`chipA`, `Chip 537`, cartella `inj1`), camera (`ch1`…), composto, concentrazione (`300nM`, `7,5`, `2andhalf`), `baseline`/`t0` (riferimento), `t1`…`t7` e `Ctrl` (controlli), `washout`. Esempio: `Exp5/Day7/chipA/chipA_ch1_terfe_300nM.csv` → tessuto `exp5/day7/chipA_ch1`, composto `terfe`, 300 nM.
 
@@ -129,7 +141,7 @@ Nei file con **due tessuti**, uno per ingresso (`Exp1_ChipP_ch1_K01_ChipQ_ch2_K0
 
 Per i file MCS il tessuto è `<esperimento>/-/chip<piastra>_ch<lettera camera>` (es. `-/-/chipPM01001_chA`).
 
-## 3.5 La mappa dei campioni `samples.csv`
+## 3.6 La mappa dei campioni `samples.csv`
 
 Un file `samples.csv` nella cartella analizzata (o in una sottocartella) dice che cosa registra ogni file, ingresso o camera, e **ha la precedenza sui nomi** per i file che elenca.
 
@@ -266,7 +278,7 @@ La revisione è il flusso dell'operatore: il software propone depolarizzazioni e
 
 **Salvataggio.** *Salva correzioni* (Ctrl+S) scrive `<registrazione>.review.json` accanto al file, una voce per ingresso (el1/el2) o elettrodo; riaprendo il file le correzioni vengono ricaricate. *Ricalcola* rilancia la pipeline sui battiti correnti conservando le ripolarizzazioni corrette.
 
-**Coda di revisione** (a sinistra, Revisione ▸ Coda di revisione, Ctrl+Shift+R). *Aggiungi file…* o *Aggiungi cartella…*: ogni ingresso di un CSV a due tessuti e ogni camera di un chip viene analizzato in background con le impostazioni correnti e messo in lista con tessuto (chip, camera, test item), condizione, giudizio, periodo, FPD e problemi, prima le registrazioni con problemi; doppio clic per aprirla; dopo il salvataggio la riga è marcata *rivista*. Le identità seguono le regole del batch (§3.4, §3.5): se l'esperimento ha una `samples.csv`, anche in una cartella sopra a quella aperta, è lei a dire chip, camera, test item e dose di ogni ingresso.
+**Coda di revisione** (a sinistra, Revisione ▸ Coda di revisione, Ctrl+Shift+R). *Aggiungi file…* o *Aggiungi cartella…*: ogni ingresso di un CSV a due tessuti e ogni camera di un chip viene analizzato in background con le impostazioni correnti e messo in lista con tessuto (chip, camera, test item), condizione, giudizio, periodo, FPD e problemi, prima le registrazioni con problemi; doppio clic per aprirla; dopo il salvataggio la riga è marcata *rivista*. Le identità seguono le regole del batch (§3.5, §3.6): se l'esperimento ha una `samples.csv`, anche in una cartella sopra a quella aperta, è lei a dire chip, camera, test item e dose di ogni ingresso.
 
 **Esporta Results…** (nella coda, dalla v3.18) scrive il foglio Excel nel formato con cui il laboratorio registra i risultati: un foglio `CHIP X` per chip con, per ogni canale, la baseline e le dosi (Beating Period, St. dev., CV, Field Potential Duration, FPD Fridericia, Dep. Amplitude, percentuali e variazioni rispetto alla baseline come formule), una nota che dice se la riga è automatica o corretta dall'operatore e quali problemi ha, il file e l'ingresso; un foglio `CHIP X raw` con i battiti di ogni condizione (tempo di depolarizzazione, periodo, tempo di ripolarizzazione, FPD, tensioni all'amplificatore, ampiezza in µV, con le formule e le righe Mean / St. dev); un foglio `samples` con tutte le registrazioni. Le misure sono quelle del pannello Revisione, correzioni comprese; una ripetizione della stessa condizione resta fuori dal foglio del chip (vince la registrazione corretta, poi il giudizio migliore) ed è citata nella nota. Da terminale: `cardiac-fp-results <cartella> -o file.xlsx` (analizza tutto, applica i `.review.json` salvati).
 

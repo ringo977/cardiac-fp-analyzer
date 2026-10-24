@@ -89,6 +89,7 @@ pip install .                        # Solo core (CLI)
 pip install ".[gui]"                 # Core + GUI desktop (PySide6 + PyQtGraph)
 pip install ".[gui,reports]"         # + report Excel
 pip install ".[streamlit]"           # GUI web legacy
+pip install ".[nwb]"                 # + file NWB 2 (pynwb per il convertitore; la lettura usa h5py)
 pip install ".[all]"                 # Tutto, incluso CDISC .xpt (pyreadstat)
 pip install ".[dev]"                 # Tutto + pytest + ruff
 
@@ -178,6 +179,8 @@ Il modulo QC valida ogni battito rilevato:
 ### v3.18.0 (Ottobre 2026) — export nel formato Results del laboratorio
 
 **`results_export.py`**: scrive il foglio Excel con cui il laboratorio registra i risultati — un foglio `CHIP X` per chip (per canale: baseline e dosi con le colonne Beating Period, St. dev., CV, Field Potential Duration, FPD Fridericia, Dep. Amplitude e le formule di percentuale e variazione rispetto alla baseline), un foglio `CHIP X raw` con i battiti (tempo di depolarizzazione, periodo, tempo di ripolarizzazione, FPD, tensioni all'amplificatore, ampiezza in µV, con le formule e le righe Mean / St. dev del laboratorio) e un foglio `samples` con tutte le registrazioni, il giudizio e le correzioni. Le misure sono quelle del modello di revisione (battiti del software più le correzioni salvate in `.review.json`); ogni riga dice se è automatica o corretta e da quale file viene; le identità (esperimento, chip, camera, test item, dose) seguono la `samples.csv` dell'esperimento, cercata anche nelle cartelle sopra a quella aperta. Dalla GUI: **Coda di revisione ▸ Esporta Results…** (la coda ora pianifica le registrazioni come il batch e tiene per ogni riga il suo record, aggiornato quando si salvano le correzioni); da terminale `cardiac-fp-results <cartella> -o file.xlsx`. Sulla registrazione di riferimento (Exp5 chip A ch1 baseline) il foglio esportato coincide con quello del laboratorio: BP 2,190 s, SD 0,048, FPD 1,182, ampiezza 368 µV.
+
+**File NWB 2** (`nwb_io.py`): `cardiac-fp-nwb` converte i CSV di WaveForms in `.nwb` (header completo, strumento, inizio con fuso orario, conversione 1/guadagno, modalità di campionamento e trigger, identità di ogni ingresso — chip, camera, test item, condizione — da `samples.csv` o dal nome; `--validate` con nwbinspector); i `.nwb` si aprono in GUI, coda e batch come i CSV, con l'identità letta dal file e senza guadagno. Manuale §3.4.
 
 **Tratti da controllare** sul tracciato della revisione: arancio = battito probabilmente mancante (intervallo > 1,5 × mediana), blu = rilevamenti troppo vicini (< 0,5 × mediana), viola = depolarizzazione senza ripolarizzazione, burst in grigio; legenda con i conteggi nel pannello, *Prossimo tratto* (Ctrl+G) porta la vista sul tratto successivo.
 

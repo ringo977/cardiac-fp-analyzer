@@ -152,8 +152,10 @@ def describe_filtering(config, fs, metadata=None):
                   'ordine': fc.bandpass_order, 'tipo': 'Butterworth, fase zero (avanti e indietro)'})
     steps.append({'passo': 'Savitzky-Golay', 'finestra_campioni': fc.savgol_window,
                   'finestra_ms': round(fc.savgol_window / fs * 1000, 2), 'grado': fc.savgol_polyorder})
-    gain = float(getattr(config, 'amplifier_gain', 1.0) or 1.0)
+    gain = float(md.get('gain_applied', getattr(config, 'amplifier_gain', 1.0)) or 1.0)
     parts = []
+    if md.get('format') == 'nwb':
+        parts.append('file NWB (volt all\'elettrodo, conversione del file applicata)')
     if dev.get('filtri'):
         parts.append('strumento: ' + dev['filtri'] if isinstance(dev['filtri'], str) else 'strumento: ' + ', '.join(
             f"{k} {v}" for k, v in dev['filtri'].items()))

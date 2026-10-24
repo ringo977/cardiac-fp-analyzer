@@ -58,9 +58,14 @@ cdisc = [
 mcs = [
     "h5py>=3.0,<4.0",
 ]
+# NWB 2 files: reading needs only h5py; the CSV → .nwb converter needs pynwb
+nwb = [
+    "h5py>=3.0,<4.0",
+    "pynwb>=2.6",
+]
 # Everything
 all = [
-    "cardiac-fp-analyzer[gui,streamlit,reports,cdisc,mcs]",
+    "cardiac-fp-analyzer[gui,streamlit,reports,cdisc,mcs,nwb]",
 ]
 # Development / testing
 dev = [
@@ -78,6 +83,7 @@ Repository = "https://github.com/ringo977/cardiac-fp-analyzer"
 cardiac-fp = "cardiac_fp_analyzer.analyze:main"
 cardiac-fp-gui = "pyside_app.main:main"
 cardiac-fp-results = "cardiac_fp_analyzer.results_export:main"
+cardiac-fp-nwb = "cardiac_fp_analyzer.nwb_io:main"
 
 [tool.setuptools.packages.find]
 include = ["cardiac_fp_analyzer*", "pyside_app*", "ui*"]
