@@ -11,6 +11,7 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
+    QCheckBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -42,6 +43,8 @@ class ReviewPanel(QWidget):
     beat_selected = Signal(int)           # row double-clicked → beat index
     restore_all_requested = Signal()
     next_problem_requested = Signal(int)  # +1 / -1
+    approve_requested = Signal(bool)      # tick / untick 'Approvato'
+    close_requested = Signal(bool)        # True = close (lock), False = reopen
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -61,6 +64,24 @@ class ReviewPanel(QWidget):
         self._problems.setWordWrap(True)
         self._problems.setStyleSheet("color: #666; padding: 0 4px;")
         lay.addWidget(self._problems)
+        # review workflow: approve (tick) → close (lock)
+        rows = QHBoxLayout()
+        self._chk_approved = QCheckBox(self.tr("Approvato"))
+        self._chk_approved.setToolTip(self.tr("Registrazione rivista e approvata dall'operatore (salvato nel .review.json)"))
+        self._chk_approved.toggled.connect(self._on_approve_toggled)
+        self._btn_close = QPushButton(self.tr("Chiudi 🔒"))
+        self._btn_close.setToolTip(self.tr("Chiude definitivamente la registrazione: approvata e bloccata contro "
+                                           "le modifiche (Sblocca per riaprirla)"))
+        self._btn_close.clicked.connect(self._on_close_clicked)
+        self._status_lbl = QLabel("")
+        self._status_lbl.setStyleSheet("color: #666;")
+        self._status_lbl.setWordWrap(True)
+        rows.addWidget(self._chk_approved)
+        rows.addWidget(self._btn_close)
+        rows.addWidget(self._status_lbl, stretch=1)
+        lay.addLayout(rows)
+        self._syncing = False
+
         # legend of the highlighted stretches + navigation
         rowl = QHBoxLayout()
         self._legend = QLabel("")
@@ -190,7 +211,8 @@ class ReviewPanel(QWidget):
         self._quality = summarise_quality(result) if (state is not None and result is not None) else None
         enabled = state is not None
         for b in (self._btn_undo, self._btn_redo, self._btn_pos, self._btn_neg, self._btn_restore,
-                  self._btn_recompute, self._btn_save, self._btn_prev_problem, self._btn_next_problem):
+                  self._btn_recompute, self._btn_save, self._btn_prev_problem, self._btn_next_problem,
+                  self._chk_approved, self._btn_close):
             b.setEnabled(enabled)
         self.refresh()
 
@@ -201,6 +223,7 @@ class ReviewPanel(QWidget):
             self._badge.setStyleSheet("padding: 6px; border-radius: 6px; background: #e6e6e6; color: #222;")
             self._problems.setText("")
             self._legend.setText("")
+            self._status_lbl.setText("")
             for cells in self._measure_rows:
                 for c in cells:
                     c.setText("")
@@ -213,8 +236,19 @@ class ReviewPanel(QWidget):
             self._badge.setText(self.tr("{0} — {1} battiti").format(q["titolo"], st.n_beats()))
             self._badge.setStyleSheet(f"padding: 6px; border-radius: 6px; background: {col}; color: white; font-weight: bold;")
             self._problems.setText("\n".join("• " + p["testo"] for p in q["problemi"][:6]))
-        self._btn_undo.setEnabled(st.can_undo)
-        self._btn_redo.setEnabled(st.can_redo)
+        locked = bool(getattr(st, 'locked', False))
+        self._btn_undo.setEnabled(st.can_undo and not locked)
+        self._btn_redo.setEnabled(st.can_redo and not locked)
+        for b in (self._btn_pos, self._btn_neg, self._btn_restore, self._btn_recompute):
+            b.setEnabled(not locked)
+        self._syncing = True
+        try:
+            self._chk_approved.setChecked(bool(getattr(st, 'approved', False)))
+            self._chk_approved.setEnabled(not locked)
+            self._btn_close.setText(self.tr("Sblocca 🔓") if locked else self.tr("Chiudi 🔒"))
+        finally:
+            self._syncing = False
+        self._status_lbl.setText(st.status_text() if hasattr(st, 'status_text') else "")
         self._legend.setText(self._legend_text(st))
         m = st.measures(reference=self._reference)
         for cells, (label, val, pct, var) in zip(self._measure_rows, format_measures(m, self._reference)):
@@ -232,6 +266,14 @@ class ReviewPanel(QWidget):
                     item.setForeground(QBrush(QColor("#1f4e9c" if txt in ("corretto", "propagato", "aggiunto", "ripristinato")
                                                      else "#b23a3a")))
                 self._table.setItem(i, j, item)
+
+    def _on_approve_toggled(self, on: bool) -> None:
+        if not self._syncing and self._state is not None:
+            self.approve_requested.emit(bool(on))
+
+    def _on_close_clicked(self) -> None:
+        if self._state is not None:
+            self.close_requested.emit(not bool(getattr(self._state, 'locked', False)))
 
     @staticmethod
     def _legend_text(st) -> str:

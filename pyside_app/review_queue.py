@@ -41,7 +41,8 @@ from .workers import analysis_pool
 
 logger = logging.getLogger(__name__)
 _EXT = ('.csv', '.h5', '.npz', '.nwb')
-COL_FILE, COL_TISSUE, COL_COND, COL_INPUT, COL_USE, COL_JUDGE, COL_BP, COL_FPD, COL_PROBLEMS = range(9)
+COL_FILE, COL_TISSUE, COL_COND, COL_INPUT, COL_USE, COL_STATE, COL_JUDGE, COL_BP, COL_FPD, COL_PROBLEMS = range(10)
+_STATE_MARK = {'chiuso': '🔒', 'approvato': '✓', 'da_rivedere': ''}
 
 
 class _QueueSignals(QObject):
@@ -144,10 +145,10 @@ class ReviewQueue(QWidget):
         self._status.setStyleSheet("color: #777;")
         lay.addWidget(self._status)
         self._tree = QTreeWidget()
-        self._tree.setColumnCount(9)
+        self._tree.setColumnCount(10)
         self._tree.setHeaderLabels([self.tr("Registrazione"), self.tr("Tessuto"), self.tr("Condizione"),
-                                    self.tr("Ingresso"), self.tr("Usa"), self.tr("Giudizio"), self.tr("BP [s]"),
-                                    self.tr("FPD [s]"), self.tr("Problemi")])
+                                    self.tr("Ingresso"), self.tr("Usa"), self.tr("Stato"), self.tr("Giudizio"),
+                                    self.tr("BP [s]"), self.tr("FPD [s]"), self.tr("Problemi")])
         self._tree.setRootIsDecorated(True)
         self._tree.setAlternatingRowColors(True)
         self._tree.setTextElideMode(Qt.ElideMiddle)
@@ -307,8 +308,10 @@ class ReviewQueue(QWidget):
         tissue = ' '.join(s for s in (f"chip {chip}" if chip else '', f"ch{ch}" if ch not in (None, '') else '',
                                       f"({item})" if item else '') if s)
         title = src.get('titolo') or ''
-        if sub is None and e.get('rivista'):
-            title = self.tr("rivista") + " · " + title
+        state = rec.get('stato') or 'da_rivedere'
+        state_txt = _STATE_MARK.get(state, '')
+        if sub is None and e.get('rivista') and state == 'da_rivedere':
+            state_txt = self.tr("rivista")
         if sub is None:
             inp = str(e.get('scelto') or e.get('analizzato') or e.get('ingresso') or '').upper()
             if e.get('due_elettrodi') and e.get('scelto'):
@@ -317,7 +320,7 @@ class ReviewQueue(QWidget):
             inp = str(label).upper() + (' · ' + self.tr("scelta del software") if sub.get('scelta_software') else '')
         it = QTreeWidgetItem([e['nome'] if sub is None else '', tissue if sub is None else '',
                               (rec.get('condition') or src.get('condizione') or '') if sub is None else '', inp, '',
-                              title, f"{src['bp_s']:.3f}" if src.get('bp_s') else "—",
+                              state_txt, title, f"{src['bp_s']:.3f}" if src.get('bp_s') else "—",
                               f"{src['fpd_s']:.3f}" if src.get('fpd_s') else "—",
                               '; '.join(p['testo'] for p in src.get('problemi', [])[:3]) or src.get('riassunto', '')])
         lv = src.get('livello')
@@ -327,6 +330,9 @@ class ReviewQueue(QWidget):
         it.setData(COL_FILE, Qt.UserRole, (e['file'], label or e.get('scelto') or e.get('ingresso'), e.get('camera')))
         it.setToolTip(COL_FILE, e['file'])
         it.setToolTip(COL_PROBLEMS, src.get('riassunto', ''))
+        it.setToolTip(COL_STATE, rec.get('stato_testo') or self.tr("da rivedere"))
+        if state == 'chiuso':
+            it.setForeground(COL_STATE, QBrush(QColor('#888888')))
         if sub is not None:
             it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
             it.setCheckState(COL_USE, Qt.Checked if e.get('scelto') == label else Qt.Unchecked)
@@ -344,7 +350,7 @@ class ReviewQueue(QWidget):
                     for label in sorted(e['elettrodi']):
                         top.addChild(self._item(e, label, e['elettrodi'][label]))
                     top.setExpanded(True)
-            for c in range(9):
+            for c in range(10):
                 self._tree.resizeColumnToContents(c)
             self._tree.setColumnWidth(COL_FILE, min(self._tree.columnWidth(COL_FILE), 260))
         finally:

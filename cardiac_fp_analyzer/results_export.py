@@ -88,6 +88,7 @@ def record_from_state(state, result, *, file, electrode, identity=None, quality=
            'item': fi.get('item') or (None if fi.get('is_baseline') else fi.get('drug')),
            'condition': condition_label(fi), 'is_baseline': bool(fi.get('is_baseline')),
            'measures': state.measures(), 'beats': state.per_beat_rows(), 'changes': state.changes(),
+           'stato': state.status, 'stato_testo': state.status_text(), 'approvato_da': state.approved_by,
            'quality': {'livello': q.get('livello'), 'titolo': q.get('titolo'),
                        'problemi': [p.get('testo', '') for p in q.get('problemi', [])]},
            'not_analysable': bool((result.get('summary') or {}).get('not_analysable')),
@@ -230,6 +231,13 @@ def _channel_title(chamber, conds):
 
 def _note(rec):
     parts = []
+    st = rec.get('stato')
+    if st == 'chiuso':
+        parts.append('CLOSED (' + (rec.get('stato_testo') or '') + ')')
+    elif st == 'approvato':
+        parts.append(rec.get('stato_testo') or 'approved')
+    else:
+        parts.append('not yet approved')
     c = rec.get('changes') or {}
     if c.get('corrected'):
         bits = [f"{c[k]} {w}" for k, w in (('tolti', 'removed'), ('aggiunti', 'added'), ('spostati', 'moved'),
@@ -325,7 +333,7 @@ def _write_samples_sheet(wb, F, records, title):
     ws.write(1, 0, f'Cardiac FP Analyzer {__version__} — one row per recording (tissue input)', F['grey'])
     heads = ('#exp', 'Day', 'CHIP', 'Ch', 'Item', 'Condition', 'Beats', 'Beating Period [s]', 'CV BP [%]',
              'FPD [s]', "FPDc Fridericia [s]", 'Dep. Amplitude [µV]', 'Judgement', 'Problems', 'Corrections',
-             'File', 'Input')
+             'File', 'Input', 'Review state')
     for j, h in enumerate(heads):
         ws.write(3, j, h, F['hdr'])
     rows = sorted(records, key=lambda r: (str(r.get('experiment') or ''), str(r.get('day') or ''),
@@ -340,9 +348,11 @@ def _write_samples_sheet(wb, F, records, title):
                 _num(m.get('fpdc_s')), _num(m.get('amp_uV')),
                 {'verde': 'good', 'giallo': 'to verify', 'rosso': 'problems'}.get(q.get('livello'), q.get('livello')),
                 '; '.join(q.get('problemi') or []),
-                'yes' if c.get('corrected') else 'no', r.get('name'), r.get('electrode'))
+                'yes' if c.get('corrected') else 'no', r.get('name'), r.get('electrode'),
+                {'chiuso': 'closed', 'approvato': 'approved'}.get(r.get('stato'), 'to review') +
+                (f" — {r['stato_testo']}" if r.get('stato') in ('chiuso', 'approvato') and r.get('stato_testo') else ''))
         fmts = (None, None, None, None, None, None, None, F['s3'], F['p1'], F['s3'], F['s3'], F['uv'],
-                None, F['txtw'], None, None, None)
+                None, F['txtw'], None, None, None, None)
         for j, (v, f) in enumerate(zip(vals, fmts)):
             if v is None:
                 continue
@@ -356,6 +366,7 @@ def _write_samples_sheet(wb, F, records, title):
     ws.set_column(13, 13, 60)
     ws.set_column(14, 14, 11)
     ws.set_column(15, 15, 48)
+    ws.set_column(17, 17, 40)
     ws.freeze_panes(4, 0)
 
 

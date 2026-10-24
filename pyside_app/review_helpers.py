@@ -93,9 +93,15 @@ def queue_entry(path, channel, chamber, result, error=None, record=None):
     return e
 
 
+STATE_ORDER = {'da_rivedere': 0, 'approvato': 1, 'chiuso': 2}
+
+
 def queue_sort_key(entry):
-    """Problems first, then to-verify, then good; within a level by file name and input."""
-    return (LEVEL_ORDER.get(entry.get('livello'), 0), entry.get('rivista', False), entry.get('nome', ''), str(entry.get('ingresso')))
+    """Problems first, then to-verify, then good; within a level the still-to-review recordings before the
+    approved and the closed ones; then by file name and input."""
+    state = ((entry.get('record') or {}).get('stato')) or entry.get('stato') or 'da_rivedere'
+    return (LEVEL_ORDER.get(entry.get('livello'), 0), STATE_ORDER.get(state, 0), entry.get('rivista', False),
+            entry.get('nome', ''), str(entry.get('ingresso')))
 
 
 def format_measures(m, reference=None):

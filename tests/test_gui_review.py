@@ -104,6 +104,24 @@ def test_review_state_and_panel_after_open(app, csv_path):
     sidecar = csv_path.with_name(csv_path.name + ".review.json")
     assert sidecar.exists()
 
+    # approval (tick) and closure (lock) through the panel, persisted, shown in the queue
+    panel._chk_approved.setChecked(True)
+    assert st.approved and st.approved_by and "approvato" in panel._status_lbl.text()
+    from cardiac_fp_analyzer.review import ReviewState
+    assert ReviewState.saved_status(csv_path) == {"el1": "approvato"}
+    panel._btn_close.click()
+    assert st.locked and panel._btn_close.text().startswith("Sblocca") and not panel._btn_pos.isEnabled()
+    n_before = st.n_beats()
+    w._review_delete_selected()                       # refused while closed
+    w._review_polarity(-1)
+    assert st.n_beats() == n_before and st.polarity == 1
+    w.viewer._show_review_menu(1.0)                   # no menu on a closed recording, only a message
+    assert ReviewState.saved_status(csv_path) == {"el1": "chiuso"}
+    panel._btn_close.click()                          # reopen: still approved, editable again
+    assert st.approved and not st.locked and panel._chk_approved.isEnabled()
+    panel._chk_approved.setChecked(False)
+    assert st.status == "da_rivedere" and ReviewState.saved_status(csv_path) == {"el1": "da_rivedere"}
+
     # reopening loads the sidecar
     w._run_analysis(str(csv_path), "el1")
     assert w._review_state.polarity == 1
@@ -126,7 +144,7 @@ def test_review_queue_lists_both_inputs(app, csv_path, tmp_path):
     entries = q.entries()
     assert len(entries) == 2 and all(e["livello"] in ("verde", "giallo", "rosso") for e in entries)
     assert {e["ingresso"] for e in entries} == {"el1", "el2"}
-    assert q._tree.topLevelItemCount() == 2 and q._tree.columnCount() == 9
+    assert q._tree.topLevelItemCount() == 2 and q._tree.columnCount() == 10
     # every row carries its export record (identity from the two-tissue name) and the measures of the review model
     recs = q.records()
     assert len(recs) == 2 and {(r["chip"], r["chamber"]) for r in recs} == {("A", 1), ("B", 1)}
@@ -143,6 +161,12 @@ def test_review_queue_lists_both_inputs(app, csv_path, tmp_path):
     el1 = next(e for e in q.entries() if e["ingresso"] == "el1")
     assert el1["rivista"] and el1["record"]["changes"]["corrected"] and el1["record"]["chip"] == "A"
     assert el1["record"]["measures"]["n_battiti"] == st.n_beats()
+    # the workflow state travels with the record and is shown in the 'Stato' column, closed rows last
+    st.close("Rossi, Mario")
+    q.mark_reviewed(str(csv_path), "el1", state=st, result=result)
+    rows = [(q._tree.topLevelItem(i).text(3), q._tree.topLevelItem(i).text(5)) for i in range(2)]
+    assert ("EL1", "🔒") in rows and q.entries()[-1]["ingresso"] == "el1"
+    assert q.records()[-1]["stato"] == "chiuso" and "Rossi" in q.records()[-1]["stato_testo"]
     # export of the queue
     out = tmp_path / "Results.xlsx"
     assert q.export_results(out) == 2 and out.exists() and out.stat().st_size > 5000

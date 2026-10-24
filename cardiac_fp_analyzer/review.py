@@ -42,6 +42,19 @@ logger = logging.getLogger(__name__)
 REVIEW_SUFFIX = '.review.json'
 SCHEMA = '1'
 MATCH_TOL_S = 0.050           # a click within this of an existing marker refers to it
+STATUS_TO_REVIEW, STATUS_APPROVED, STATUS_CLOSED = 'da_rivedere', 'approvato', 'chiuso'
+STATUSES = (STATUS_TO_REVIEW, STATUS_APPROVED, STATUS_CLOSED)
+
+
+def operator_name():
+    """Who approves: ``CARDIAC_FP_OPERATOR`` when set, else the login name."""
+    import getpass
+    import os
+    return os.environ.get('CARDIAC_FP_OPERATOR') or getpass.getuser()
+
+
+class RecordingClosedError(PermissionError):
+    """The recording was closed by the operator: no correction is accepted until it is reopened."""
 MIN_RR_S = 0.100              # an added beat may not sit closer than this to another
 
 
@@ -77,6 +90,11 @@ class ReviewState:
         self.source_file = str(source_file)
         self.beats: list[BeatMark] = []
         self.removed: list[int] = []                # software detections the operator removed (sample indices)
+        # review workflow: to review → approved (tick) → closed (locked); saved in the sidecar
+        self.status = STATUS_TO_REVIEW
+        self.approved_by = ''
+        self.approved_at = ''
+        self.closed_at = ''
         self.polarity: int | None = None            # repolarisation polarity chosen by the operator (+1 / -1)
         self.criterion: dict | None = None          # last propagated criterion
         self.notes = ''
@@ -128,8 +146,54 @@ class ReviewState:
         self.removed = list(s.removed)
 
     def _begin(self):
+        if self.locked:
+            raise RecordingClosedError('registrazione chiusa: sbloccarla per correggere')
         self._history.append(self._snapshot())
         self._future.clear()
+
+    # ── approval / closure ─────────────────────────────────────────────────
+
+    @property
+    def locked(self):
+        return self.status == STATUS_CLOSED
+
+    @property
+    def approved(self):
+        return self.status in (STATUS_APPROVED, STATUS_CLOSED)
+
+    def approve(self, operator=None):
+        """Tick the recording as reviewed and approved (no effect when closed)."""
+        from datetime import datetime
+        if self.locked:
+            return
+        self.status = STATUS_APPROVED
+        self.approved_by = operator or operator_name()
+        self.approved_at = datetime.now().astimezone().isoformat(timespec='seconds')
+
+    def unapprove(self):
+        if self.locked:
+            return
+        self.status, self.approved_by, self.approved_at = STATUS_TO_REVIEW, '', ''
+
+    def close(self, operator=None):
+        """Close the recording: approved (if not yet) and locked against corrections."""
+        from datetime import datetime
+        if not self.approved:
+            self.approve(operator)
+        self.status = STATUS_CLOSED
+        self.closed_at = datetime.now().astimezone().isoformat(timespec='seconds')
+
+    def reopen(self):
+        """Unlock a closed recording (it stays approved)."""
+        if self.locked:
+            self.status, self.closed_at = STATUS_APPROVED, ''
+
+    def status_text(self):
+        if self.status == STATUS_CLOSED:
+            return f"chiuso il {self.closed_at[:16].replace('T', ' ')}" + (f" ({self.approved_by})" if self.approved_by else '')
+        if self.status == STATUS_APPROVED:
+            return f"approvato da {self.approved_by or '?'} il {self.approved_at[:16].replace('T', ' ')}"
+        return 'da rivedere'
 
     @property
     def can_undo(self):
@@ -517,7 +581,8 @@ class ReviewState:
         crit = {k: (float(v) if isinstance(v, (np.floating, float)) else int(v) if isinstance(v, (np.integer,)) else v)
                 for k, v in (self.criterion or {}).items()} or None
         return {'canale': self.channel, 'fs': self.fs, 'polarita': self.polarity, 'criterio': crit,
-                'note': self.notes,
+                'note': self.notes, 'stato': self.status, 'approvato_da': self.approved_by,
+                'approvato_il': self.approved_at, 'chiuso_il': self.closed_at,
                 'battiti': [{'dep_s': b.dep / self.fs, 'rep_s': b.repol / self.fs if b.repol is not None else None,
                              'stato': b.source, 'stato_rip': b.repol_source, 'nota': b.note} for b in self.beats],
                 'tolti_dai_veti_s': [v / self.fs for v in self.vetoed],
@@ -535,6 +600,10 @@ class ReviewState:
         self.polarity = d.get('polarita')
         self.criterion = d.get('criterio')
         self.notes = d.get('note', '')
+        self.status = d.get('stato') if d.get('stato') in STATUSES else STATUS_TO_REVIEW
+        self.approved_by = d.get('approvato_da', '') or ''
+        self.approved_at = d.get('approvato_il', '') or ''
+        self.closed_at = d.get('chiuso_il', '') or ''
         self._history.clear()
         self._future.clear()
 
@@ -577,6 +646,16 @@ class ReviewState:
         saved by ``save_choice``; None when not chosen."""
         data, _ = cls._read_sidecar(recording_path)
         return (data or {}).get('elettrodo_scelto') or None
+
+    @classmethod
+    def saved_status(cls, recording_path):
+        """{input label: status} of the inputs saved in the sidecar (without loading the data)."""
+        data, _ = cls._read_sidecar(recording_path)
+        out = {}
+        for label, entry in ((data or {}).get('ingressi') or {}).items():
+            st = (entry or {}).get('stato')
+            out[label] = st if st in STATUSES else STATUS_TO_REVIEW
+        return out
 
     @classmethod
     def save_choice(cls, recording_path, electrode):

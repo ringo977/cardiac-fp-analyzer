@@ -86,8 +86,8 @@ def test_workbook_layout_and_formulas(tmp_path):
     assert ws['D8'].value == '=C8/B8*100' and ws['J8'].value == '=G8/(B8^(1/3))' and ws['E8'].value == '=B8/$B$8*100'
     assert ws['A10'].value == 'A' and ws['E10'].value == '=B10/$B$8*100' and ws['F10'].value == '=E10-100'
     assert ws['K10'].value == '=J10/$J$8*100' and ws['N10'].value == '=M10/$M$8*100'
-    assert ws['P10'].value.startswith('corrected by the operator: beats 1 removed')
-    assert ws['P8'].value == 'automatic' and ws['Q8'].value == 'chipA_ch1_baseline.csv' and ws['R8'].value == 'el1'
+    assert ws['P10'].value.startswith('not yet approved — corrected by the operator: beats 1 removed')
+    assert ws['P8'].value == 'not yet approved — automatic' and ws['Q8'].value == 'chipA_ch1_baseline.csv' and ws['R8'].value == 'el1'
     # two conditions per channel: the next block starts after three blank rows (the lab's spacing)
     assert ws['A14'].value == 'Ch2 (Ti04)' and ws['A16'].value == BASELINE and ws['A18'].value == 'A'
     assert 'rumore' in ws['P18'].value
@@ -102,7 +102,7 @@ def test_workbook_layout_and_formulas(tmp_path):
     assert raw['A44'].value == 'A' and raw['J44'].value == 'A'          # next condition after 3 blank rows
     samples = wb['samples']
     assert samples['A4'].value == '#exp' and samples.max_row == 4 + 4
-    assert [samples.cell(5, j).value for j in (3, 4, 6, 13, 15)] == ['A', 1, BASELINE, 'good', 'no']
+    assert [samples.cell(5, j).value for j in (3, 4, 6, 13, 15, 18)] == ['A', 1, BASELINE, 'good', 'no', 'to review']
 
 
 def test_record_from_state_uses_the_review_measures():

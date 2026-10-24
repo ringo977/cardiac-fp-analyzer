@@ -234,3 +234,31 @@ def test_problems_flag_gaps_close_beats_and_missing_repol():
     close = next(p for p in probs if p['tipo'] == 'battiti_vicini')
     assert abs(close['end'] - close['start'] - int(0.3 * FS)) <= int(0.010 * FS)      # snapped within ±10 ms
     assert probs == sorted(probs, key=lambda p: (p['start'], p['tipo']))
+
+
+def test_approval_and_closure_are_saved_and_lock_the_corrections(tmp_path):
+    from cardiac_fp_analyzer.review import RecordingClosedError
+    st, beats, reps = _state()
+    assert st.status == 'da_rivedere' and not st.approved and not st.locked and st.status_text() == 'da rivedere'
+    st.approve('Rossi, Mario')
+    assert st.approved and st.approved_by == 'Rossi, Mario' and st.approved_at and 'Rossi' in st.status_text()
+    st.remove_beat(0)                                   # approved recordings can still be corrected
+    st.close()
+    assert st.locked and st.closed_at and st.status_text().startswith('chiuso')
+    with pytest.raises(RecordingClosedError):
+        st.remove_beat(0)
+    with pytest.raises(RecordingClosedError):
+        st.set_polarity(1)
+    st.source_file = str(tmp_path / 'rec.csv')
+    st.save()
+    assert ReviewState.saved_status(st.source_file) == {'el1': 'chiuso'}
+    other, _, _ = _state()
+    other.source_file = st.source_file
+    assert ReviewState.load_into(other) and other.locked and other.approved_by == 'Rossi, Mario' and other.n_beats() == len(beats) - 1
+    other.reopen()
+    assert other.approved and not other.locked and other.closed_at == ''
+    other.remove_beat(0)
+    other.unapprove()
+    assert other.status == 'da_rivedere' and other.approved_by == ''
+    other.close('Bianchi, Anna')                        # closing approves first
+    assert other.approved_by == 'Bianchi, Anna' and other.locked

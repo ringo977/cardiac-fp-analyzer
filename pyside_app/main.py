@@ -1966,6 +1966,8 @@ class MainWindow(QMainWindow):
         self._review_panel.beat_selected.connect(self._review_select)
         self._review_panel.restore_all_requested.connect(self._review_restore_all)
         self._review_panel.next_problem_requested.connect(self._review_next_problem)
+        self._review_panel.approve_requested.connect(self._review_approve)
+        self._review_panel.close_requested.connect(self._review_close)
         self._review_queue.open_requested.connect(self._open_from_queue)
         self.viewer.review_report.connect(lambda msg: self.statusBar().showMessage(msg, 8000))
         self.viewer.beats_changed.connect(self._review_panel.refresh)
@@ -2291,11 +2293,15 @@ class MainWindow(QMainWindow):
         self._review_panel.select_row(self.viewer.selected_beat())
 
     def _review_undo(self) -> None:
+        if self._review_locked():
+            return
         if self._review_state is not None and self._review_state.undo():
             self._review_after_edit()
             self.statusBar().showMessage(self.tr("Correzione annullata"), 3000)
 
     def _review_redo(self) -> None:
+        if self._review_locked():
+            return
         if self._review_state is not None and self._review_state.redo():
             self._review_after_edit()
             self.statusBar().showMessage(self.tr("Correzione ripetuta"), 3000)
@@ -2305,6 +2311,56 @@ class MainWindow(QMainWindow):
             return
         self.viewer.select_next(step)
         self._review_panel.select_row(self.viewer.selected_beat())
+
+    def _review_locked(self) -> bool:
+        """True (and a status-bar message) when the current recording is closed."""
+        st = self._review_state
+        if st is not None and getattr(st, 'locked', False):
+            self.statusBar().showMessage(self.tr("Registrazione chiusa: Sblocca per modificarla"), 4000)
+            return True
+        return False
+
+    def _review_persist_state(self) -> None:
+        """Save the workflow state (and the corrections) and tell the queue."""
+        st = self._review_state
+        if st is None or self._current_csv_path is None:
+            return
+        try:
+            st.save(str(self._current_csv_path))
+        except OSError as exc:
+            QMessageBox.warning(self, self.tr("Salvataggio"), str(exc))
+            return
+        fi = (self._current_result or {}).get("file_info") or {}
+        self._review_queue.mark_reviewed(str(self._current_csv_path), st.channel, fi.get("chamber"),
+                                         state=st, result=self._current_result)
+        self._review_panel.refresh()
+        self.viewer.refresh_from_state()
+
+    def _review_approve(self, on: bool) -> None:
+        st = self._review_state
+        if st is None or getattr(st, 'locked', False):
+            return
+        if on:
+            st.approve()
+            msg = self.tr("Registrazione approvata da {0}").format(st.approved_by)
+        else:
+            st.unapprove()
+            msg = self.tr("Approvazione tolta")
+        self._review_persist_state()
+        self.statusBar().showMessage(msg, 5000)
+
+    def _review_close(self, close: bool) -> None:
+        st = self._review_state
+        if st is None:
+            return
+        if close:
+            st.close()
+            msg = self.tr("Registrazione chiusa (bloccata)")
+        else:
+            st.reopen()
+            msg = self.tr("Registrazione sbloccata: resta approvata")
+        self._review_persist_state()
+        self.statusBar().showMessage(msg, 5000)
 
     def _review_next_problem(self, step: int = 1) -> None:
         """Centre the trace on the next highlighted stretch (missing beat, detections too close, no
@@ -2330,7 +2386,7 @@ class MainWindow(QMainWindow):
     def _review_delete_selected(self) -> None:
         st = self._review_state
         k = self.viewer.selected_beat()
-        if st is None or k is None:
+        if st is None or k is None or self._review_locked():
             return
         st.remove_beat(k)
         self.viewer.select_beat(min(k, st.n_beats() - 1) if st.n_beats() else None, center=False)
@@ -2338,7 +2394,7 @@ class MainWindow(QMainWindow):
 
     def _review_polarity(self, sign: int) -> None:
         st = self._review_state
-        if st is None:
+        if st is None or self._review_locked():
             return
         rep = st.set_polarity(sign)
         self._review_after_edit()
@@ -2350,7 +2406,7 @@ class MainWindow(QMainWindow):
 
     def _review_restore_all(self) -> None:
         st = self._review_state
-        if st is None or not st.vetoed:
+        if st is None or not st.vetoed or self._review_locked():
             return
         n = 0
         for v in list(st.vetoed):

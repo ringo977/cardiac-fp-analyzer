@@ -603,6 +603,9 @@ class SignalViewer(pg.PlotWidget):
     # ─── Review-mode menu (edits go through the ReviewState) ───────
     def _show_review_menu(self, x_click_s: float) -> None:
         st = self._state
+        if getattr(st, 'locked', False):
+            self.review_report.emit(self.tr("Registrazione chiusa: Sblocca nel pannello Revisione per modificarla"))
+            return
         i_click = int(np.argmin(np.abs(self._time - x_click_s)))
         k_dep = st.beat_near(i_click, tol_s=_SNAP_WINDOW_S)
         k_rep = st.repol_near(i_click, tol_s=_SNAP_WINDOW_S)
@@ -641,7 +644,7 @@ class SignalViewer(pg.PlotWidget):
         """Run one state operation, redraw, notify. ``report`` → the propagation report goes to ``review_report``."""
         try:
             out = op()
-        except ValueError as exc:
+        except (ValueError, PermissionError) as exc:
             self.review_report.emit(str(exc))
             return
         self.refresh_from_state()
