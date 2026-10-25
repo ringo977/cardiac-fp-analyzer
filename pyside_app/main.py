@@ -2481,6 +2481,18 @@ class MainWindow(QMainWindow):
                                          state=st, result=self._current_result)
         self.statusBar().showMessage(tr("Corrections saved to {0}").format(p.name), 5000)
 
+    def _tissue_of(self, path: str, channel: str) -> str:
+        """'chip E ch2' for an input listed in the review queue, '' otherwise."""
+        queue = getattr(self, "_review_queue", None)
+        if queue is None or not channel:
+            return ""
+        path = str(Path(path).resolve()) if Path(path).exists() else str(path)
+        e = next(queue._find(path, str(channel).lower()), None)
+        if not e or not e.get("chip"):
+            return ""
+        ch = e.get("camera")
+        return f"{tr('chip')} {e['chip']}" + (f" ch{ch}" if ch not in (None, "") else "")
+
     def _open_from_queue(self, path: str, channel: str, chamber) -> None:
         """A double click in the review queue: open that recording (input or chamber)."""
         self._current_group = None
@@ -2809,6 +2821,11 @@ class MainWindow(QMainWindow):
             ch_suffix = tr("{0} (auto)").format(ch_label)
         else:
             ch_suffix = ch_label
+        # a file with two tissues: say which tissue this input is — the channel combo switches tissue
+        # there, and the review state (approval, closure) belongs to the input, not to the queue row
+        tissue = self._tissue_of(path, analyzed or channel)
+        if tissue:
+            ch_suffix += f" ({tissue})"
         self.statusBar().showMessage(
             tr("{0} — {1} — {2} beats included").format(
                 Path(path).name, ch_suffix, self.viewer.beat_count(),
