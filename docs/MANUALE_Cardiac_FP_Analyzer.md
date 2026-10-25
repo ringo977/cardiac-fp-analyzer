@@ -59,18 +59,41 @@ Sui chip a più camere ogni **camera** (un microtessuto) è analizzata separatam
 ## 2.1 Requisiti
 
 - Python 3.9–3.12 (il pacchetto richiede `numpy < 2` e `pyqtgraph < 0.14`: per questo si usa un ambiente virtuale dedicato, che non tocca il Python di sistema).
-- Windows 10+, macOS 12+, Linux. Il codice è portabile; la GUI è provata su macOS e in integrazione continua su Linux.
+- Windows 10+, macOS 12+, Linux. Il codice è portabile; la GUI è provata su macOS, in integrazione continua su Linux e, dalla v3.20, i test girano anche su Windows in integrazione continua (non ancora provata a mano su Windows: segnalare i problemi).
 - RAM: 4 GB per i CSV; **8 GB consigliati per i file MCS a 64 canali** (un file di 5 minuti a 20 kHz occupa 650 MB su disco e si carica in circa 20 s con meno di 0,7 GB di memoria).
 
 ## 2.2 Installazione in un ambiente virtuale (consigliata)
+
+**macOS / Linux** (Terminale):
 
 ```bash
 git clone https://github.com/ringo977/cardiac-fp-analyzer.git
 cd cardiac-fp-analyzer
 python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[gui,reports,mcs]"
+source .venv/bin/activate
+pip install -e ".[gui,reports,mcs,nwb]"
 ```
+
+**Windows** (PowerShell: tasto Start, scrivere *PowerShell*, Invio):
+
+1. Installare **Python 3.12** da python.org (Windows installer 64-bit) spuntando *Add python.exe to PATH*, e **Git for Windows** da git-scm.com con le opzioni predefinite. In alternativa a Git si può scaricare lo zip del repository da GitHub (*Code ▸ Download ZIP*) e scompattarlo, per esempio in `C:\Users\<nome>\Documents\cardiac-fp-analyzer`.
+2. Nella PowerShell:
+
+```powershell
+cd $HOME\Documents
+git clone https://github.com/ringo977/cardiac-fp-analyzer.git
+cd cardiac-fp-analyzer
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e ".[gui,reports,mcs,nwb]"
+cardiac-fp-gui
+```
+
+Se alla riga `Activate.ps1` PowerShell rifiuta di eseguire lo script ("l'esecuzione di script è disabilitata"), una volta sola: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, rispondere S, e ripetere l'attivazione. Da *Prompt dei comandi* (`cmd`) l'attivazione è `.venv\Scripts\activate.bat`. Il prompt mostra `(.venv)` quando l'ambiente è attivo. Per i file `.nwb` l'extra `nwb` installa anche `tzdata`, necessario su Windows per i fusi orari.
+
+Per lanciare la GUI nelle volte successive: aprire PowerShell, `cd $HOME\Documents\cardiac-fp-analyzer`, `.venv\Scripts\Activate.ps1`, `cardiac-fp-gui`. Volendo un collegamento sul desktop: tasto destro ▸ *Nuovo ▸ Collegamento*, destinazione `C:\Users\<nome>\Documents\cardiac-fp-analyzer\.venv\Scripts\cardiac-fp-gui.exe` (il programma si apre senza terminale).
+
+Su Windows SmartScreen può fermare il primo avvio del convertitore NWB autonomo (*NWB Converter.exe*, §3.4): *Ulteriori informazioni ▸ Esegui comunque*. Alcuni antivirus aziendali bloccano gli eseguibili non firmati: in quel caso usare `cardiac-fp-nwb-gui` dall'ambiente appena installato, che fa la stessa cosa.
 
 Gli extra disponibili:
 
@@ -79,12 +102,13 @@ Gli extra disponibili:
 | `gui` | PySide6 ≥ 6.5, pyqtgraph 0.13 | GUI desktop `cardiac-fp-gui` |
 | `reports` | xlsxwriter | report Excel del batch |
 | `mcs` | h5py | file HDF5 Multi Channel Systems (`.h5`); i `.npz` non lo richiedono |
+| `nwb` | h5py, pynwb, tzdata | file NWB 2 (lettura e conversione, §3.4) |
 | `cdisc` | pyreadstat | export CDISC SEND in `.xpt` |
 | `streamlit` | streamlit, plotly | GUI web legacy |
 | `all` | tutti i precedenti | installazione completa |
 | `dev` | `all` + pytest, ruff | sviluppo e test |
 
-Attenzione: ogni volta che si apre un nuovo terminale va riattivato l'ambiente (`source .venv/bin/activate`), altrimenti `cardiac-fp` e `cardiac-fp-gui` non si trovano ("command not found"). Non aggiungere commenti `# …` in coda ai comandi `pip`: alcune shell li passano a pip come argomento ("Invalid requirement: '#'").
+Attenzione: ogni volta che si apre un nuovo terminale va riattivato l'ambiente (`source .venv/bin/activate`; su Windows `.venv\Scripts\Activate.ps1`), altrimenti `cardiac-fp` e `cardiac-fp-gui` non si trovano ("command not found"). Non aggiungere commenti `# …` in coda ai comandi `pip`: alcune shell li passano a pip come argomento ("Invalid requirement: '#'").
 
 ## 2.3 Verifica
 
@@ -99,9 +123,11 @@ python -m pytest -q      # con l'extra dev: la suite di test
 ```bash
 cd cardiac-fp-analyzer
 git pull
-source .venv/bin/activate
-pip install -e ".[gui,reports,mcs]"
+source .venv/bin/activate          # Windows: .venv\Scripts\Activate.ps1
+pip install -e ".[gui,reports,mcs,nwb]"
 ```
+
+Il `pip install` dopo un aggiornamento serve quando cambiano le dipendenze o i comandi (il changelog lo dice); una modifica del solo codice è attiva al riavvio del programma, perché l'installazione è in modalità *editable*.
 
 # 3. Dati in ingresso
 
