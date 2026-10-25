@@ -280,6 +280,23 @@ class ReviewState:
                 votes += int(np.sign((seg.max() - ref) - (ref - seg.min())))
         return int(np.sign(votes))
 
+    REFINE_RAW_S = 0.008          # the peak found on the filtered trace is re-read on the unfiltered one
+
+    def _refine_on_raw(self, sample, side):
+        """Time of the spike read on the unfiltered signal: the peak is identified on the filtered trace (which
+        is clean), but the operators' time — and the amplitude — are those of the raw signal, where the peak
+        sits up to ~10 ms away from the smoothed one. ``side`` is the spike's sign (0: either)."""
+        raw = self.raw
+        if raw is None or len(raw) != len(self.filtered):
+            return int(sample)
+        h = int(self.REFINE_RAW_S * self.fs)
+        a, b = max(0, sample - h), min(len(raw), sample + h + 1)
+        seg = raw[a:b]
+        if len(seg) < 3:
+            return int(sample)
+        i = int(np.argmax(seg)) if side > 0 else int(np.argmin(seg)) if side < 0 else int(np.argmax(np.abs(seg - np.median(seg))))
+        return int(a + i)
+
     def _snap_to_spike(self, sample, half_s=None, trace=None):
         """The sample of the spike peak within ±``half_s`` of ``sample`` on the software's filtered trace: the
         highest local maximum when the recording's spikes are positive, the lowest local minimum when they are
@@ -304,9 +321,10 @@ class ReviewState:
         if side:
             ext_side = ext[(np.diff(seg)[ext - 1] > 0) if side > 0 else (np.diff(seg)[ext - 1] < 0)]
             if len(ext_side):
-                return int(a + ext_side[int(np.argmax(side * seg[ext_side]))])
+                return self._refine_on_raw(int(a + ext_side[int(np.argmax(side * seg[ext_side]))]), side)
         dev = np.abs(seg[ext] - np.median(seg))
-        return int(a + ext[int(np.argmax(dev))])
+        pick = int(a + ext[int(np.argmax(dev))])
+        return self._refine_on_raw(pick, int(np.sign(x[pick] - np.median(seg))))
 
     def add_beat(self, sample, *, snap=True, source='aggiunto', trace=None):
         """Add a depolarisation at ``sample`` (snapped to the highest peak within ±25 ms on ``trace``, see

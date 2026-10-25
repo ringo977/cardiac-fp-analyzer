@@ -306,7 +306,7 @@ def test_swap_markers_and_align_to_peak_are_undoable():
     # old depolarisation the repolarisation; the last beat has nothing to follow → no repolarisation
     n = st.swap_markers()
     assert n == n0 and st.n_beats() == n0
-    assert all(abs(b.dep - r) <= int(0.025 * FS) for b, r in zip(st.beats, reps0))
+    assert all(abs(b.dep - r) <= int(0.035 * FS) for b, r in zip(st.beats, reps0))
     assert [b.repol for b in st.beats][:-1] == deps0[1:] and st.beats[-1].repol is None
     assert all(b.source == 'corretto' for b in st.beats) and st.changes()['corrected']
     st.undo()
@@ -351,3 +351,26 @@ def test_snap_and_align_keep_the_side_of_the_spike_and_are_repeatable():
     assert st.align_to_peak() == len(beats)
     assert all(abs(bm.dep - b) <= 2 for bm, b in zip(st.beats, beats))
     assert st.align_to_peak() == 0
+
+
+def test_pipeline_amplitude_is_read_on_the_unfiltered_signal_and_time_on_its_peak():
+    """The peak is found on the filtered trace; the reported amplitude (summary) is the raw peak-to-peak, and a
+    snapped marker sits on the raw peak. A spike the smoothing flattens: filtered amplitude < raw."""
+    from cardiac_fp_analyzer.analyze import _apply_raw_spike_amplitude
+    rng = np.random.default_rng(1)
+    n = int(20 * FS)
+    raw = 0.01 * rng.standard_normal(n)
+    beats = np.arange(int(1.0 * FS), n - int(1.0 * FS), int(2.0 * FS))
+    for b in beats:
+        raw[b] += 1.0                                  # a one-sample spike: the smoothing takes most of it
+    filt = np.convolve(raw, np.ones(7) / 7, mode='same')
+    params = [{'spike_amplitude_mV': 1000 * (filt[b - 20:b + 40].max() - filt[b - 20:b + 40].min())} for b in beats]
+    summary = {'spike_amplitude_mV_mean': float(np.mean([p['spike_amplitude_mV'] for p in params]))}
+    filtered_mean = summary['spike_amplitude_mV_mean']
+    _apply_raw_spike_amplitude(summary, params, raw, beats, FS)
+    assert summary['spike_amplitude_filtered_mV_mean'] == filtered_mean
+    assert summary['spike_amplitude_mV_mean'] > 3 * filtered_mean and 900 < summary['spike_amplitude_mV_mean'] < 1100
+    assert all('spike_amplitude_raw_mV' in p for p in params) and summary['spike_amplitude_mV_n'] == len(beats)
+    st = ReviewState(FS, filt, raw, channel='el1', gain=1e4)
+    st.beats = [BeatMark(int(b), None, 'auto', 'assente') for b in beats]
+    assert all(abs(st._snap_to_spike(int(b) + int(0.004 * FS)) - b) <= 1 for b in beats[:4])   # on the raw peak

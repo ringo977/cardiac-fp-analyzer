@@ -389,6 +389,7 @@ def _analyze_from_beats(
     all_p, summary = extract_all_parameters(bd_fpd, btm_fpd, bi_fpd, fs,
                                              cfg=rep_cfg,
                                              all_beat_indices=bi_stats)
+    _apply_raw_spike_amplitude(summary, all_p, raw_signal, bi_fpd, fs)
     if _resegmented_info is not None:
         summary['resegmentation_info'] = _resegmented_info
     # Merge rhythm-classification-derived fields into summary (additive).
@@ -488,6 +489,44 @@ def _analyze_from_beats(
                 print(f"  Spectral: {', '.join(parts)}")
 
     return result
+
+
+RAW_AMP_BEFORE_S = 0.030      # amplitude window on the unfiltered signal: 30 ms before the marker ...
+RAW_AMP_AFTER_S = 0.030       # ... to 30 ms after it (same as ReviewState._amp_uV)
+
+
+def _apply_raw_spike_amplitude(summary, all_params, raw_signal, beat_indices, fs):
+    """The reported spike amplitude is measured on the *unfiltered* signal, as the operators do: the peak is
+    found on the filtered trace, then time and amplitude are read on the raw one (the band-pass and the
+    Savitzky–Golay smoothing take ~20 % off a spike a few ms wide). The per-beat ``spike_amplitude_mV`` (filtered)
+    stays what the quality gate, the arrhythmia flags and cessation use; the summary statistics
+    ``spike_amplitude_mV_*`` become the raw ones, the filtered ones are kept as
+    ``spike_amplitude_filtered_mV_*``. Per beat: ``spike_amplitude_raw_mV``."""
+    if raw_signal is None or not len(all_params):
+        return
+    raw = np.asarray(raw_signal, dtype=float)
+    lo, hi = int(RAW_AMP_BEFORE_S * fs), int(RAW_AMP_AFTER_S * fs)
+    vals = []
+    for b, p in zip(beat_indices, all_params):
+        w = raw[max(0, int(b) - lo):min(len(raw), int(b) + hi + 1)]
+        a = float((w.max() - w.min()) * 1000) if len(w) else np.nan
+        p['spike_amplitude_raw_mV'] = a
+        vals.append(a)
+    v = np.asarray(vals, dtype=float)
+    v = v[~np.isnan(v)]
+    if not len(v):
+        return
+    for suffix in ('mean', 'std', 'median', 'cv', 'min', 'max', 'n'):
+        old = summary.get(f'spike_amplitude_mV_{suffix}')
+        if old is not None:
+            summary[f'spike_amplitude_filtered_mV_{suffix}'] = old
+    summary['spike_amplitude_mV_mean'] = float(np.mean(v))
+    summary['spike_amplitude_mV_std'] = float(np.std(v))
+    summary['spike_amplitude_mV_median'] = float(np.median(v))
+    summary['spike_amplitude_mV_cv'] = float(np.std(v) / np.mean(v) * 100) if np.mean(v) else np.nan
+    summary['spike_amplitude_mV_min'] = float(np.min(v))
+    summary['spike_amplitude_mV_max'] = float(np.max(v))
+    summary['spike_amplitude_mV_n'] = int(len(v))
 
 
 def recompute_from_beats(result, bi_edited, config=None, verbose=False):
