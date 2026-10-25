@@ -262,9 +262,30 @@ class ReviewState:
 
     SNAP_SPIKE_S = 0.025          # a click within this of the spike lands on it (the operator aims by eye)
 
+    def _spike_sign(self):
+        """+1 / -1: the side on which the recording's spikes stand out, or 0 when it cannot be told.
+
+        One vote per depolarisation: is the highest sample within ±``SNAP_SPIKE_S`` further above the
+        recording's median than the lowest is below it? The reference is the median of the whole trace, so a
+        slow wave next to the spike cannot flip the vote the way a window-local median did."""
+        x = self.filtered
+        if not self.beats or len(x) < 3:
+            return 0
+        ref = float(np.median(x))
+        h = int(self.SNAP_SPIKE_S * self.fs)
+        votes = 0
+        for b in self.beats:
+            seg = x[max(0, b.dep - h):min(len(x), b.dep + h + 1)]
+            if len(seg):
+                votes += int(np.sign((seg.max() - ref) - (ref - seg.min())))
+        return int(np.sign(votes))
+
     def _snap_to_spike(self, sample, half_s=None, trace=None):
-        """The sample of the highest peak — a local extremum, positive or negative, with the largest |x| after
-        removing the local median — within ±``half_s`` of ``sample`` on the software's filtered trace.
+        """The sample of the spike peak within ±``half_s`` of ``sample`` on the software's filtered trace: the
+        highest local maximum when the recording's spikes are positive, the lowest local minimum when they are
+        negative (``_spike_sign``). The side does not depend on the window, so repeating the command, or
+        clicking after the spike, lands on the same peak. Without a clear side (no beats yet, balanced
+        spikes) the local extremum with the largest |x| after removing the window median is taken.
 
         Always the filtered trace: the spike is a few ms wide and the operators' 1–40 Hz view smears it,
         moving its apparent peak by 10–20 ms (and a 25 ms window on that view can be dominated by the slow
@@ -279,6 +300,11 @@ class ReviewState:
         ext = np.where(np.diff(np.sign(np.diff(seg))) != 0)[0] + 1      # local extrema (window edges excluded)
         if len(ext) == 0:
             return int(sample)
+        side = self._spike_sign()
+        if side:
+            ext_side = ext[(np.diff(seg)[ext - 1] > 0) if side > 0 else (np.diff(seg)[ext - 1] < 0)]
+            if len(ext_side):
+                return int(a + ext_side[int(np.argmax(side * seg[ext_side]))])
         dev = np.abs(seg[ext] - np.median(seg))
         return int(a + ext[int(np.argmax(dev))])
 
@@ -327,12 +353,26 @@ class ReviewState:
         self.beats = sorted(keep + new, key=lambda bb: bb.dep)
         return len(new)
 
+    ALIGN_SPIKE_S = 0.040         # the explicit 'align' command looks further than a click: a slow-rhythm spike
+                                  # complex is 20–30 ms wide and the software's marker sits on its onset
+
+    def _settle_on_peak(self, sample, rounds=3):
+        """Snap, then snap again from where it landed (a spike complex can be wider than one window) until the
+        marker stops moving, so a second 'align' never finds anything left to move."""
+        cur = int(sample)
+        for _ in range(rounds):
+            nxt = self._snap_to_spike(cur, half_s=self.ALIGN_SPIKE_S)
+            if nxt == cur:
+                break
+            cur = nxt
+        return cur
+
     def align_to_peak(self, start=None, end=None, *, trace=None):
-        """Move every depolarisation in ``[start, end]`` onto the highest peak within ±25 ms (``trace`` as in
-        ``add_beat``, i.e. on the filtered trace). Markers within 1 ms of the peak are left alone. Returns
-        the number of markers moved."""
+        """Move every depolarisation in ``[start, end]`` onto the spike peak within ±40 ms (``trace`` as in
+        ``add_beat``, i.e. on the filtered trace; the side of the spikes is the recording's, see
+        ``_spike_sign``). Markers within 1 ms of the peak are left alone. Returns the number of markers moved."""
         ks = self._in_range(start, end)
-        moves = [(k, self._snap_to_spike(self.beats[k].dep, trace=trace)) for k in ks]
+        moves = [(k, self._settle_on_peak(self.beats[k].dep)) for k in ks]
         moves = [(k, s) for k, s in moves if abs(s - self.beats[k].dep) > 0.001 * self.fs]   # ≤ 1 ms: already there
         if not moves:
             return 0

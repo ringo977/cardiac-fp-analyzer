@@ -324,3 +324,30 @@ def test_swap_markers_and_align_to_peak_are_undoable():
     assert st.align_to_peak() == 0
     st.undo()
     assert st.beats[0].dep == deps0[0] + int(0.004 * FS)
+
+
+def test_snap_and_align_keep_the_side_of_the_spike_and_are_repeatable():
+    """Positive spikes followed by a raised wave (as in a slow-rhythm chamber): the window median used to sit
+    on the wave, so a click or an 'align' after the spike flipped to a baseline dip, and a second 'align' sent
+    the markers that had been fine to the baseline. The side is now the recording's, not the window's."""
+    rng = np.random.default_rng(3)
+    n = int(30 * FS)
+    t = np.arange(n) / FS
+    x = 0.02 * rng.standard_normal(n)
+    beats = np.arange(int(1.0 * FS), n - int(2 * FS), int(3.0 * FS))
+    for b in beats:
+        tb = t - t[b]
+        x += 1.0 * np.exp(-(tb / 0.003) ** 2 / 2) + 0.55 * np.exp(-((tb - 0.060) / 0.040) ** 2 / 2)   # spike + wave
+        x += -0.25 * np.exp(-((tb + 0.012) / 0.003) ** 2 / 2)                                          # small dip before
+    st = ReviewState(FS, x, 10 * x, channel='el1', gain=1e4)
+    st.beats = [BeatMark(int(b), None, 'auto', 'assente') for b in beats]
+    assert st._spike_sign() == 1
+    for off in (-0.022, -0.010, 0.0, 0.020, 0.024):               # clicks before and after the spike
+        for b in beats[:3]:
+            assert abs(st._snap_to_spike(int(b + off * FS)) - b) <= 2, off
+    # markers 20 ms late, then aligned twice: all on the spikes both times, the second pass moves nothing
+    for k, b in enumerate(beats):
+        st.beats[k].dep = int(b + 0.020 * FS)
+    assert st.align_to_peak() == len(beats)
+    assert all(abs(bm.dep - b) <= 2 for bm, b in zip(st.beats, beats))
+    assert st.align_to_peak() == 0
