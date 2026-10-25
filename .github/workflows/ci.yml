@@ -39,6 +39,7 @@ env:
 jobs:
   lint:
     name: Lint (ruff)
+    timeout-minutes: 25
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -50,6 +51,7 @@ jobs:
 
   test:
     name: Test (Python ${{ matrix.python-version }})
+    timeout-minutes: 25
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -90,6 +92,7 @@ jobs:
     # Windows (Oct 2026): the software had only ever run on Linux and macOS. Advisory until a first green
     # run shows what, if anything, differs there (continue-on-error keeps the badge about Linux).
     name: Test (Windows, Python 3.12)
+    timeout-minutes: 25
     runs-on: windows-2025
     continue-on-error: true
     steps:

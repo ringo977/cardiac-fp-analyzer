@@ -25,6 +25,14 @@ from pyside_app.review_queue import ReviewQueue  # noqa: E402
 from tests.test_review_model import FS, _trace  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_blocking_dialogs(monkeypatch):
+    """A modal question would wait for a click that never comes in a test run: answer Yes unless a test
+    installs its own answer."""
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+
+
 @pytest.fixture(scope="module")
 def app():
     return QApplication.instance() or QApplication(sys.argv)
