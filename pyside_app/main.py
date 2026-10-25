@@ -2392,17 +2392,29 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(tr("Automatic analysis redone: corrections in memory "
                                         "discarded (the .review.json stays until you save)"), 8000)
 
-    def _recompute_if_pending(self) -> None:
-        """Approving or closing must never freeze stale measures: apply the pending edits first."""
-        if self._signal_tab.recompute_pending() and self._current_result is not None:
-            self._on_recompute()
+    def _confirm_recompute(self, closing: bool) -> bool:
+        """Approving or closing must not freeze stale measures: when edits are pending, ask to recompute
+        first. Returns False when the operator declines (nothing is approved or closed)."""
+        if not (self._signal_tab.recompute_pending() and self._current_result is not None):
+            return True
+        text = (tr("There are edits not yet applied to the measures. Recompute them and close the recording?")
+                if closing else
+                tr("There are edits not yet applied to the measures. Recompute them and approve the recording?"))
+        ans = QMessageBox.question(self, tr("Recompute measures"), text,
+                                   QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if ans != QMessageBox.Yes:
+            self._review_panel.refresh()      # put the tick back as it was
+            return False
+        self._on_recompute()
+        return True
 
     def _review_approve(self, on: bool) -> None:
         st = self._review_state
         if st is None or getattr(st, 'locked', False):
             return
         if on:
-            self._recompute_if_pending()
+            if not self._confirm_recompute(False):
+                return
             st.approve()
             msg = tr("Recording approved by {0}").format(st.approved_by)
         else:
@@ -2416,7 +2428,8 @@ class MainWindow(QMainWindow):
         if st is None:
             return
         if close:
-            self._recompute_if_pending()
+            if not self._confirm_recompute(True):
+                return
             st.close()
             msg = tr("Recording closed (locked)")
         else:

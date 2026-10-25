@@ -324,25 +324,41 @@ def test_message_boxes_are_qt_drawn(app):
     assert answers == [QMessageBox.Yes]
 
 
-def test_approving_or_closing_applies_pending_edits_first(app, csv_path):
+def test_approving_or_closing_with_pending_edits_asks_to_recompute(app, csv_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
     w = MainWindow()
     w._run_analysis(str(csv_path), "el1")
     st, panel = w._review_state, w._review_panel
-    calls = []
+    calls, asked = [], []
     real = w._on_recompute
     w._on_recompute = lambda: (calls.append(1), real())[1]
+    answer = {"v": QMessageBox.No}
+
+    def _question(parent, title, text, *a, **k):
+        asked.append(text)
+        return answer["v"]
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(_question))
+
     st.remove_beat(0)
     w._review_after_edit()
     assert w._signal_tab.recompute_pending()
-    panel._chk_approved.setChecked(True)               # approving never freezes stale measures
-    assert calls == [1] and not w._signal_tab.recompute_pending()
-    assert st.approved and panel._chk_approved.isChecked()
+    panel._chk_approved.setChecked(True)               # declined: nothing is approved, the tick goes back
+    assert len(asked) == 1 and "approve" in asked[0] and not calls
+    assert not st.approved and not panel._chk_approved.isChecked() and w._signal_tab.recompute_pending()
+    answer["v"] = QMessageBox.Yes
+    panel._chk_approved.setChecked(True)               # accepted: recompute, then approve
+    assert calls == [1] and st.approved and panel._chk_approved.isChecked()
+    assert not w._signal_tab.recompute_pending()
     panel._chk_approved.setChecked(False)
     st.remove_beat(0)
     w._review_after_edit()
-    panel._btn_close.click()                           # nor does closing
+    answer["v"] = QMessageBox.No
+    panel._btn_close.click()                           # same for closing
+    assert len(asked) == 3 and "close" in asked[2] and not st.locked
+    answer["v"] = QMessageBox.Yes
+    panel._btn_close.click()
     assert len(calls) == 2 and st.locked and not w._signal_tab.recompute_pending()
     panel._btn_close.click()
     panel._chk_approved.setChecked(False)
-    panel._chk_approved.setChecked(True)               # nothing pending: no needless recompute
-    assert len(calls) == 2
+    panel._chk_approved.setChecked(True)               # nothing pending: no question
+    assert len(asked) == 4

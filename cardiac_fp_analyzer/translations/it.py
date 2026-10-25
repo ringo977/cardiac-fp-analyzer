@@ -591,4 +591,6 @@ CATALOG = {
     "Align depolarisations to the peak in the visible range": "Allinea le depolarizzazioni al picco nell'intervallo visibile",
     "Align depolarisations to the peak in the whole recording": "Allinea le depolarizzazioni al picco in tutta la registrazione",
     "{0} markers changed": "{0} marcatori cambiati",
+    "There are edits not yet applied to the measures. Recompute them and approve the recording?": "Ci sono modifiche non ancora applicate alle misure. Ricalcolarle e approvare la registrazione?",
+    "There are edits not yet applied to the measures. Recompute them and close the recording?": "Ci sono modifiche non ancora applicate alle misure. Ricalcolarle e chiudere la registrazione?",
 }
