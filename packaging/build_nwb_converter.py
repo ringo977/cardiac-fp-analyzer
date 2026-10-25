@@ -11,7 +11,6 @@ lacks pynwb's schema files, h5py or the time-zone database fails here and not on
 from __future__ import annotations
 
 import platform
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -48,7 +47,13 @@ def build() -> Path:
         return dist / f"{NAME}.exe"
     if system == "Darwin":
         app = dist / f"{NAME}.app"
-        zipped = shutil.make_archive(str(dist / f"{NAME.replace(' ', '-')}-macOS"), "zip", dist, app.name)
+        # ad-hoc signature (no certificate): Apple-silicon macOS refuses unsigned code; then ``ditto`` — the
+        # system zip keeps the bundle's symlinks, which Python's zipfile drops (the signature breaks and
+        # macOS reports "the file is damaged")
+        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check=True)
+        subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
+        zipped = dist / f"{NAME.replace(' ', '-')}-macOS.zip"
+        subprocess.run(["ditto", "-c", "-k", "--keepParent", str(app), str(zipped)], check=True)
         print("zipped:", zipped)
         return app
     return dist / NAME
