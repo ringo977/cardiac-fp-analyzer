@@ -143,6 +143,10 @@ class SignalViewer(pg.PlotWidget):
 
         # Mouse clicks on the scene → edit menu (in edit mode).
         self.scene().sigMouseClicked.connect(self._on_mouse_click)
+        # pyqtgraph's own right-click menu (View All, axes…) only in View mode: in Edit the right button
+        # opens the correction menu like the left one
+        vb = self.getPlotItem().vb
+        vb.menuEnabled = lambda: self._mode_getter() != "edit"
 
         # Mouse moves → hover-info signal.  Rate-limit with SignalProxy
         # so we don't re-emit on every pixel (pyqtgraph fires this on
@@ -557,10 +561,12 @@ class SignalViewer(pg.PlotWidget):
     def _on_mouse_click(self, ev) -> None:
         if self._signal is None or self._time is None:
             return
-        if ev.button() != Qt.LeftButton:
-            return
         if self._mode_getter() != "edit":
             return
+        if ev.button() not in (Qt.LeftButton, Qt.RightButton):
+            return
+        # in Edit both buttons open the correction menu (the right button would otherwise open
+        # pyqtgraph's own View All / axes menu, which confused operators)
 
         pt = self.getPlotItem().vb.mapSceneToView(ev.scenePos())
         x_click_s = float(pt.x())
