@@ -12,6 +12,8 @@ Running the batch on the Visone 2023 data set exposed:
 These tests pin the fixes on synthetic results; no signal is analysed.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -90,7 +92,7 @@ def test_file_name_grammar(name, drug, conc, baseline):
 def _res(path, *, fpdc=500.0, bp=1000.0, grade='A', electrode='el1', na=False, passed=True):
     fi = describe_recording(path)
     fi['analyzed_channel'] = electrode
-    stem = path.rsplit('/', 1)[-1][:-4]
+    stem = Path(path).stem          # not rsplit('/'): Windows paths use backslashes
 
     class _QC:
         pass
@@ -239,4 +241,4 @@ def test_batch_auto_mode_keeps_the_baseline_electrode_for_the_whole_tissue(tmp_p
     first_dose = next(i for i, c in enumerate(calls) if 'baseline' not in c[0])
     assert all('baseline' in c[0] and c[1] == 'auto' for c in calls[:first_dose])
     assert all(c[1] in ('el1', 'el2') for c in calls[first_dose:])
-    assert [r['metadata']['filename'] for r in results] == [f.rsplit('/', 1)[-1][:-4] for f in sorted(files)]
+    assert [r['metadata']['filename'] for r in results] == [Path(f).stem for f in sorted(files)]

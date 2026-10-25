@@ -16,6 +16,8 @@ Evaluating the decision rules on all experiments of Visone et al. 2023
 Synthetic data only; no recording of the data sets is used.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -41,7 +43,7 @@ from cardiac_fp_analyzer.normalization import (
 def _res(path, *, fpdc=500.0, bp=1000.0, grade='A', electrode='el1', when=None, na=False, passed=True):
     fi = describe_recording(path)
     fi['analyzed_channel'] = electrode
-    stem = path.rsplit('/', 1)[-1][:-4]
+    stem = Path(path).stem          # not rsplit('/'): Windows paths use backslashes
 
     class _QC:
         pass
