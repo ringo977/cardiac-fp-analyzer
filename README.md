@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.21.0
+**Versione**: 3.22.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali) o con sistemi **Multi Channel Systems** (file HDF5 del protocollo MCS RawData, fino a 64 elettrodi).
@@ -175,6 +175,10 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.22.0 (Ottobre 2026) — cancello della ripolarizzazione per battito: rumore letto in diastole
+
+Su un ritmo lento e pulito (Exp1 chip E ch2, periodo 3,6 s) il software non misurava nessuna FPD pur avendo trovato l'onda sul template: il rumore del cancello per battito era la deviazione standard della finestra di ricerca, cioè del complesso stesso, e il lobo da 140 µV accanto all'onda scelta (75 µV) contava come rumore (SNR ≈ 1). Ora il rumore si legge dove non c'è forma d'onda — la diastole dopo la finestra, stima robusta (MAD), oppure la MAD della finestra se più piccola — e il cancello confronta la prominenza del picco con una soglia di 3. Gold standard GG: sviluppo 67 % → 67 % entro ±10 % (un elettrodo in più misurato), test 73 % → 75 %. Exp1 baseline (foglio del laboratorio): 11 tessuti su 13 entro ±10 %; nei due restanti il software sceglie il lobo positivo dove il laboratorio ha preso quello negativo (si risolve con un clic e la propagazione del criterio). Opzione `repolarization.repol_gate_noise` ('diastolic' | 'std' = comportamento precedente).
 
 ### v3.21.0 (Ottobre 2026) — aggancio al picco sul tracciato visualizzato, scambio D↔R, allineamento
 

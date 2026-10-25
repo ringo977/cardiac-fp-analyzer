@@ -539,6 +539,27 @@ def find_repolarization_on_template(template, fs, pre_ms=50, cfg=None,
     return None, 1, 0.0, 0.0, None, None
 
 
+def _diastolic_noise(data, search_end, peak_idx, fs, rc, min_len_s=0.150, margin_s=0.100):
+    """Robust noise (1.4826 × MAD) of the beat segment after the repolarisation search window — the
+    diastole, where there is no waveform — low-passed and detrended like the window. None when fewer than
+    ``min_len_s`` of it are available (fast rhythms: the segment ends at 85 % of the RR)."""
+    start = max(int(search_end), int(peak_idx) + int(margin_s * fs))
+    stop = len(data) - int(0.020 * fs)
+    if stop - start < int(min_len_s * fs):
+        return None
+    ref = np.asarray(data[start:stop], dtype=float)
+    nyq = 0.5 * fs
+    cutoff = min(rc.repol_lowpass_hz, nyq * 0.8)
+    try:
+        b, a = sig.butter(rc.repol_filter_order, cutoff / nyq, btype='low')
+        ref = sig.filtfilt(b, a, ref)
+    except (ValueError, np.linalg.LinAlgError):
+        pass
+    ref = linear_detrend_endpoints(ref, margin_frac=rc.detrend_margin_frac)
+    mad = np.median(np.abs(ref - np.median(ref)))
+    return float(1.4826 * mad) if mad > 0 else None
+
+
 def find_repolarization_per_beat(data, t, spike_idx, fs,
                                  template_fpd_samples=None,
                                  template_peak_samples=None,
@@ -639,6 +660,7 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
 
     best_idx = None
     best_score = 0
+    best_raw_prom = None          # prominence of the winning peak before the distance penalty
     # Polarity of the peak that won the search below.  This MUST be carried
     # into apply_fpd_method: the tangent / 50% / baseline-return maths is
     # polarity-dependent, so running it with the template's sign on a beat
@@ -708,6 +730,7 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
                 best_score = score
                 best_idx = best_pk
                 best_sign = sign
+                best_raw_prom = float(proms[list(pks).index(best_pk)])
 
     if best_idx is None:
         # No qualifying repolarization peak found by find_peaks → the T-wave
@@ -744,7 +767,27 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
             seg_det[peak_excl_end:]
         ]) if (peak_excl_start > 5 and peak_excl_end < len(seg_det) - 5) else seg_det
         noise_level_beat = np.std(noise_region) if len(noise_region) > 10 else np.std(seg_det)
-        if noise_level_beat > 0:
+        if getattr(rc, 'repol_gate_noise', 'std') == 'diastolic':
+            # The search window is the complex itself (±tolerance around the template latency): its std,
+            # and even its MAD, measure the waves — a 140 µV lobe next to the chosen 75 µV wave gave
+            # SNR ≈ 1 on a clean slow rhythm (Exp1, RR 3.6 s) and no FPD at all. Noise is read where
+            # there is no waveform: the diastole after the search window (same low-pass and detrend),
+            # when at least 150 ms of it fit in the beat segment; the window's MAD is the other estimate
+            # and the smaller of the two is used (each can be inflated by a different artefact). The gate
+            # then tests the peak's own prominence, not the distance-penalised score, against a higher
+            # bar (the largest noise bump in a window is 2–3 × the MAD by construction).
+            d_noise = _diastolic_noise(data, peak_search_end, best_idx + peak_search_start, fs, rc)
+            cands = [v for v in (d_noise, robust_noise if robust_noise > 0 else None) if v]
+            noise_level_beat = min(cands) if cands else noise_level_beat
+            beat_prom = max(beat_prom, float(best_raw_prom)) if best_raw_prom is not None else beat_prom
+            snr_threshold = float(getattr(rc, 'repol_gate_min_snr_beat_diastolic', 3.0))
+            if noise_level_beat > 0:
+                beat_repol_snr = beat_prom / noise_level_beat
+                logger.debug("Per-beat gate (diastolic): prom=%.2e noise=%.2e SNR=%.2f (min %.1f)",
+                             beat_prom, noise_level_beat, beat_repol_snr, snr_threshold)
+                if beat_repol_snr < snr_threshold:
+                    return None, np.nan, None, None
+        elif noise_level_beat > 0:
             # Template-guided → lenient; unguided → stricter
             is_guided = (template_fpd_samples is not None or template_peak_samples is not None)
             snr_threshold = rc.repol_gate_min_snr_beat if is_guided else (

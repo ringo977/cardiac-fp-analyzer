@@ -692,6 +692,15 @@ class RepolarizationConfig:
     repol_gate_min_snr: float = 2.0    # min prominence / noise_std for template
     repol_gate_min_snr_beat: float = 1.5  # min for template-guided per-beat (lowered from original via noise exclusion)
     repol_gate_min_snr_beat_unguided: float = 1.5  # min for unguided per-beat (stricter)
+    # Noise estimate of the per-beat gate: 'std' = standard deviation of the search window outside ±50 ms
+    # of the peak (the window is the complex itself: a second lobe of the wave counts as noise and can
+    # hide a clear repolarisation — Exp1 chip E ch2, RR 3.6 s, 0/16 detected); 'diastolic' = robust noise
+    # (MAD) of the diastole after the search window, and the gate tests the peak's own prominence rather
+    # than the distance-penalised score (v3.22, under evaluation on the GG gold standard).
+    repol_gate_noise: str = 'diastolic'
+    # Threshold for the 'diastolic' estimate: the largest of the noise bumps in a 500 ms window is 2–3 ×
+    # the MAD by construction, so a MAD-based noise needs a higher bar than the window-std one (1.5)
+    repol_gate_min_snr_beat_diastolic: float = 3.0
 
     # --- Confidence scoring ---
     confidence_prominence_scale: float = 3.0  # prominence / (scale × noise) → saturates at 1

@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.21.0
+**Versione**: 3.22.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1575,6 +1575,14 @@ Restano fissi nel codice (non configurabili): finestra ± 30 ms dell'SNR globale
 
 
 ## 12. Changelog
+
+### v3.22.0 (Ottobre 2026) — cancello della ripolarizzazione per battito: rumore letto in diastole
+
+**Problema.** `find_repolarization_per_beat` cerca l'onda in una finestra di ±150 ms (+200) attorno alla latenza del template, e il cancello di rilevabilità divideva il punteggio del picco (prominenza penalizzata con la distanza) per la deviazione standard di quella finestra esclusi ±50 ms attorno al picco. La finestra è il complesso di ripolarizzazione stesso: su Exp1 chip E ch2 (RR 3,6 s, spike +280 µV, onda positiva 75 µV a 1,10 s e lobo negativo 142 µV a 1,26 s) la std conteneva il lobo grande e il cancello dava SNR ≈ 1 su tutti i 16 battiti → FPD non misurabile, template a 1096 ms trovato. Anche la MAD della finestra non basta (due onde in 500 ms).
+
+**Soluzione** (`repol_gate_noise = 'diastolic'`, default). `_diastolic_noise(data, search_end, peak_idx, fs, rc)`: 1,4826 × MAD del segmento del battito **dopo** la finestra di ricerca (dal max tra fine finestra e picco + 100 ms fino a 20 ms dalla fine del segmento, che arriva all'85 % dell'RR), stesso passa-basso a 20 Hz e stesso detrend della finestra; None sotto 150 ms di diastole (ritmi veloci). Rumore del cancello = min(diastolico, MAD della finestra); prominenza = quella propria del picco (`best_raw_prom`, non penalizzata); soglia `repol_gate_min_snr_beat_diastolic = 3.0` (il più grande dei bump di rumore in una finestra è 2–3 × la MAD per costruzione; con 1,5 un bump di rumore puro passava più spesso di prima). `'std'` conserva il comportamento fino alla 3.21. Il cancello del template (SNR 2 sulla media dei battiti) e la frazione di battiti validi restano la vera protezione contro un'onda assente: su finestre di rumore puro entrambi i cancelli per battito accettano un bump in circa due casi su tre (`tests/test_repol_gate_noise.py`).
+
+**Validazione.** `tools/compare_gold.py` GG sviluppo (Exp5/8/10, 189 elettrodi analizzabili): FPD data su 145 invece di 144, entro ±10 % 67 % → 67 %, grado A 75 % → 76 %; test (Exp6/7/9, una esecuzione): FPD entro ±10 % 73 % → 75 %, grado C 55 % → 64 %, nulla peggiora. Exp1 baseline contro `Baseline_fp_results.xlsx` del laboratorio (13 tessuti): 11 entro ±10 %; chip E ch2 (software 1096 ms, laboratorio 1251) e G ch2 (1153 vs 1379) sono la scelta del lobo — il laboratorio ha preso il lobo negativo, più grande, dove la regola `prefer_positive` (f = 0,5) tiene il positivo; con f = 0,6 i due tessuti coincidono con il laboratorio (1262, 1377) ma il test GG perde un elettrodo di grado A, quindi f resta 0,5 e la scelta dell'onda resta all'operatore (un clic con propagazione). Chip G ch1 (838 vs 481) e F ch1 (637 vs 462) sono discordanze diverse, da guardare.
 
 ### v3.21.0 (Ottobre 2026) — aggancio al picco sul tracciato visualizzato, scambio D↔R, allineamento
 
