@@ -82,3 +82,22 @@ jobs:
           if skipped > 15:
               sys.exit(f"{skipped} tests skipped — GUI tests are being bypassed")
           EOF
+
+  test-windows:
+    # Windows (Oct 2026): the software had only ever run on Linux and macOS. Advisory until a first green
+    # run shows what, if anything, differs there (continue-on-error keeps the badge about Linux).
+    name: Test (Windows, Python 3.12)
+    runs-on: windows-2025
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package (core + desktop GUI + reports) and test tools
+        run: |
+          pip install -e ".[gui,reports,mcs,nwb]"
+          pip install pytest pytest-cov openpyxl
+      - name: Run tests
+        run: pytest tests/ -v --tb=short -rs
