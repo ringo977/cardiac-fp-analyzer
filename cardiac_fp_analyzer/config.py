@@ -70,11 +70,14 @@ class BeatDetectionConfig:
     # is the value hard-coded until v3.16).
     # ``min_rr_physiological_ms``: a final guard on the beat train after
     # detection and vetoes — two detections closer than this cannot both be
-    # depolarisations, the one with the smaller spike is dropped. 0 = off
-    # (default, behaviour unchanged); the lab's physiological value is
-    # 250 ms (fastest rhythms seen: verapamil at high dose, 250–350 ms).
+    # depolarisations, the one with the smaller spike is dropped. 0 = off.
+    # Default 200 ms since v3.22 (the operators set it anyway): the lab's
+    # physiological limit is 250 ms (fastest rhythms seen: verapamil at high
+    # dose, 250–350 ms) and 200 keeps a margin; on the GG gold standard (DEV)
+    # 0, 150, 200 and 250 ms give identical scorecards, so it only acts on
+    # recordings outside that corpus.
     min_distance_floor_ms: float = 100.0
-    min_rr_physiological_ms: float = 0.0
+    min_rr_physiological_ms: float = 200.0
 
     # Physiological plausibility scoring (thresholds)
     bp_ideal_range_s: tuple[float, float] = (0.4, 3.0)

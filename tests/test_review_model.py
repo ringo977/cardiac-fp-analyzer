@@ -195,7 +195,7 @@ def test_quality_levels_on_synthetic_cases():
 
 
 def test_review_default_config_flags_unchanged():
-    assert BeatDetectionConfig().min_rr_physiological_ms == 0.0
+    assert BeatDetectionConfig().min_rr_physiological_ms == 200.0
     assert BeatDetectionConfig().min_distance_floor_ms == 100.0
     assert dataclasses.replace(BeatDetectionConfig(), min_rr_physiological_ms=250.0).min_rr_physiological_ms == 250.0
 

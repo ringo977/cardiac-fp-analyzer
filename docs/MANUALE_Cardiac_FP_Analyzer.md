@@ -322,7 +322,7 @@ La revisione è il flusso dell'operatore: il software propone depolarizzazioni e
 
 **Esporta Results…** (nella coda, dalla v3.18) scrive il foglio Excel nel formato con cui il laboratorio registra i risultati: un foglio `CHIP X` per chip con, per ogni canale, la baseline e le dosi (Beating Period, St. dev., CV, Field Potential Duration, FPD Fridericia, Dep. Amplitude, percentuali e variazioni rispetto alla baseline come formule), una nota che dice se la riga è automatica o corretta dall'operatore e quali problemi ha, il file e l'ingresso; un foglio `CHIP X raw` con i battiti di ogni condizione (tempo di depolarizzazione, periodo, tempo di ripolarizzazione, FPD, tensioni all'amplificatore, ampiezza in µV, con le formule e le righe Mean / St. dev); un foglio `samples` con tutte le registrazioni. Le misure sono quelle del pannello Revisione, correzioni comprese; una ripetizione della stessa condizione resta fuori dal foglio del chip (vince la registrazione corretta, poi il giudizio migliore) ed è citata nella nota. Da terminale: `cardiac-fp-results <cartella> -o file.xlsx` (analizza tutto, applica i `.review.json` salvati).
 
-Le tre opzioni della v3.17 (rilevamenti deboli, burst, ritmo con battiti mancanti) e l'intervallo minimo fisiologico tra depolarizzazioni sono in Impostazioni ▸ Detection e QC, disattivi di default.
+Le tre opzioni della v3.17 (rilevamenti deboli, burst, ritmo con battiti mancanti) sono in Impostazioni ▸ Detection e QC, disattive di default; l'intervallo minimo fisiologico tra depolarizzazioni è a 200 ms dalla v3.22 (0 lo disattiva; sul gold standard GG 0, 150, 200 e 250 ms danno risultati identici, quindi agisce solo su registrazioni fuori da quel corpus).
 
 ## 5.9 GUI web Streamlit (legacy)
 

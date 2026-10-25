@@ -202,9 +202,9 @@ SPEC: tuple[FieldSpec, ...] = (
         page=PAGE_DETECTION, label="Minimum physiological interval between depolarisations",
         tooltip=(
             "Final check on the beat train: two detections closer than this cannot both be "
-            "depolarisations; the one with the larger spike stays. 0 = off. The lab's "
-            "physiological value: 250 ms (fastest rhythms observed: high-dose verapamil, 250–350 "
-            "ms)."
+            "depolarisations; the one with the larger spike stays. 0 = off; default 200 ms. The "
+            "lab's physiological limit: 250 ms (fastest rhythms observed: high-dose verapamil, "
+            "250–350 ms)."
         ),
         minimum=0.0, maximum=2000.0, step=10.0, decimals=0, suffix=" ms",
     ),
