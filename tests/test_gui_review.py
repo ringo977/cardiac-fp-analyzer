@@ -269,6 +269,31 @@ def test_open_from_queue(app, csv_path):
     w = MainWindow()
     w._open_from_queue(str(csv_path), "el2", None)
     assert w._review_state is not None and w._review_state.channel.lower() == "el2"
+    assert w._signal_tab.channel_choice() == "el2"       # the explicit request shows in the combo
+    w.close()
+
+
+def test_double_click_on_a_two_tissue_row_opens_that_input(app, csv_path):
+    """Each row of a two-tissue file (one tissue per input) opens its own electrode: the lab's channel
+    number in the identity is not an MCS chamber (it made both rows analyse 'auto' → the same electrode,
+    and the two tissues shared one review state)."""
+    w = MainWindow()
+    q = w._review_queue
+    q.add_paths([csv_path])
+    q._pool.waitForDone(120000)
+    for _ in range(50):
+        app.processEvents()
+        if all(e.get("livello") for e in q._entries.values()):
+            break
+    seen = []
+    for i in range(q._tree.topLevelItemCount()):
+        it = q._tree.topLevelItem(i)
+        assert it.data(0, Qt.UserRole)[2] is None            # no MCS chamber for a CSV input
+        q._on_double_click(it, 0)
+        for _ in range(20):
+            app.processEvents()
+        seen.append((w._review_state.channel, w._signal_tab.channel_choice()))
+    assert sorted(seen) == [("el1", "el1"), ("el2", "el2")]
     w.close()
 
 

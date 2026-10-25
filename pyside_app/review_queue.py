@@ -186,6 +186,10 @@ class ReviewQueue(QWidget):
             i = len(self._entries)
             self._entries[i] = {'file': str(u['file']), 'nome': Path(u['file']).name, 'ingresso': u['electrode'],
                                 'camera': upd.get('chamber'), 'chip': upd.get('chip'), 'item': upd.get('item'),
+                                # the chamber of a multi-electrode chip (MCS): what the open path needs; for a
+                                # CSV/NWB input 'camera' is the lab's channel number of the chip and must not
+                                # be taken for one (it made the double click analyse 'auto' on two-tissue files)
+                                'camera_mcs': upd.get('chamber') if upd.get('electrodes') else None,
                                 'livello': None, 'titolo': tr("analysing…"), 'riassunto': '', 'rivista': False,
                                 'bp_s': None, 'fpd_s': None, 'record': None, 'condizione': '',
                                 'elettrodi': {}, 'scelto': None, 'due_elettrodi': both}
@@ -329,7 +333,7 @@ class ReviewQueue(QWidget):
         if lv in LEVEL_COLOURS:
             it.setForeground(COL_JUDGE, QBrush(QColor(LEVEL_COLOURS[lv])))
             it.setData(COL_JUDGE, Qt.UserRole, lv)
-        it.setData(COL_FILE, Qt.UserRole, (e['file'], label or e.get('scelto') or e.get('ingresso'), e.get('camera')))
+        it.setData(COL_FILE, Qt.UserRole, (e['file'], label or e.get('scelto') or e.get('ingresso'), e.get('camera_mcs')))
         it.setToolTip(COL_FILE, e['file'])
         it.setToolTip(COL_PROBLEMS, src.get('riassunto', ''))
         it.setToolTip(COL_STATE, rec.get('stato_testo') or tr("to review"))

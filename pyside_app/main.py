@@ -2788,6 +2788,10 @@ class MainWindow(QMainWindow):
         # was picked by ``select_best_channel``.
         analyzed = result.get("file_info", {}).get("analyzed_channel", "")
         self._signal_tab.set_analyzed_channel(analyzed)
+        # an explicit request (queue row, EL1/EL2 chosen) is reflected in the combo — ``set_chip(None)``
+        # above resets it to Auto on every open; a request for Auto keeps Auto with the "→ ELx" hint
+        if channel != CHANNEL_AUTO and channel in self._signal_tab._channel_values:
+            self._signal_tab.set_channel(channel)
         chamber = result.get("file_info", {}).get("chamber")
         self._signal_tab.chip_map.set_selected(analyzed or None)
         self._update_window_title(
