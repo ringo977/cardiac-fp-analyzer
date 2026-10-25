@@ -296,3 +296,31 @@ def test_click_snaps_to_the_highest_peak_of_the_displayed_trace():
     # a wrong-length trace is ignored, not an error
     st.move_beat(k, spike + 5, trace=ops[:-10])
     assert abs(st.beats[k].dep - spike) <= 2
+
+
+def test_swap_markers_and_align_to_peak_are_undoable():
+    st, beats, reps = _state(dur_s=20.0, amp=1.0, noise=0.02, pos_wave=0.3)
+    n0 = st.n_beats()
+    deps0, reps0 = list(st.deps()), [b.repol for b in st.beats]
+    # swap in the whole recording: the old repolarisation peaks become the depolarisations, the following
+    # old depolarisation the repolarisation; the last beat has nothing to follow → no repolarisation
+    n = st.swap_markers()
+    assert n == n0 and st.n_beats() == n0
+    assert all(abs(b.dep - r) <= int(0.025 * FS) for b, r in zip(st.beats, reps0))
+    assert [b.repol for b in st.beats][:-1] == deps0[1:] and st.beats[-1].repol is None
+    assert all(b.source == 'corretto' for b in st.beats) and st.changes()['corrected']
+    st.undo()
+    assert list(st.deps()) == deps0 and [b.repol for b in st.beats] == reps0
+    # swap only in a range: the others stay
+    lo, hi = int(beats[2]) - 10, int(beats[4]) + 10
+    st.swap_markers(lo, hi)
+    assert st.beats[0].dep == deps0[0] and st.beats[-1].dep == deps0[-1] and st.beats[0].source == 'auto'
+    st.undo()
+    # align: deps offset by a few ms go back on the spike; already-aligned ones do not count
+    for b in st.beats[:3]:
+        b.dep += int(0.004 * FS)
+    moved = st.align_to_peak()
+    assert moved == 3 and all(abs(b.dep - d) <= 2 for b, d in zip(st.beats, deps0))
+    assert st.align_to_peak() == 0
+    st.undo()
+    assert st.beats[0].dep == deps0[0] + int(0.004 * FS)

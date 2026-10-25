@@ -640,17 +640,32 @@ class SignalViewer(pg.PlotWidget):
             act.triggered.connect(lambda _c=False, k=prev, i=i_click: self._review_do(
                 lambda: st.set_repol(k, i, propagate=True, trace=self._displayed_trace()), report=True))
         menu.addSeparator()
+        (x_lo, x_hi), _ = self.getPlotItem().vb.viewRange()
+        lo, hi = int(np.searchsorted(self._time, x_lo)), int(np.searchsorted(self._time, x_hi))
+        bulk = menu.addMenu(tr("Whole-trace corrections"))
+        for label, op in (
+            (tr("Swap depolarisations and repolarisations in the visible range"), lambda: st.swap_markers(lo, hi, trace=self._displayed_trace())),
+            (tr("Swap depolarisations and repolarisations in the whole recording"), lambda: st.swap_markers(trace=self._displayed_trace())),
+            (tr("Align depolarisations to the peak in the visible range"), lambda: st.align_to_peak(lo, hi, trace=self._displayed_trace())),
+            (tr("Align depolarisations to the peak in the whole recording"), lambda: st.align_to_peak(trace=self._displayed_trace())),
+        ):
+            act = bulk.addAction(label)
+            act.triggered.connect(lambda _c=False, f=op: self._review_do(f, count=True))
+        menu.addSeparator()
         menu.addAction(tr("Cancel"))   # dismisses the menu
         menu.exec(QCursor.pos())
 
-    def _review_do(self, op, report: bool = False) -> None:
-        """Run one state operation, redraw, notify. ``report`` → the propagation report goes to ``review_report``."""
+    def _review_do(self, op, report: bool = False, count: bool = False) -> None:
+        """Run one state operation, redraw, notify. ``report`` → the propagation report goes to ``review_report``;
+        ``count`` → the integer returned (markers changed) is reported."""
         try:
             out = op()
         except (ValueError, PermissionError) as exc:
             self.review_report.emit(str(exc))
             return
         self.refresh_from_state()
+        if count:
+            self.review_report.emit(tr("{0} markers changed").format(int(out or 0)))
         if report and isinstance(out, dict):
             if out.get("criterio") is None:
                 self.review_report.emit(out.get("motivo", tr("criterion cannot be inferred")))

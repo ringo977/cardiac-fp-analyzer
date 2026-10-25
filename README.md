@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.20.0
+**Versione**: 3.21.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali) o con sistemi **Multi Channel Systems** (file HDF5 del protocollo MCS RawData, fino a 64 elettrodi).
@@ -175,6 +175,10 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.21.0 (Ottobre 2026) — aggancio al picco sul tracciato visualizzato, scambio D↔R, allineamento
+
+In *Edit* un clic aggancia al picco più alto (positivo o negativo) entro ±25 ms **sul tracciato che si guarda** (prima: filtrato del software entro ±10 ms, che sulla vista 1–40 Hz sembrava casuale e falsava l'ampiezza, misurata nei ±10 ms attorno al marcatore). Nuovo sottomenu *Correzioni su tutto il tracciato*: scambio depolarizzazioni ↔ ripolarizzazioni e allineamento delle depolarizzazioni al picco, nell'intervallo visibile o in tutta la registrazione, annullabili.
 
 ### v3.20.0 (Ottobre 2026) — convertitore NWB con interfaccia, programma autonomo
 

@@ -585,4 +585,10 @@ CATALOG = {
     "Unknown time zone: {0}": "Fuso orario sconosciuto: {0}",
     "skipped (not a WaveForms recording)": "saltato (non è una registrazione WaveForms)",
     " — {0} skipped (not WaveForms recordings)": " — {0} saltati (non sono registrazioni WaveForms)",
+    "Whole-trace corrections": "Correzioni su tutto il tracciato",
+    "Swap depolarisations and repolarisations in the visible range": "Scambia depolarizzazioni e ripolarizzazioni nell'intervallo visibile",
+    "Swap depolarisations and repolarisations in the whole recording": "Scambia depolarizzazioni e ripolarizzazioni in tutta la registrazione",
+    "Align depolarisations to the peak in the visible range": "Allinea le depolarizzazioni al picco nell'intervallo visibile",
+    "Align depolarisations to the peak in the whole recording": "Allinea le depolarizzazioni al picco in tutta la registrazione",
+    "{0} markers changed": "{0} marcatori cambiati",
 }

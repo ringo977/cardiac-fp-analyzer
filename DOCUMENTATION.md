@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.20.0
+**Versione**: 3.21.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1575,6 +1575,10 @@ Restano fissi nel codice (non configurabili): finestra ± 30 ms dell'SNR globale
 
 
 ## 12. Changelog
+
+### v3.21.0 (Ottobre 2026) — aggancio al picco sul tracciato visualizzato, scambio D↔R, allineamento
+
+`ReviewState._snap_to_spike(sample, trace=)`: picco più alto = massimo di |x − mediana locale| entro ±`SNAP_SPIKE_S` (25 ms) sul tracciato passato dalla GUI (`SignalViewer._displayed_trace()`: filtrato, grezzo o 1–40 Hz riscalato), con ricaduta sul filtrato se la lunghezza non torna; `add_beat`, `move_beat`, `set_repol` accettano `trace=`. `swap_markers(start, end, trace=)`: nei battiti con depolarizzazione in `[start, end]` ogni ripolarizzazione diventa la depolarizzazione (agganciata) di un battito nuovo e la depolarizzazione seguente — se nell'intervallo — la sua ripolarizzazione; i battiti senza ripolarizzazione spariscono; sorgenti `corretto`. `align_to_peak(start, end, trace=)`: sposta le depolarizzazioni sul picco, ignorando scostamenti ≤ 1 ms; una ripolarizzazione che finirebbe prima della depolarizzazione viene tolta. Entrambe passano da `_begin` (annullabili, tolgono l'approvazione, rifiutate su registrazione chiusa). GUI: sottomenu *Whole-trace corrections* nel menu di Edit con le quattro voci (intervallo visibile = `viewRange()` dell'asse X); `_review_do(count=True)` riporta il numero di marcatori cambiati. Test in `tests/test_review_model.py`.
 
 ### v3.20.0 (Ottobre 2026) — convertitore NWB con interfaccia, programma autonomo
 

@@ -292,6 +292,54 @@ class ReviewState:
         self.propose_repol(k, record=False)
         return k
 
+    def _in_range(self, start, end):
+        """Indices of the beats whose depolarisation lies in ``[start, end]`` samples (None = whole recording)."""
+        lo = -1 if start is None else int(start)
+        hi = len(self.filtered) if end is None else int(end)
+        return [k for k, b in enumerate(self.beats) if lo <= b.dep <= hi]
+
+    def swap_markers(self, start=None, end=None, *, trace=None):
+        """Exchange the roles of the markers in ``[start, end]`` (samples; None = whole recording): each
+        repolarisation becomes the depolarisation of a beat and the following depolarisation its
+        repolarisation — for recordings where the software took the repolarisation wave for the spike. New
+        depolarisations are snapped to the highest peak (``trace`` as in ``add_beat``); a beat without a
+        repolarisation to promote disappears. Beats outside the range are untouched. Returns the number of
+        beats in the range after the swap."""
+        ks = self._in_range(start, end)
+        if not ks:
+            return 0
+        self._begin()
+        old = [self.beats[k] for k in ks]
+        new = []
+        for i, b in enumerate(old):
+            if b.repol is None:
+                continue
+            dep = self._snap_to_spike(b.repol, trace=trace)
+            nxt = old[i + 1].dep if i + 1 < len(old) else None
+            repol = nxt if nxt is not None and nxt > dep else None
+            new.append(BeatMark(dep, repol, 'corretto', 'corretto' if repol is not None else 'assente'))
+        keep = [b for k, b in enumerate(self.beats) if k not in set(ks)]
+        self.beats = sorted(keep + new, key=lambda bb: bb.dep)
+        return len(new)
+
+    def align_to_peak(self, start=None, end=None, *, trace=None):
+        """Move every depolarisation in ``[start, end]`` onto the highest peak within ±25 ms (``trace`` as in
+        ``add_beat``): the software marks the steepest point of the spike, the lab's sheets its peak. Markers
+        within 1 ms of the peak are left alone. Returns the number of markers moved."""
+        ks = self._in_range(start, end)
+        moves = [(k, self._snap_to_spike(self.beats[k].dep, trace=trace)) for k in ks]
+        moves = [(k, s) for k, s in moves if abs(s - self.beats[k].dep) > 0.001 * self.fs]   # ≤ 1 ms: already there
+        if not moves:
+            return 0
+        self._begin()
+        for k, s in moves:
+            b = self.beats[k]
+            b.dep, b.source = s, 'corretto'
+            if b.repol is not None and b.repol <= s:
+                b.repol, b.repol_source = None, 'assente'
+        self.beats.sort(key=lambda bb: bb.dep)
+        return len(moves)
+
     def remove_beat(self, k):
         self._begin()
         if self.beats[k].source == 'auto':
