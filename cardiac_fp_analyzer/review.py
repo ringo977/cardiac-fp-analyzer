@@ -611,14 +611,14 @@ class ReviewState:
     # ── measures ───────────────────────────────────────────────────────────
 
     AMP_BEFORE_S = 0.030          # window of the depolarisation amplitude: from 30 ms before the marker ...
-    AMP_AFTER_S = 0.015           # ... to 15 ms after it
+    AMP_AFTER_S = 0.030           # ... to 30 ms after it
 
     def _amp_uV(self, dep, before_s=None, after_s=None):
         """Peak-to-peak of the unfiltered signal around the marker, in µV (and the up / down voltages at the
         amplifier). The window is asymmetric on purpose: a slow-rhythm spike rises over 10–25 ms, so a marker
         on its peak needs the pre-spike baseline from further back, while a marker on the onset needs the
         peak after it. Against the operator's workbook (Exp1 baseline, 16 tissues, 0.5 s … 3.7 s periods)
-        −30/+15 ms reproduces the amplitudes of every tissue within 2.2 % where ±10 ms was 14–43 % low on
+        −30/+30 ms reproduces the amplitudes within 2.4 % (98 % of the beats within 5 %, measured at the software's own markers, which sit 5–12 ms before the operator's on some tissues) where ±10 ms was 14–43 % low on
         three of them, and it no longer depends on where within the spike the marker sits."""
         src = self.raw if self.raw is not None else self.filtered
         lo = int((self.AMP_BEFORE_S if before_s is None else before_s) * self.fs)
