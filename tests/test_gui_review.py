@@ -322,3 +322,27 @@ def test_message_boxes_are_qt_drawn(app):
     QTimer.singleShot(50, _click)
     answers.append(QMessageBox.question(None, "t", "q", QMessageBox.Yes | QMessageBox.No, QMessageBox.No))
     assert answers == [QMessageBox.Yes]
+
+
+def test_approving_or_closing_applies_pending_edits_first(app, csv_path):
+    w = MainWindow()
+    w._run_analysis(str(csv_path), "el1")
+    st, panel = w._review_state, w._review_panel
+    calls = []
+    real = w._on_recompute
+    w._on_recompute = lambda: (calls.append(1), real())[1]
+    st.remove_beat(0)
+    w._review_after_edit()
+    assert w._signal_tab.recompute_pending()
+    panel._chk_approved.setChecked(True)               # approving never freezes stale measures
+    assert calls == [1] and not w._signal_tab.recompute_pending()
+    assert st.approved and panel._chk_approved.isChecked()
+    panel._chk_approved.setChecked(False)
+    st.remove_beat(0)
+    w._review_after_edit()
+    panel._btn_close.click()                           # nor does closing
+    assert len(calls) == 2 and st.locked and not w._signal_tab.recompute_pending()
+    panel._btn_close.click()
+    panel._chk_approved.setChecked(False)
+    panel._chk_approved.setChecked(True)               # nothing pending: no needless recompute
+    assert len(calls) == 2

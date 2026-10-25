@@ -446,6 +446,10 @@ class _SignalTab(QWidget):
         if not enabled:
             self.set_recompute_pending(False)
 
+    def recompute_pending(self) -> bool:
+        """True while edits have not been applied to Parameters / Arrhythmias."""
+        return bool(getattr(self, '_recompute_pending', False))
+
     def set_recompute_pending(self, pending: bool) -> None:
         """Toggle the 'edits pending' visual cue on the Ricalcola button.
 
@@ -453,6 +457,7 @@ class _SignalTab(QWidget):
         styling when clean.  Scoped via objectName so Qt's style-sheet
         cascade doesn't leak to neighbouring buttons.
         """
+        self._recompute_pending = bool(pending)
         if pending:
             self._btn_recompute.setStyleSheet(
                 "QPushButton {"
@@ -2387,11 +2392,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(tr("Automatic analysis redone: corrections in memory "
                                         "discarded (the .review.json stays until you save)"), 8000)
 
+    def _recompute_if_pending(self) -> None:
+        """Approving or closing must never freeze stale measures: apply the pending edits first."""
+        if self._signal_tab.recompute_pending() and self._current_result is not None:
+            self._on_recompute()
+
     def _review_approve(self, on: bool) -> None:
         st = self._review_state
         if st is None or getattr(st, 'locked', False):
             return
         if on:
+            self._recompute_if_pending()
             st.approve()
             msg = tr("Recording approved by {0}").format(st.approved_by)
         else:
@@ -2405,6 +2416,7 @@ class MainWindow(QMainWindow):
         if st is None:
             return
         if close:
+            self._recompute_if_pending()
             st.close()
             msg = tr("Recording closed (locked)")
         else:
