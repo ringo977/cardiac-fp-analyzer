@@ -279,6 +279,7 @@ def test_click_snaps_to_the_highest_peak_of_the_displayed_trace():
     """A click up to ±25 ms off lands on the spike; with another trace (the operators' 1–40 Hz view) the marker
     goes on the peak of that trace, which is what the operator sees."""
     import numpy as np
+
     from pyside_app.review_helpers import operators_view
     st, beats, reps = _state(dur_s=20.0, amp=1.0, noise=0.02, pos_wave=0.3)
     raw = st.raw
