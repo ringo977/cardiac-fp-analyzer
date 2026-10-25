@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.19.0
+**Versione**: 3.20.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali) o con sistemi **Multi Channel Systems** (file HDF5 del protocollo MCS RawData, fino a 64 elettrodi).
@@ -175,6 +175,10 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.20.0 (Ottobre 2026) — convertitore NWB con interfaccia, programma autonomo
+
+`cardiac-fp-nwb-gui` (`pyside_app/nwb_converter.py`): finestra per convertire CSV (file o cartella) in NWB con i metadati facoltativi; `nwb_io.convert_many` condiviso con la riga di comando. `packaging/build_nwb_converter.py` + workflow `Build NWB converter` costruiscono con PyInstaller il programma per Windows (.exe) e macOS (.app in zip, Apple silicon e Intel) e lo provano con `--self-test`. CI: job Windows consultivo; `tzdata` tra le dipendenze `nwb`.
 
 ### v3.19.0 (Ottobre 2026) — interfaccia in inglese, italiano selezionabile
 

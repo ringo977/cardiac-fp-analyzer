@@ -1,0 +1,82 @@
+# Stand-alone NWB converter (pyside_app/nwb_converter.py) for Windows and macOS, built with PyInstaller.
+#
+# PyInstaller cannot cross-compile, so each system builds on its own runner. Every build ends with the
+# program's own --self-test (converts a synthetic recording and reads it back), which fails the job if the
+# package lacks pynwb's schema files, h5py or the time-zone database.
+#
+# Run it by hand (Actions ▸ Build NWB converter ▸ Run workflow) or by pushing a tag `nwb-converter-v*`:
+# the tag also attaches the two files to a GitHub release. Download from the run page ("Artifacts").
+#
+# The programs are NOT code-signed: Windows SmartScreen asks "More info ▸ Run anyway"; on macOS use
+# right-click ▸ Open the first time (or `xattr -dr com.apple.quarantine "NWB Converter.app"`).
+
+name: Build NWB converter
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["nwb-converter-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            label: Windows
+            artifact: "dist/NWB Converter.exe"
+          - os: macos-15
+            label: macOS (Apple silicon)
+            artifact: "dist/NWB-Converter-macOS.zip"
+          - os: macos-15-intel
+            label: macOS (Intel)
+            artifact: "dist/NWB-Converter-macOS.zip"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          pip install -e ".[gui,nwb]"
+          pip install pyinstaller
+      - name: Build and self-test
+        run: python packaging/build_nwb_converter.py
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Name the macOS archive by architecture
+        if: runner.os == 'macOS'
+        run: mv dist/NWB-Converter-macOS.zip "dist/NWB-Converter-macOS-$(uname -m).zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nwb-converter-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            dist/NWB Converter.exe
+            dist/NWB-Converter-macOS-*.zip
+          if-no-files-found: error
+
+  release:
+    name: Attach to the release
+    if: startsWith(github.ref, 'refs/tags/nwb-converter-v')
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: files
+          merge-multiple: true
+      - name: Create the release (if needed) and upload the files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "NWB converter ${GITHUB_REF_NAME#nwb-converter-}" \
+                 --notes "Stand-alone CSV → NWB converter for Windows and macOS (not code-signed: see the workflow header)."
+          gh release upload "$GITHUB_REF_NAME" files/* --repo "$GITHUB_REPOSITORY" --clobber

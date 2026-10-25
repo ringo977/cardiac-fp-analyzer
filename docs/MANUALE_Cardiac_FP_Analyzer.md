@@ -1,6 +1,6 @@
 ---
 title: "Cardiac FP Analyzer — Manuale utente"
-subtitle: "Versione 3.19.0 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
+subtitle: "Versione 3.20.0 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
 author: "Marco Rasponi · github.com/ringo977/cardiac-fp-analyzer"
 date: "25 ottobre 2026"
 lang: it
@@ -130,6 +130,8 @@ pip install ".[nwb]"                                   # pynwb (la lettura usa s
 cardiac-fp-nwb "Exp 5/Day8" -o nwb/ --validate         # una cartella o singoli CSV; --validate usa nwbinspector
 cardiac-fp-nwb file.csv --lab "…" --institution "…" --experimenter "Cognome, Nome" --gain 10000 --tz Europe/Rome
 ```
+
+**Convertitore con interfaccia** (dalla v3.20). Per chi non usa il terminale c'è una piccola finestra, `cardiac-fp-nwb-gui`, e un programma autonomo per Windows e macOS (*NWB Converter*, non serve installare Python). Si scelgono uno o più CSV oppure una cartella (cercata anche nelle sottocartelle), si compilano i campi noti — guadagno (10000 per il Digilent; 1 se il CSV è già in volt) e fuso orario hanno un valore predefinito, tutti gli altri (laboratorio, istituzione, sperimentatori separati da `;`, specie, descrizione, note) si possono lasciare vuoti — e si preme *Converti*. La cartella di destinazione vuota significa "accanto a ogni CSV"; un file che non si converte è segnalato nel registro e gli altri proseguono; i campi sono ricordati per la volta dopo. L'identità di ogni ingresso viene dalla `samples.csv` (anche fino a tre cartelle sopra) o dal nome del file, come nell'analisi. Il programma autonomo non è firmato: su Windows *Ulteriori informazioni ▸ Esegui comunque*, su Mac clic destro ▸ *Apri* la prima volta. I file si scaricano dalla pagina *Actions ▸ Build NWB converter* di GitHub (o dalla release, se il build parte da un tag `nwb-converter-v…`); `python packaging/build_nwb_converter.py` lo costruisce anche in locale.
 
 Un `.nwb` si apre nella GUI, nella coda di revisione e nel batch come un CSV: i canali sono `el1` / `el2`, l'identità viene dal file stesso (una registrazione per tessuto se i due ingressi portano tessuti diversi) e la pipeline non applica il guadagno perché il file ha già la conversione. Un file con un solo ingresso dà `el1` (duplicato in `el2`, come per i CSV a un canale).
 

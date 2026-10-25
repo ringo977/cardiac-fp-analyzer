@@ -475,6 +475,43 @@ def plan_units(path, rel, info, report):
 #   Command line
 # ──────────────────────────────────────────────────────────────────────
 
+def find_csvs(paths):
+    """CSV recordings in ``paths`` (files as they are, folders searched recursively; ``samples.csv`` skipped)."""
+    files = []
+    for p in paths:
+        p = Path(p)
+        files += sorted(f for f in p.rglob('*.csv') if f.name.lower() != 'samples.csv') if p.is_dir() else [p]
+    return files
+
+
+def convert_many(paths, *, out_dir=None, check=False, progress=None, **options):
+    """Convert every CSV in ``paths`` (see ``find_csvs``) with ``csv_to_nwb(**options)``.
+
+    ``out_dir``: folder for the .nwb files (default: next to each CSV); ``check``: run nwbinspector on each file
+    written; ``progress(i, n, csv, written, message)`` is called after each file (``written`` None on error).
+    Returns ``[{'csv', 'nwb', 'ok', 'message', 'issues'}]`` — a failing file never stops the others.
+    """
+    from .results_export import sheet_root
+    files = find_csvs(paths)
+    results = []
+    for i, f in enumerate(files, 1):
+        out = Path(out_dir) / f.with_suffix(NWB_SUFFIX).name if out_dir else None
+        rec = {'csv': str(f), 'nwb': None, 'ok': False, 'message': '', 'issues': None}
+        try:
+            if out is not None:
+                out.parent.mkdir(parents=True, exist_ok=True)
+            written = csv_to_nwb(f, out, data_dir=sheet_root(f.parent), **options)
+            rec.update(nwb=str(written), ok=True)
+            if check:
+                rec['issues'] = validate(written)
+        except Exception as exc:     # noqa: BLE001 — report and go on with the next file
+            rec['message'] = f'{type(exc).__name__}: {exc}'
+        results.append(rec)
+        if progress is not None:
+            progress(i, len(files), rec['csv'], rec['nwb'], rec['message'])
+    return results
+
+
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description='Convert Digilent WaveForms CSV recordings to NWB 2 files')
@@ -491,32 +528,24 @@ def main(argv=None):
     ap.add_argument('--overwrite', action='store_true')
     ap.add_argument('--validate', action='store_true', help='run nwbinspector on each file written')
     a = ap.parse_args(argv)
-    from .results_export import sheet_root
-    files = []
-    for p in a.paths:
-        p = Path(p)
-        files += sorted(f for f in p.rglob('*.csv') if f.name.lower() != 'samples.csv') if p.is_dir() else [p]
-    n_ok = 0
-    for f in files:
-        out = Path(a.out_dir) / f.with_suffix(NWB_SUFFIX).name if a.out_dir else None
-        if out is not None:
-            out.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            written = csv_to_nwb(f, out, gain=a.gain, tz=a.tz, lab=a.lab, institution=a.institution,
-                                 experimenter=a.experimenter, notes=a.notes, overwrite=a.overwrite,
-                                 data_dir=sheet_root(f.parent), species=a.species, subject_description=a.subject)
-            n_ok += 1
-            msg = f'  {f.name} → {written}'
-            if a.validate:
-                issues = validate(written)
-                msg += ' — ' + ('nwbinspector not installed' if issues is None else (f'{len(issues)} message(s)' if issues else 'clean'))
-                for line in issues or []:
-                    msg += '\n      ' + line
-            print(msg)
-        except Exception as exc:     # noqa: BLE001 — report and go on with the next file
-            print(f'  {f.name}: {type(exc).__name__}: {exc}')
-    print(f'{n_ok}/{len(files)} converted')
-    return 0 if n_ok == len(files) else 1
+
+    def show(i, n, csv, written, message):
+        name = Path(csv).name
+        print(f'  {name} → {written}' if written else f'  {name}: {message}')
+
+    results = convert_many(a.paths, out_dir=a.out_dir, check=a.validate, progress=show, gain=a.gain, tz=a.tz,
+                           lab=a.lab, institution=a.institution, experimenter=a.experimenter, notes=a.notes,
+                           overwrite=a.overwrite, species=a.species, subject_description=a.subject)
+    for r in results:
+        if a.validate and r['ok']:
+            issues = r['issues']
+            print(f"  {Path(r['nwb']).name}: " + ('nwbinspector not installed' if issues is None
+                                                   else (f'{len(issues)} message(s)' if issues else 'clean')))
+            for line in issues or []:
+                print('      ' + line)
+    n_ok = sum(r['ok'] for r in results)
+    print(f'{n_ok}/{len(results)} converted')
+    return 0 if n_ok == len(results) else 1
 
 
 if __name__ == '__main__':      # pragma: no cover

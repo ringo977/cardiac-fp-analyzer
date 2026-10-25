@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cardiac-fp-analyzer"
-version = "3.19.0"
+version = "3.20.0"
 description = "Field Potential analysis pipeline for hiPSC-CM micro-ECG recordings"
 readme = "README.md"
 license = "MIT"
@@ -85,6 +85,7 @@ cardiac-fp = "cardiac_fp_analyzer.analyze:main"
 cardiac-fp-gui = "pyside_app.main:main"
 cardiac-fp-results = "cardiac_fp_analyzer.results_export:main"
 cardiac-fp-nwb = "cardiac_fp_analyzer.nwb_io:main"
+cardiac-fp-nwb-gui = "pyside_app.nwb_converter:main"
 
 [tool.setuptools.packages.find]
 include = ["cardiac_fp_analyzer*", "pyside_app*", "ui*"]

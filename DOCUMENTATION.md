@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.19.0
+**Versione**: 3.20.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1575,6 +1575,12 @@ Restano fissi nel codice (non configurabili): finestra ± 30 ms dell'SNR globale
 
 
 ## 12. Changelog
+
+### v3.20.0 (Ottobre 2026) — convertitore NWB con interfaccia, programma autonomo
+
+**`pyside_app/nwb_converter.py`**: `NwbConverterWindow` (scelta file/cartella, cartella di destinazione, guadagno e fuso con valori predefiniti, metadati facoltativi, sovrascrittura, controllo con nwbinspector, barra e registro, campi ricordati in `QSettings` org `CardiacFP` app `NWB Converter`, lingua letta dalle impostazioni dell'applicazione principale); `_Worker` (`QThread` con stack da 16 MB) chiama `nwb_io.convert_many(paths, out_dir=, check=, progress=, **opzioni di csv_to_nwb)` — `find_csvs` (cartelle ricorsive, `samples.csv` escluso), un file che fallisce non ferma gli altri; `options_from_fields` (campi vuoti → predefiniti o omessi, fuso verificato con `zoneinfo`), `split_names` (sperimentatori separati da `;`); `--self-test` converte e rilegge una registrazione sintetica. Console script `cardiac-fp-nwb-gui`; la riga di comando `cardiac-fp-nwb` usa lo stesso `convert_many`.
+
+**Pacchetto autonomo.** `packaging/build_nwb_converter.py` (PyInstaller: Windows `--onefile`, macOS `--onedir` + `.app` in zip, Linux cartella; `--collect-all pynwb/hdmf/h5py`, `--collect-data tzdata`) termina eseguendo il programma con `--self-test`: un pacchetto senza gli schemi di pynwb, h5py o il database dei fusi fallisce lì (la prima prova ha trovato matplotlib richiesto dall'analisi). Workflow `.github/workflows/build-nwb-converter.yml`: runner Windows, macOS Apple silicon e macOS Intel, a mano o con un tag `nwb-converter-v*` (allega i file alla release con `gh`). Non firmato. **CI**: job `test-windows` consultivo (`continue-on-error`); `tzdata` nell'extra `nwb`. Test: `tests/test_nwb_converter.py`.
 
 ### v3.19.0 (Ottobre 2026) — interfaccia in inglese, italiano selezionabile
 
