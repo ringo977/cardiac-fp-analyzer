@@ -232,7 +232,7 @@ def test_problems_flag_gaps_close_beats_and_missing_repol():
     gap = next(p for p in probs if p['tipo'] == 'battito_mancante')
     assert gap['start'] == int(beats[2]) and gap['end'] == int(beats[4]) and gap['k'] == 2
     close = next(p for p in probs if p['tipo'] == 'battiti_vicini')
-    assert abs(close['end'] - close['start'] - int(0.3 * FS)) <= int(0.010 * FS)      # snapped within ±10 ms
+    assert abs(close['end'] - close['start'] - int(0.3 * FS)) <= int(0.025 * FS)      # snapped within ±25 ms
     assert probs == sorted(probs, key=lambda p: (p['start'], p['tipo']))
 
 
@@ -273,3 +273,25 @@ def test_a_correction_withdraws_the_approval():
     st.approve('Rossi, Mario')
     st.undo()                                           # undo is a correction too: approve again when done
     assert st.status == 'da_rivedere'
+
+
+def test_click_snaps_to_the_highest_peak_of_the_displayed_trace():
+    """A click up to ±25 ms off lands on the spike; with another trace (the operators' 1–40 Hz view) the marker
+    goes on the peak of that trace, which is what the operator sees."""
+    import numpy as np
+    from pyside_app.review_helpers import operators_view
+    st, beats, reps = _state(dur_s=20.0, amp=1.0, noise=0.02, pos_wave=0.3)
+    raw = st.raw
+    spike = int(beats[2])
+    st.remove_beat(2)
+    k = st.add_beat(spike + int(0.020 * FS))             # 20 ms late: still the spike
+    assert abs(st.beats[k].dep - spike) <= 2
+    st.remove_beat(k)
+    ops = operators_view(raw, FS)
+    k = st.add_beat(spike - int(0.015 * FS), trace=ops)   # on the 1–40 Hz view
+    lo, hi = spike - int(0.025 * FS), spike + int(0.025 * FS)
+    expected = lo + int(np.argmax(np.abs(ops[lo:hi + 1] - np.median(ops[lo:hi + 1]))))
+    assert st.beats[k].dep == expected
+    # a wrong-length trace is ignored, not an error
+    st.move_beat(k, spike + 5, trace=ops[:-10])
+    assert abs(st.beats[k].dep - spike) <= 2

@@ -621,10 +621,10 @@ class SignalViewer(pg.PlotWidget):
             act = menu.addAction(tr("Remove depolarisation #{0}").format(k_dep + 1))
             act.triggered.connect(lambda _c=False, k=k_dep: self._review_do(lambda: st.remove_beat(k)))
             act = menu.addAction(tr("Move depolarisation #{0} here").format(k_dep + 1))
-            act.triggered.connect(lambda _c=False, k=k_dep, i=i_click: self._review_do(lambda: st.move_beat(k, i)))
+            act.triggered.connect(lambda _c=False, k=k_dep, i=i_click: self._review_do(lambda: st.move_beat(k, i, trace=self._displayed_trace())))
         else:
             act = menu.addAction(tr("Add depolarisation here"))
-            act.triggered.connect(lambda _c=False, i=i_click: self._review_do(lambda: st.add_beat(i)))
+            act.triggered.connect(lambda _c=False, i=i_click: self._review_do(lambda: st.add_beat(i, trace=self._displayed_trace())))
         if v is not None:
             act = menu.addAction(tr("Restore the detection removed by the vetoes"))
             act.triggered.connect(lambda _c=False, vv=v: self._review_do(lambda: st.restore_vetoed(vv)))
@@ -634,11 +634,11 @@ class SignalViewer(pg.PlotWidget):
             act.triggered.connect(lambda _c=False, k=k_rep: self._review_do(lambda: st.clear_repol(k)))
         if prev >= 0 and k_dep is None:
             act = menu.addAction(tr("Repolarisation of beat #{0} here").format(prev + 1))
-            act.triggered.connect(lambda _c=False, k=prev, i=i_click: self._review_do(lambda: st.set_repol(k, i)))
+            act.triggered.connect(lambda _c=False, k=prev, i=i_click: self._review_do(lambda: st.set_repol(k, i, trace=self._displayed_trace())))
             act = menu.addAction(tr("Repolarisation of beat #{0} here and propagate the criterion "
                                     "to all").format(prev + 1))
             act.triggered.connect(lambda _c=False, k=prev, i=i_click: self._review_do(
-                lambda: st.set_repol(k, i, propagate=True), report=True))
+                lambda: st.set_repol(k, i, propagate=True, trace=self._displayed_trace()), report=True))
         menu.addSeparator()
         menu.addAction(tr("Cancel"))   # dismisses the menu
         menu.exec(QCursor.pos())

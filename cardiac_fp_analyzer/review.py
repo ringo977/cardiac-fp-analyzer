@@ -260,17 +260,29 @@ class ReviewState:
 
     # ── operations (each undoable) ─────────────────────────────────────────
 
-    def _snap_to_spike(self, sample, half_s=0.010):
-        h = int(half_s * self.fs)
-        a, b = max(0, sample - h), min(len(self.filtered), sample + h + 1)
-        return int(a + np.argmax(np.abs(self.filtered[a:b])))
+    SNAP_SPIKE_S = 0.025          # a click within this of the spike lands on it (the operator aims by eye)
 
-    def add_beat(self, sample, *, snap=True, source='aggiunto'):
-        """Add a depolarisation at ``sample`` (snapped to the largest |x| within ±10 ms). Returns its index,
-        or None when a beat already sits within MIN_RR_S."""
+    def _snap_to_spike(self, sample, half_s=None, trace=None):
+        """The sample of the highest peak — positive or negative, the largest |x| after removing the local
+        median — within ±``half_s`` of ``sample`` on ``trace`` (default: the software's filtered trace; the
+        GUI passes the trace the operator is looking at, e.g. the 1–40 Hz view, so the marker lands on the
+        peak he sees)."""
+        x = self.filtered if trace is None else np.asarray(trace, dtype=float)
+        if len(x) != len(self.filtered):
+            x = self.filtered
+        h = int((self.SNAP_SPIKE_S if half_s is None else half_s) * self.fs)
+        a, b = max(0, sample - h), min(len(x), sample + h + 1)
+        seg = x[a:b]
+        if len(seg) == 0:
+            return int(sample)
+        return int(a + np.argmax(np.abs(seg - np.median(seg))))
+
+    def add_beat(self, sample, *, snap=True, source='aggiunto', trace=None):
+        """Add a depolarisation at ``sample`` (snapped to the highest peak within ±25 ms on ``trace``, see
+        ``_snap_to_spike``). Returns its index, or None when a beat already sits within MIN_RR_S."""
         sample = int(sample)
         if snap:
-            sample = self._snap_to_spike(sample)
+            sample = self._snap_to_spike(sample, trace=trace)
         if any(abs(b.dep - sample) < MIN_RR_S * self.fs for b in self.beats):
             return None
         self._begin()
@@ -300,10 +312,10 @@ class ReviewState:
         c['corrected'] = any(v for k, v in c.items() if k != 'polarita') or self.polarity is not None
         return c
 
-    def move_beat(self, k, sample, *, snap=True):
+    def move_beat(self, k, sample, *, snap=True, trace=None):
         sample = int(sample)
         if snap:
-            sample = self._snap_to_spike(sample)
+            sample = self._snap_to_spike(sample, trace=trace)
         self._begin()
         b = self.beats[k]
         b.dep, b.source = sample, 'corretto'
@@ -324,14 +336,14 @@ class ReviewState:
         self.propose_repol(k, record=False)
         return k
 
-    def set_repol(self, k, sample, *, snap=True, propagate=False, tol_frac=0.15, tol_min_s=0.100):
-        """Place the repolarisation of beat ``k`` at ``sample`` (snapped to the nearest local extremum).
-        With ``propagate`` the same criterion (polarity, latency) is applied to every other beat; returns the
-        propagation report (dict) or None."""
+    def set_repol(self, k, sample, *, snap=True, propagate=False, tol_frac=0.15, tol_min_s=0.100, trace=None):
+        """Place the repolarisation of beat ``k`` at ``sample`` (snapped to the nearest local extremum of
+        ``trace``, default the filtered trace). With ``propagate`` the same criterion (polarity, latency) is
+        applied to every other beat; returns the propagation report (dict) or None."""
         b = self.beats[k]
         sample = int(sample)
         if snap:
-            sample = self._snap_to_extremum(sample)
+            sample = self._snap_to_extremum(sample, trace=trace)
         if sample <= b.dep:
             raise ValueError(tr('the repolarisation must follow the depolarisation'))
         self._begin()
@@ -373,8 +385,8 @@ class ReviewState:
 
     # ── repolarisation search ──────────────────────────────────────────────
 
-    def _snap_to_extremum(self, sample, half_s=0.030):
-        x = self.filtered
+    def _snap_to_extremum(self, sample, half_s=0.030, trace=None):
+        x = self.filtered if trace is None or len(trace) != len(self.filtered) else np.asarray(trace, dtype=float)
         h = int(half_s * self.fs)
         a, b = max(1, sample - h), min(len(x) - 1, sample + h + 1)
         seg = x[a:b]
