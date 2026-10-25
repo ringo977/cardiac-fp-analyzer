@@ -627,10 +627,10 @@ class SignalViewer(pg.PlotWidget):
             act = menu.addAction(tr("Remove depolarisation #{0}").format(k_dep + 1))
             act.triggered.connect(lambda _c=False, k=k_dep: self._review_do(lambda: st.remove_beat(k)))
             act = menu.addAction(tr("Move depolarisation #{0} here").format(k_dep + 1))
-            act.triggered.connect(lambda _c=False, k=k_dep, i=i_click: self._review_do(lambda: st.move_beat(k, i, trace=self._displayed_trace())))
+            act.triggered.connect(lambda _c=False, k=k_dep, i=i_click: self._review_do(lambda: st.move_beat(k, i)))
         else:
             act = menu.addAction(tr("Add depolarisation here"))
-            act.triggered.connect(lambda _c=False, i=i_click: self._review_do(lambda: st.add_beat(i, trace=self._displayed_trace())))
+            act.triggered.connect(lambda _c=False, i=i_click: self._review_do(lambda: st.add_beat(i)))
         if v is not None:
             act = menu.addAction(tr("Restore the detection removed by the vetoes"))
             act.triggered.connect(lambda _c=False, vv=v: self._review_do(lambda: st.restore_vetoed(vv)))
@@ -650,10 +650,10 @@ class SignalViewer(pg.PlotWidget):
         lo, hi = int(np.searchsorted(self._time, x_lo)), int(np.searchsorted(self._time, x_hi))
         bulk = menu.addMenu(tr("Whole-trace corrections"))
         for label, op in (
-            (tr("Swap depolarisations and repolarisations in the visible range"), lambda: st.swap_markers(lo, hi, trace=self._displayed_trace())),
-            (tr("Swap depolarisations and repolarisations in the whole recording"), lambda: st.swap_markers(trace=self._displayed_trace())),
-            (tr("Align depolarisations to the peak in the visible range"), lambda: st.align_to_peak(lo, hi, trace=self._displayed_trace())),
-            (tr("Align depolarisations to the peak in the whole recording"), lambda: st.align_to_peak(trace=self._displayed_trace())),
+            (tr("Swap depolarisations and repolarisations in the visible range"), lambda: st.swap_markers(lo, hi)),
+            (tr("Swap depolarisations and repolarisations in the whole recording"), lambda: st.swap_markers()),
+            (tr("Align depolarisations to the peak in the visible range"), lambda: st.align_to_peak(lo, hi)),
+            (tr("Align depolarisations to the peak in the whole recording"), lambda: st.align_to_peak()),
         ):
             act = bulk.addAction(label)
             act.triggered.connect(lambda _c=False, f=op: self._review_do(f, count=True))

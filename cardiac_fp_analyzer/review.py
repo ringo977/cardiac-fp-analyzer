@@ -263,19 +263,24 @@ class ReviewState:
     SNAP_SPIKE_S = 0.025          # a click within this of the spike lands on it (the operator aims by eye)
 
     def _snap_to_spike(self, sample, half_s=None, trace=None):
-        """The sample of the highest peak — positive or negative, the largest |x| after removing the local
-        median — within ±``half_s`` of ``sample`` on ``trace`` (default: the software's filtered trace; the
-        GUI passes the trace the operator is looking at, e.g. the 1–40 Hz view, so the marker lands on the
-        peak he sees)."""
-        x = self.filtered if trace is None else np.asarray(trace, dtype=float)
-        if len(x) != len(self.filtered):
-            x = self.filtered
+        """The sample of the highest peak — a local extremum, positive or negative, with the largest |x| after
+        removing the local median — within ±``half_s`` of ``sample`` on the software's filtered trace.
+
+        Always the filtered trace: the spike is a few ms wide and the operators' 1–40 Hz view smears it,
+        moving its apparent peak by 10–20 ms (and a 25 ms window on that view can be dominated by the slow
+        wave at its edges), so a snap on the displayed trace would put the marker — and the ±10 ms amplitude
+        window — off the real spike. ``trace`` is accepted for API symmetry with ``set_repol`` and ignored."""
+        x = self.filtered
         h = int((self.SNAP_SPIKE_S if half_s is None else half_s) * self.fs)
-        a, b = max(0, sample - h), min(len(x), sample + h + 1)
+        a, b = max(1, sample - h), min(len(x) - 1, sample + h + 1)
         seg = x[a:b]
-        if len(seg) == 0:
+        if len(seg) < 3:
             return int(sample)
-        return int(a + np.argmax(np.abs(seg - np.median(seg))))
+        ext = np.where(np.diff(np.sign(np.diff(seg))) != 0)[0] + 1      # local extrema (window edges excluded)
+        if len(ext) == 0:
+            return int(sample)
+        dev = np.abs(seg[ext] - np.median(seg))
+        return int(a + ext[int(np.argmax(dev))])
 
     def add_beat(self, sample, *, snap=True, source='aggiunto', trace=None):
         """Add a depolarisation at ``sample`` (snapped to the highest peak within ±25 ms on ``trace``, see
@@ -324,8 +329,8 @@ class ReviewState:
 
     def align_to_peak(self, start=None, end=None, *, trace=None):
         """Move every depolarisation in ``[start, end]`` onto the highest peak within ±25 ms (``trace`` as in
-        ``add_beat``): the software marks the steepest point of the spike, the lab's sheets its peak. Markers
-        within 1 ms of the peak are left alone. Returns the number of markers moved."""
+        ``add_beat``, i.e. on the filtered trace). Markers within 1 ms of the peak are left alone. Returns
+        the number of markers moved."""
         ks = self._in_range(start, end)
         moves = [(k, self._snap_to_spike(self.beats[k].dep, trace=trace)) for k in ks]
         moves = [(k, s) for k, s in moves if abs(s - self.beats[k].dep) > 0.001 * self.fs]   # ≤ 1 ms: already there

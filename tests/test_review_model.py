@@ -278,7 +278,6 @@ def test_a_correction_withdraws_the_approval():
 def test_click_snaps_to_the_highest_peak_of_the_displayed_trace():
     """A click up to ±25 ms off lands on the spike; with another trace (the operators' 1–40 Hz view) the marker
     goes on the peak of that trace, which is what the operator sees."""
-    import numpy as np
 
     from pyside_app.review_helpers import operators_view
     st, beats, reps = _state(dur_s=20.0, amp=1.0, noise=0.02, pos_wave=0.3)
@@ -288,14 +287,15 @@ def test_click_snaps_to_the_highest_peak_of_the_displayed_trace():
     k = st.add_beat(spike + int(0.020 * FS))             # 20 ms late: still the spike
     assert abs(st.beats[k].dep - spike) <= 2
     st.remove_beat(k)
+    # the displayed trace (1–40 Hz view) smears the spike: the snap stays on the filtered trace whatever is
+    # passed, so the marker is on the real spike even when the operator looks at the operators' view
     ops = operators_view(raw, FS)
-    k = st.add_beat(spike - int(0.015 * FS), trace=ops)   # on the 1–40 Hz view
-    lo, hi = spike - int(0.025 * FS), spike + int(0.025 * FS)
-    expected = lo + int(np.argmax(np.abs(ops[lo:hi + 1] - np.median(ops[lo:hi + 1]))))
-    assert st.beats[k].dep == expected
-    # a wrong-length trace is ignored, not an error
+    k = st.add_beat(spike - int(0.015 * FS), trace=ops)
+    assert abs(st.beats[k].dep - spike) <= 2
     st.move_beat(k, spike + 5, trace=ops[:-10])
     assert abs(st.beats[k].dep - spike) <= 2
+    # a window whose edges are higher than the spike (slow wave) still returns a local extremum, not an edge
+    assert abs(st._snap_to_spike(spike + int(0.020 * FS)) - spike) <= 2
 
 
 def test_swap_markers_and_align_to_peak_are_undoable():
