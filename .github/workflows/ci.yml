@@ -103,4 +103,6 @@ jobs:
           pip install -e ".[gui,reports,mcs,nwb]"
           pip install pytest pytest-cov openpyxl
       - name: Run tests
-        run: pytest tests/ -v --tb=short -rs
+        # -rfEs: failures and errors listed in the short summary at the end of the log (the
+        # advisory job is read from a screenshot more often than not)
+        run: pytest tests/ -v --tb=short -rfEs
