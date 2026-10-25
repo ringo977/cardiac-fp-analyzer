@@ -65,3 +65,7 @@ pytest-cache-files-*/
 SPRINT*_COMMIT_BLOCK.sh
 # Local experiment folders (recordings, manual references): never in the repo.
 Experiments-*/
+
+# stand-alone builds unpacked next to the sources
+*.app/
+NWB-Converter-*.zip

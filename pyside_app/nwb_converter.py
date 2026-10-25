@@ -1,6 +1,6 @@
 """Small stand-alone window to convert WaveForms CSV recordings to NWB 2 (``cardiac-fp-nwb-gui``).
 
-Pick one or more CSV files or a folder (searched recursively), fill in what is known — every field except the
+Pick one or more CSV files or a folder (searched recursively; with an output folder the sub-folders are kept; CSV files that are not WaveForms recordings are skipped), fill in what is known — every field except the
 amplifier gain and the time zone may be left empty — and convert.  The work is done by
 ``cardiac_fp_analyzer.nwb_io.convert_many`` (the same code as the ``cardiac-fp-nwb`` command) on a worker
 thread; a failing file is reported and the others go on.  What was typed is remembered for the next run.
@@ -271,10 +271,17 @@ class NwbConverterWindow(QMainWindow):
         self._bar.setMaximum(max(n, 1))
         self._bar.setValue(i)
         name = Path(csv).name
-        self._log.appendPlainText(f"✓ {name} → {written}" if written else f"✗ {name}: {message}")
+        if written:
+            self._log.appendPlainText(f"✓ {name} → {written}")
+        elif message == "not a WaveForms recording":
+            self._log.appendPlainText(f"– {name}: " + tr("skipped (not a WaveForms recording)"))
+        else:
+            self._log.appendPlainText(f"✗ {name}: {message}")
 
     def _on_done(self, results):
         n_ok = sum(1 for r in results if r["ok"])
+        n_skip = sum(1 for r in results if r.get("skipped"))
+        results = [r for r in results if not r.get("skipped")]
         for r in results:
             if r["ok"] and r.get("issues"):
                 self._log.appendPlainText(f"  {Path(r['nwb']).name}: " + "; ".join(r["issues"]))
@@ -283,7 +290,8 @@ class NwbConverterWindow(QMainWindow):
         elif not results[0]["csv"] and not results[0]["ok"]:
             self._log.appendPlainText(f"✗ {results[0]['message']}")
             results = []
-        self._status.setText(tr("{0} of {1} files converted").format(n_ok, len(results)))
+        self._status.setText(tr("{0} of {1} files converted").format(n_ok, len(results))
+                             + (tr(" — {0} skipped (not WaveForms recordings)").format(n_skip) if n_skip else ""))
         self._convert.setEnabled(True)
         w, self._worker = self._worker, None
         if w is not None:

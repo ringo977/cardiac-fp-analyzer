@@ -95,6 +95,7 @@ include = ["cardiac_fp_analyzer*", "pyside_app*", "ui*"]
 target-version = "py39"
 line-length = 100
 src = [".", "cardiac_fp_analyzer", "pyside_app"]
+extend-exclude = ["*.app"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]

@@ -475,40 +475,63 @@ def plan_units(path, rel, info, report):
 #   Command line
 # ──────────────────────────────────────────────────────────────────────
 
-def find_csvs(paths):
-    """CSV recordings in ``paths`` (files as they are, folders searched recursively; ``samples.csv`` skipped)."""
-    files = []
+def is_waveforms_csv(path):
+    """True for a Digilent WaveForms recording (a ``#`` header with the sample rate); analysis tables and other
+    CSV files are not."""
+    try:
+        return 'sample_rate' in read_header(path)[1]
+    except OSError:
+        return False
+
+
+def _find_with_roots(paths):
+    out = []
     for p in paths:
         p = Path(p)
-        files += sorted(f for f in p.rglob('*.csv') if f.name.lower() != 'samples.csv') if p.is_dir() else [p]
-    return files
+        if p.is_dir():
+            out += [(f, p) for f in sorted(p.rglob('*.csv')) if f.name.lower() != 'samples.csv']
+        else:
+            out.append((p, None))
+    return out
+
+
+def find_csvs(paths):
+    """CSV files in ``paths`` (files as they are, folders searched recursively; ``samples.csv`` skipped)."""
+    return [f for f, _ in _find_with_roots(paths)]
 
 
 def convert_many(paths, *, out_dir=None, check=False, progress=None, **options):
-    """Convert every CSV in ``paths`` (see ``find_csvs``) with ``csv_to_nwb(**options)``.
+    """Convert every WaveForms CSV in ``paths`` (see ``find_csvs``) with ``csv_to_nwb(**options)``.
 
-    ``out_dir``: folder for the .nwb files (default: next to each CSV); ``check``: run nwbinspector on each file
-    written; ``progress(i, n, csv, written, message)`` is called after each file (``written`` None on error).
-    Returns ``[{'csv', 'nwb', 'ok', 'message', 'issues'}]`` — a failing file never stops the others.
+    ``out_dir``: folder for the .nwb files — for a folder input the sub-folder structure is kept, so equal
+    names in different sub-folders do not collide (default: next to each CSV); ``check``: run nwbinspector on
+    each file written; ``progress(i, n, csv, written, message)`` is called after each file (``written`` None
+    when not converted). Returns ``[{'csv', 'nwb', 'ok', 'skipped', 'message', 'issues'}]``: a CSV that is not
+    a WaveForms recording is ``skipped`` (not an error); a failing file never stops the others.
     """
     from .results_export import sheet_root
-    files = find_csvs(paths)
+    items = _find_with_roots(paths)
     results = []
-    for i, f in enumerate(files, 1):
-        out = Path(out_dir) / f.with_suffix(NWB_SUFFIX).name if out_dir else None
-        rec = {'csv': str(f), 'nwb': None, 'ok': False, 'message': '', 'issues': None}
-        try:
-            if out is not None:
-                out.parent.mkdir(parents=True, exist_ok=True)
-            written = csv_to_nwb(f, out, data_dir=sheet_root(f.parent), **options)
-            rec.update(nwb=str(written), ok=True)
-            if check:
-                rec['issues'] = validate(written)
-        except Exception as exc:     # noqa: BLE001 — report and go on with the next file
-            rec['message'] = f'{type(exc).__name__}: {exc}'
+    for i, (f, root) in enumerate(items, 1):
+        rec = {'csv': str(f), 'nwb': None, 'ok': False, 'skipped': False, 'message': '', 'issues': None}
+        if not is_waveforms_csv(f):
+            rec.update(skipped=True, message='not a WaveForms recording')
+        else:
+            try:
+                out = None
+                if out_dir:
+                    sub = f.parent.relative_to(root) if root is not None else Path()
+                    out = Path(out_dir) / sub / f.with_suffix(NWB_SUFFIX).name
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                written = csv_to_nwb(f, out, data_dir=sheet_root(f.parent), **options)
+                rec.update(nwb=str(written), ok=True)
+                if check:
+                    rec['issues'] = validate(written)
+            except Exception as exc:     # noqa: BLE001 — report and go on with the next file
+                rec['message'] = f'{type(exc).__name__}: {exc}'
         results.append(rec)
         if progress is not None:
-            progress(i, len(files), rec['csv'], rec['nwb'], rec['message'])
+            progress(i, len(items), rec['csv'], rec['nwb'], rec['message'])
     return results
 
 
@@ -544,8 +567,9 @@ def main(argv=None):
             for line in issues or []:
                 print('      ' + line)
     n_ok = sum(r['ok'] for r in results)
-    print(f'{n_ok}/{len(results)} converted')
-    return 0 if n_ok == len(results) else 1
+    n_skip = sum(r['skipped'] for r in results)
+    print(f'{n_ok}/{len(results) - n_skip} converted' + (f', {n_skip} skipped (not WaveForms recordings)' if n_skip else ''))
+    return 0 if n_ok == len(results) - n_skip else 1
 
 
 if __name__ == '__main__':      # pragma: no cover

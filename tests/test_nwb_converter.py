@@ -52,9 +52,11 @@ def test_convert_many_folder_reports_each_file(folder, tmp_path):
     res = convert_many([folder], out_dir=out, progress=lambda *a: seen.append(a[0]), gain=10000.0)
     assert len(res) == 3 and seen == [1, 2, 3]
     ok = {pathlib_name(r['csv']): r for r in res}
-    assert ok['broken.csv']['ok'] is False and ok['broken.csv']['message']
-    assert ok['second.csv']['ok'] and (out / 'second.nwb').exists()
+    assert ok['broken.csv']['ok'] is False and ok['broken.csv']['skipped']
+    assert ok['second.csv']['ok'] and (out / 'Exp 7' / 'Day8' / 'B' / 'second.nwb').exists()
     # second run without overwrite fails per file, with overwrite succeeds
+    again = convert_many([folder / 'Exp 7' / 'Day8' / 'B' / 'second.csv'], out_dir=out, gain=10000.0)
+    assert again[0]['ok']      # a single file goes flat into the output folder
     again = convert_many([folder / 'Exp 7' / 'Day8' / 'B' / 'second.csv'], out_dir=out, gain=10000.0)
     assert not again[0]['ok']
     assert convert_many([folder / 'Exp 7' / 'Day8' / 'B' / 'second.csv'], out_dir=out, gain=10000.0, overwrite=True)[0]['ok']
@@ -108,3 +110,19 @@ def test_window_speaks_italian_when_selected(app, tmp_path):
 def test_header_still_readable(folder):
     fields = read_header(folder / 'Exp 7' / 'Day8' / 'B' / 'second.csv')
     assert fields
+
+
+def test_non_recordings_are_skipped_and_subfolders_kept(folder, tmp_path):
+    import shutil
+    b = folder / 'Exp 7' / 'Day8' / 'B'
+    other = folder / 'Exp 7' / 'Day9'
+    other.mkdir()
+    shutil.copy(b / 'second.csv', other / 'second.csv')          # same name, other sub-folder
+    (folder / 'comparison.csv').write_text('a,b\n1,2\n')          # an analysis table
+    out = tmp_path / 'out'
+    res = convert_many([folder], out_dir=out, gain=10000.0)
+    by = {pathlib_name(r['csv']) + ('/' + pathlib_name(str(__import__('pathlib').Path(r['csv']).parent)) if r['csv'].endswith('second.csv') else ''): r for r in res}
+    assert by['comparison.csv']['skipped'] and not by['comparison.csv']['ok']
+    assert by['broken.csv']['skipped']
+    assert by['second.csv/B']['ok'] and by['second.csv/Day9']['ok']
+    assert (out / 'Exp 7' / 'Day8' / 'B' / 'second.nwb').exists() and (out / 'Exp 7' / 'Day9' / 'second.nwb').exists()

@@ -583,4 +583,6 @@ CATALOG = {
     "No CSV file found.": "Nessun file CSV trovato.",
     "{0} of {1} files converted": "{0} file convertiti su {1}",
     "Unknown time zone: {0}": "Fuso orario sconosciuto: {0}",
+    "skipped (not a WaveForms recording)": "saltato (non è una registrazione WaveForms)",
+    " — {0} skipped (not WaveForms recordings)": " — {0} saltati (non sono registrazioni WaveForms)",
 }
