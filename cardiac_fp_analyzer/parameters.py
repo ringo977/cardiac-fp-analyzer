@@ -19,6 +19,7 @@ FPD measurement strategy (inspired by Visone et al., Tox Sci 2023):
 All parameters are configurable via RepolarizationConfig (see config.py).
 """
 
+import dataclasses
 import logging
 
 import numpy as np
@@ -405,6 +406,7 @@ def extract_beat_parameters(beat_data, beat_time, fs, rr_interval=None,
         params['rise_time_ms'] = np.nan
 
     # FPD (template-guided, configured method)
+    _info = {}
     fpd, repol_amp, repol_peak_i, fpd_end_i = _find_repolarization_per_beat(
         data, t, zero_idx, fs,
         template_fpd_samples=template_fpd_samples,
@@ -413,7 +415,9 @@ def extract_beat_parameters(beat_data, beat_time, fs, rr_interval=None,
         cfg=cfg,
         beat_period_s=beat_period_s,
         next_rr_s=next_rr_s,
+        info=_info,
     )
+    params['repol_sign'] = _info.get('sign') if fpd is not None else None
     params['fpd_ms'] = fpd * 1000 if fpd is not None else np.nan
     params['repol_amplitude_mV'] = repol_amp * 1000 if not np.isnan(repol_amp) else np.nan
     params['repol_peak_idx_in_beat'] = repol_peak_i
@@ -635,55 +639,82 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None,
         j = np.searchsorted(_all_sorted, bi_g + 0.05 * fs, side='left')
         return float((_all_sorted[j] - bi_g) / fs) if j < len(_all_sorted) else None
 
-    for i, (bd, bt) in enumerate(zip(beats_data, beats_time)):
-        rr = local_rr[i] if i < len(local_rr) else None
-        # Use per-beat RR for adaptive min FPD; fall back to median
-        bp_for_beat = rr if rr is not None else median_bp_s
-        next_rr = _next_rr_s(beat_indices[i]) if i < len(beat_indices) else None
+    def _per_beat_pass(ref_sign, prefer):
+        """Every beat's parameters with ``ref_sign`` as the expected repolarisation polarity (flipped on a beat
+        whose spike is inverted); ``prefer`` keeps a qualifying peak of the expected sign over a larger
+        opposite lobe. Returns (params list, expected sign per beat)."""
+        run_cfg = cfg
+        if prefer != bool(getattr(rc, 'per_beat_prefer_template_sign', False)):
+            run_cfg = dataclasses.replace(rc, per_beat_prefer_template_sign=prefer)
+        out, expected = [], []
+        for i, (bd, bt) in enumerate(zip(beats_data, beats_time)):
+            rr = local_rr[i] if i < len(local_rr) else None
+            # Use per-beat RR for adaptive min FPD; fall back to median
+            bp_for_beat = rr if rr is not None else median_bp_s
+            next_rr = _next_rr_s(beat_indices[i]) if i < len(beat_indices) else None
 
-        # Per-beat polarity detection: check if this beat's spike is inverted
-        # relative to the template.  If so, flip the repol sign and drop the
-        # template guidance (peak position) since the morphology differs.
-        beat_repol_sign = template_repol_sign
-        beat_tpl_fpd = template_fpd_samples
-        beat_tpl_peak = template_peak_samples
-        zero_i = np.argmin(np.abs(np.array(bt)))
-        b_sp = max(0, zero_i - int(rc.spike_pre_ms / 1000 * fs))
-        b_ep = min(len(bd), zero_i + int(rc.spike_post_ms / 1000 * fs))
-        beat_inverted = beat_spike_inverted(t_spike_shape, bd[b_sp:b_ep], inversion_thr)
-        if beat_inverted:
-            # Inverted beat: flip repol sign but KEEP template FPD
-            # timing as a guide — the repolarization timing is similar
-            # even when the morphology is inverted.  Drop peak_samples
-            # (exact peak position depends on morphology) but keep
-            # fpd_samples (approximate timing window).
-            beat_repol_sign = -template_repol_sign
-            beat_tpl_peak = None
-            # beat_tpl_fpd stays as template_fpd_samples
+            # Per-beat polarity detection: check if this beat's spike is inverted
+            # relative to the template.  If so, flip the repol sign and drop the
+            # template guidance (peak position) since the morphology differs.
+            beat_repol_sign = ref_sign
+            beat_tpl_fpd = template_fpd_samples
+            beat_tpl_peak = template_peak_samples
+            zero_i = np.argmin(np.abs(np.array(bt)))
+            b_sp = max(0, zero_i - int(rc.spike_pre_ms / 1000 * fs))
+            b_ep = min(len(bd), zero_i + int(rc.spike_post_ms / 1000 * fs))
+            beat_inverted = beat_spike_inverted(t_spike_shape, bd[b_sp:b_ep], inversion_thr)
+            if beat_inverted:
+                # Inverted beat: flip repol sign but KEEP template FPD
+                # timing as a guide — the repolarization timing is similar
+                # even when the morphology is inverted.  Drop peak_samples
+                # (exact peak position depends on morphology) but keep
+                # fpd_samples (approximate timing window).
+                beat_repol_sign = -ref_sign
+                beat_tpl_peak = None
+                # beat_tpl_fpd stays as template_fpd_samples
 
-        params = extract_beat_parameters(
-            bd, bt, fs, rr_interval=rr,
-            template_fpd_samples=beat_tpl_fpd,
-            template_peak_samples=beat_tpl_peak,
-            template_repol_sign=beat_repol_sign,
-            cfg=cfg,
-            beat_period_s=bp_for_beat,
-            next_rr_s=next_rr,
-        )
-        params['beat_number'] = i + 1
-        params['rr_interval_ms'] = rr * 1000 if rr is not None else np.nan
-        bi_g = beat_indices[i]
-        rp = params.get('repol_peak_idx_in_beat')
-        fe = params.get('fpd_endpoint_idx_in_beat')
-        if rp is not None:
-            params['repol_peak_global_idx'] = int(bi_g - pre_samples + rp)
-        else:
-            params['repol_peak_global_idx'] = None
-        if fe is not None:
-            params['fpd_endpoint_global_idx'] = int(bi_g - pre_samples + fe)
-        else:
-            params['fpd_endpoint_global_idx'] = None
-        all_params.append(params)
+            params = extract_beat_parameters(
+                bd, bt, fs, rr_interval=rr,
+                template_fpd_samples=beat_tpl_fpd,
+                template_peak_samples=beat_tpl_peak,
+                template_repol_sign=beat_repol_sign,
+                cfg=run_cfg,
+                beat_period_s=bp_for_beat,
+                next_rr_s=next_rr,
+            )
+            params['beat_number'] = i + 1
+            params['rr_interval_ms'] = rr * 1000 if rr is not None else np.nan
+            bi_g = beat_indices[i]
+            rp = params.get('repol_peak_idx_in_beat')
+            fe = params.get('fpd_endpoint_idx_in_beat')
+            if rp is not None:
+                params['repol_peak_global_idx'] = int(bi_g - pre_samples + rp)
+            else:
+                params['repol_peak_global_idx'] = None
+            if fe is not None:
+                params['fpd_endpoint_global_idx'] = int(bi_g - pre_samples + fe)
+            else:
+                params['fpd_endpoint_global_idx'] = None
+            out.append(params)
+            expected.append(beat_repol_sign)
+        return out, expected
+
+    # Per-beat polarity policy (RepolarizationConfig.per_beat_polarity)
+    polarity_mode = getattr(rc, 'per_beat_polarity', 'free') or 'free'
+    if getattr(rc, 'per_beat_prefer_template_sign', False) and polarity_mode == 'free':
+        polarity_mode = 'template'
+    all_params, expected_signs = _per_beat_pass(template_repol_sign, polarity_mode == 'template')
+    polarity_ref = template_repol_sign
+    polarity_opposite_frac = np.nan
+    if polarity_mode == 'majority':
+        chosen = [(p.get('repol_sign'), e) for p, e in zip(all_params, expected_signs) if p.get('repol_sign')]
+        if chosen:
+            polarity_opposite_frac = sum(1 for c, e in chosen if c != e) / len(chosen)
+            if len(chosen) >= 3 and polarity_opposite_frac >= float(getattr(rc, 'per_beat_polarity_majority', 0.75)):
+                polarity_ref = -template_repol_sign
+        all_params, expected_signs = _per_beat_pass(polarity_ref, True)
+
+    for params in all_params:
         if not np.isnan(params['fpd_ms']):
             fpd_vals.append(params['fpd_ms'])
         if not np.isnan(params['fpdc_ms']):
@@ -772,6 +803,9 @@ def extract_all_parameters(beats_data, beats_time, beat_indices, fs, cfg=None,
         summary['template_repol_sign'] = int(template_repol_sign)
     summary['fpd_method'] = rc.fpd_method
     summary['repol_candidate_rule'] = getattr(rc, 'repol_candidate_rule', 'max_prominence')
+    summary['repol_polarity_mode'] = polarity_mode
+    summary['repol_polarity_ref'] = int(polarity_ref)
+    summary['repol_polarity_opposite_frac'] = polarity_opposite_frac
     summary['correction'] = rc.correction
     # Rhythm actually used for the template search window (diagnostic).
     if window_bp_s is not None:

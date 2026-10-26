@@ -566,9 +566,13 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
                                  template_repol_sign=1,
                                  cfg=None,
                                  beat_period_s=None,
-                                 next_rr_s=None):
+                                 next_rr_s=None,
+                                 info=None):
     """
     Find repolarization in a single beat, optionally guided by template.
+
+    ``info`` (a dict, optional) receives ``'sign'``: the polarity (+1 / −1) of the peak that was kept, when one
+    was (the per-beat polarity policy of ``extract_all_parameters`` reads it).
 
     Uses the configured FPD method (consistent with template detection).
 
@@ -798,6 +802,9 @@ def find_repolarization_per_beat(data, t, spike_idx, fs,
                 logger.debug("Per-beat repol gate: SNR=%.2f < %.1f (guided=%s) → not detectable",
                              beat_repol_snr, snr_threshold, is_guided)
                 return None, np.nan, None, None
+
+    if info is not None:
+        info['sign'] = int(best_sign)
 
     # ─── Step 2: Apply configured FPD method ───
     # ``best_sign`` — not ``template_repol_sign`` — is the polarity of the

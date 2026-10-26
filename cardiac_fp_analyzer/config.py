@@ -78,6 +78,10 @@ class BeatDetectionConfig:
     # recordings outside that corpus.
     min_distance_floor_ms: float = 100.0
     min_rr_physiological_ms: float = 200.0
+    # Time of each detected depolarisation re-read on the unfiltered signal: the peak is found on the filtered
+    # trace (clean), then moved to the raw extremum of the spike's side within ± this many ms — as the
+    # operators read it (the smoothing moves the apparent peak by a few ms on slow spikes). 0 = off.
+    refine_on_raw_ms: float = 0.0
 
     # Physiological plausibility scoring (thresholds)
     bp_ideal_range_s: tuple[float, float] = (0.4, 3.0)
@@ -680,6 +684,21 @@ class RepolarizationConfig:
     # ±10 % with the other phase-2 changes on), so OFF by default; kept as
     # an option.
     per_beat_prefer_template_sign: bool = False
+    # Per-beat polarity policy (v3.23, operators' feedback: "repolarisation markers put in opposite positions
+    # throughout the signal"):
+    #   'free'     — both signs compete on every beat (the behaviour up to v3.22);
+    #   'template' — the template's sign first (same as per_beat_prefer_template_sign = True);
+    #   'majority' — a first free pass, then every beat is searched with the recording's sign first: the
+    #                template's, unless at least ``per_beat_polarity_majority`` of the beats chose the other
+    #                one (then the template picked the wrong lobe and the beats know better).
+    # Evaluated on the GG corpus against the operator (Oct 2026), 'free' → 'majority' (2/3): recordings with
+    # mixed polarity (> 10 % of the beats on the other lobe) 71 → 9 on DEV and 28 → 4 on TEST; repolarisations
+    # within 20 ms of the operator's 57.3 → 61.8 % (DEV) and 63.5 → 68.4 % (TEST), also in absolute numbers
+    # of beats; recording FPD within ±5 % 55.2 → 55.2 % (DEV) and 62.5 → 65.6 % (TEST), ±10 % unchanged;
+    # about 4–5 % fewer beats get a repolarisation (those whose only qualifying peak was the other lobe).
+    # 'template' alone loses the recordings where the template took the wrong lobe (−1.4 pt at ±5 % on DEV).
+    per_beat_polarity: str = 'majority'
+    per_beat_polarity_majority: float = 2 / 3
     # A beat counts as polarity-inverted (repolarisation sign flipped,
     # template peak guidance dropped) only if its spike window is
     # anti-correlated with the template's at or below this value.

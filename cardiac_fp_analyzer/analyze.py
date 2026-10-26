@@ -491,6 +491,42 @@ def _analyze_from_beats(
     return result
 
 
+
+def refine_beats_on_raw(bi, raw_signal, filtered, fs, half_ms):
+    """Depolarisation times re-read on the unfiltered signal: each detection moves to the raw extremum within
+    ±``half_ms`` on the side of the recording's spikes (vote over the beats: does the filtered trace stand
+    out more above or below its median within ±25 ms of each detection?). Returns the new indices (sorted,
+    unique) and the side (+1 / −1, 0 = undecided → the largest deviation from the window median).
+    Nothing changes when ``half_ms`` ≤ 0 or the raw signal is not sample-aligned with the filtered one."""
+    bi = np.asarray(bi, dtype=int)
+    if not half_ms or half_ms <= 0 or raw_signal is None or len(bi) == 0 or len(raw_signal) != len(filtered):
+        return bi, 0
+    x = np.asarray(filtered, dtype=float)
+    raw = np.asarray(raw_signal, dtype=float)
+    ref = float(np.median(x))
+    w = int(0.025 * fs)
+    votes = 0
+    for b in bi:
+        seg = x[max(0, b - w):min(len(x), b + w + 1)]
+        if len(seg):
+            votes += int(np.sign((seg.max() - ref) - (ref - seg.min())))
+    side = int(np.sign(votes))
+    h = max(1, int(half_ms / 1000.0 * fs))
+    out = []
+    for b in bi:
+        a, e = max(0, b - h), min(len(raw), b + h + 1)
+        seg = raw[a:e]
+        if len(seg) == 0:
+            out.append(int(b))
+            continue
+        if side > 0:
+            out.append(int(a + np.argmax(seg)))
+        elif side < 0:
+            out.append(int(a + np.argmin(seg)))
+        else:
+            out.append(int(a + np.argmax(np.abs(seg - np.median(seg)))))
+    return np.unique(np.asarray(out, dtype=int)), side
+
 RAW_AMP_BEFORE_S = 0.030      # amplitude window on the unfiltered signal: 30 ms before the marker ...
 RAW_AMP_AFTER_S = 0.030       # ... to 30 ms after it (same as ReviewState._amp_uV)
 
@@ -847,6 +883,13 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
         # after loading a CSV that already had a sidecar would overwrite
         # it with a diff against the *post-override* set — silently losing
         # earlier corrections.
+        # Times on the unfiltered signal (opt-in, BeatDetectionConfig.refine_on_raw_ms)
+        _refine_ms = float(getattr(bd_cfg, 'refine_on_raw_ms', 0.0) or 0.0)
+        if _refine_ms > 0 and len(bi):
+            bi, _side = refine_beats_on_raw(bi, raw_signal, filtered, fs, _refine_ms)
+            det = dict(det)
+            det['refined_on_raw'] = {'half_ms': _refine_ms, 'spike_side': _side}
+            det['n_beats'] = int(len(bi))
         det = dict(det)
         det['bi_detection'] = [int(x) for x in bi]
 
