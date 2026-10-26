@@ -2010,7 +2010,15 @@ class MainWindow(QMainWindow):
                                 (tr("Previous stretch to check"), "Ctrl+Shift+G", lambda: self._review_next_problem(-1)),
                                 (tr("Remove the selected beat"), "Delete", self._review_delete_selected),
                                 (tr("Repolarisation: positive peak"), "P", lambda: self._review_polarity(1)),
-                                (tr("Repolarisation: negative peak"), "N", lambda: self._review_polarity(-1))):
+                                (tr("Repolarisation: negative peak"), "N", lambda: self._review_polarity(-1)),
+                                (tr("Move the selected depolarisation one sample earlier"), "Alt+Left",
+                                 lambda: self._review_nudge("dep", -1)),
+                                (tr("Move the selected depolarisation one sample later"), "Alt+Right",
+                                 lambda: self._review_nudge("dep", 1)),
+                                (tr("Move the selected repolarisation one sample earlier"), "Alt+Shift+Left",
+                                 lambda: self._review_nudge("rep", -1)),
+                                (tr("Move the selected repolarisation one sample later"), "Alt+Shift+Right",
+                                 lambda: self._review_nudge("rep", 1))):
             a = QAction(text, self)
             a.setShortcut(QKeySequence(key))
             a.triggered.connect(slot)
@@ -2467,6 +2475,32 @@ class MainWindow(QMainWindow):
         st.remove_beat(k)
         self.viewer.select_beat(min(k, st.n_beats() - 1) if st.n_beats() else None, center=False)
         self._review_after_edit()
+
+    def _review_nudge(self, kind: str, step: int) -> None:
+        """Alt+←/→ (depolarisation) and Alt+Shift+←/→ (repolarisation): move the selected beat's marker by one
+        sample, exactly — the fine adjustment a drag cannot give when one pixel spans many samples."""
+        st = self._review_state
+        if st is None or self._review_locked():
+            return
+        k = self.viewer.selected_beat()
+        if k is None:
+            self.statusBar().showMessage(tr("Select a beat first (click its row or use the arrow keys)"), 4000)
+            return
+        try:
+            if kind == "dep":
+                k = st.nudge_dep(k, step)
+            else:
+                st.nudge_repol(k, step)
+        except ValueError as exc:
+            self.statusBar().showMessage(str(exc), 4000)
+            return
+        self._review_after_edit()
+        self.viewer.select_beat(k, center=False)
+        b = st.beats[k]
+        if kind == "dep":
+            self.statusBar().showMessage(tr("Beat #{0}: depolarisation at {1:.4f} s").format(k + 1, b.dep / st.fs), 3000)
+        else:
+            self.statusBar().showMessage(tr("Beat #{0}: repolarisation at {1:.4f} s").format(k + 1, b.repol / st.fs), 3000)
 
     def _review_polarity(self, sign: int) -> None:
         st = self._review_state

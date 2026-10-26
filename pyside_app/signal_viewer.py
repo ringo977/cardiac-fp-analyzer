@@ -35,7 +35,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import QMenu
+from PySide6.QtWidgets import QApplication, QMenu
 
 from pyside_app.i18n import tr
 
@@ -46,6 +46,8 @@ from .review_helpers import operators_view
 # treated as "on" that marker (i.e. the menu offers Remove instead of Add).
 _SNAP_WINDOW_S = 0.200
 _DRAG_PX = 12          # a press within this many pixels of a marker grabs it (Edit mode, review)
+_DRAW_CREST_S = 0.002  # a depolarisation marker is drawn on the crest of the displayed trace within ±2 ms of
+                       # its time (the time is read on the raw peak, a sample or two from the filtered crest)
 
 
 # Highlighted stretches of the review mode (ReviewState.problems): RGB
@@ -462,6 +464,7 @@ class SignalViewer(pg.PlotWidget):
         # each beat's signal value so they track the actual spike.
         if len(self._beats) > 0:
             safe = self._beats[(self._beats >= 0) & (self._beats < n)]
+            safe = self._dep_draw_indices(safe, trace)
             xs = self._time[safe]
             ys = trace[safe] + self._marker_offset
             self._beats_scatter.setData(xs, ys)
@@ -491,7 +494,7 @@ class SignalViewer(pg.PlotWidget):
             else:
                 self._vetoed_scatter.setData([], [])
             if self._selected is not None and self._selected < len(self._state.beats):
-                d = self._state.beats[self._selected].dep
+                d = int(self._dep_draw_indices([self._state.beats[self._selected].dep], trace)[0])
                 if 0 <= d < n:
                     self._selected_scatter.setData([self._time[d]], [trace[d] + self._marker_offset])
             else:
@@ -567,10 +570,32 @@ class SignalViewer(pg.PlotWidget):
             extra = f"  |  #{nb + 1} ({off_ms:+.0f} ms)"
 
         if self._mode_getter() == "edit" and self._state is not None and self.marker_at(pos) is not None:
-            extra += "  |  " + tr("drag to move it (Shift: exactly where you drop it)")
+            extra += "  |  " + tr("drag to move it (Shift: exactly where you drop it; Alt+arrows: one sample)")
         self.hover_info.emit(
             f"t = {t:.3f} s  |  A = {y:.1f} µV{extra}"
         )
+
+    def _dep_draw_indices(self, deps, trace) -> np.ndarray:
+        """Where the depolarisation markers are drawn: on the crest of the displayed trace (spike side of the
+        recording) within ±``_DRAW_CREST_S`` of each marker's time, so a triangle sits on the visible peak even
+        when its time comes from the raw signal; the time itself (table, measures) does not change."""
+        deps = np.asarray(deps, dtype=int)
+        if len(deps) == 0 or self._state is None:
+            return deps
+        side = self._state._spike_sign() or 0
+        h = max(1, int(_DRAW_CREST_S * self._fs))
+        n = len(trace)
+        out = deps.copy()
+        for j, d in enumerate(deps):
+            if not (0 <= d < n):
+                continue
+            a, b = max(0, d - h), min(n, d + h + 1)
+            seg = trace[a:b]
+            if side > 0:
+                out[j] = a + int(np.argmax(seg))
+            elif side < 0:
+                out[j] = a + int(np.argmin(seg))
+        return out
 
     # ─── Drag a marker (Edit mode, review) ───────────────────────
     def marker_at(self, scene_pos) -> tuple | None:
@@ -584,7 +609,8 @@ class SignalViewer(pg.PlotWidget):
         vb = self.getPlotItem().vb
         (x_lo, x_hi), _ = vb.viewRange()
         best = None
-        for kind, pairs in (("dep", [(k, b.dep) for k, b in enumerate(st.beats)]),
+        drawn = self._dep_draw_indices([b.dep for b in st.beats], trace)
+        for kind, pairs in (("dep", [(k, int(drawn[k])) for k in range(len(st.beats))]),
                             ("rep", [(k, b.repol) for k, b in enumerate(st.beats) if b.repol is not None])):
             for k, i in pairs:
                 if not (0 <= i < n) or not (x_lo <= self._time[i] <= x_hi):
@@ -623,18 +649,27 @@ class SignalViewer(pg.PlotWidget):
                 kind, k = self._drag
                 x = float(vb.mapSceneToView(ev.scenePos()).x())
                 i = int(np.argmin(np.abs(self._time - x)))
-                exact = bool(ev.modifiers() & Qt.ShiftModifier)
+                # Shift from the event and from the keyboard state (the event's flags were not reliable on every
+                # platform: operators found Shift ignored)
+                exact = bool((ev.modifiers() | QApplication.keyboardModifiers()) & Qt.ShiftModifier)
                 if ev.isFinish():
                     self._drag = None
                     self._drag_ghost.setData([], [])
                     st = self._state
+                    target = self._drag_target(kind, i, exact)
                     if kind == "dep":
                         self._review_do(lambda: st.move_beat(k, i, snap=not exact))
+                        deps = st.deps()
+                        if len(deps):
+                            self.select_beat(int(np.argmin(np.abs(deps - target))), center=False)
                     else:
                         self._review_do(lambda: st.set_repol(k, i, snap=not exact, trace=self._displayed_trace()))
+                        self.select_beat(k, center=False)
                     return
                 j = self._drag_target(kind, i, exact)
                 trace = self._displayed_trace()
+                if kind == "dep" and not exact:
+                    j = int(self._dep_draw_indices([j], trace)[0])
                 if 0 <= j < len(trace):
                     colour = pg.mkColor("#ff4b4b" if kind == "dep" else "#2ecc71")
                     colour.setAlpha(150)

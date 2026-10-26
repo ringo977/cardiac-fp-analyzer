@@ -554,3 +554,48 @@ def test_the_whole_quality_judgement_can_be_unfolded(app, csv_path):
     assert "problem 4" not in panel._problems.text()
     assert ReviewPanel.problems_html(["• a", "• b"], False) == "• a<br>• b"     # nothing to fold
     w.close()
+
+
+def test_depolarisation_markers_are_drawn_on_the_visible_crest_and_can_be_nudged(app, csv_path):
+    """Operators' screenshot (26 Oct): after 'align' the red triangles sat below the crests — the time comes from
+    the raw peak, a sample or two from the filtered crest, and on a narrow spike that sample is much lower.
+    The triangle is now drawn on the displayed crest within ±2 ms (the time does not change), and Alt+←/→
+    moves the selected depolarisation one sample (Alt+Shift: the repolarisation)."""
+    w = MainWindow()
+    w.resize(1400, 900)
+    w.show()
+    w._run_analysis(str(csv_path), "el1")
+    app.processEvents()
+    st, v = w._review_state, w.viewer
+    k = 2
+    trace = v._displayed_trace()
+    side = st._spike_sign()
+    d0 = st.beats[k].dep
+    a, b = d0 - int(0.004 * FS), d0 + int(0.004 * FS)
+    crest = a + int(np.argmax(side * trace[a:b]))
+    st.beats[k].dep = crest + 2                                  # two samples off the crest
+    v.refresh_from_state()
+    xs, ys = v._beats_scatter.getData()
+    j = int(np.argmin(np.abs(xs - v.get_time_vector()[crest])))
+    assert abs(xs[j] - v.get_time_vector()[crest]) < 1e-9 and abs(ys[j] - (trace[crest] + v._marker_offset)) < 1e-12
+    assert st.beats[k].dep == crest + 2                          # drawn on the crest, time unchanged
+    # Alt+→ / Alt+← on the selected beat
+    w._review_nudge("dep", 1)                                    # nothing selected yet: refused with a message
+    assert st.beats[k].dep == crest + 2
+    v.select_beat(k, center=False)
+    w._review_nudge("dep", 1)
+    assert st.beats[k].dep == crest + 3 and v.selected_beat() == k
+    r0 = st.beats[k].repol
+    w._review_nudge("rep", -1)
+    assert st.beats[k].repol == r0 - 1
+    assert w._signal_tab.recompute_pending()
+    from PySide6.QtGui import QAction
+    acts = [a for a in w.findChildren(QAction) if a.shortcut().toString() == "Alt+Right"]
+    assert acts, "Alt+Right action missing"
+    acts[0].trigger()
+    assert st.beats[k].dep == crest + 4
+    st.close()
+    w._review_nudge("dep", 1)                                    # closed: refused
+    assert st.beats[k].dep == crest + 4
+    st.reopen()
+    w.close()

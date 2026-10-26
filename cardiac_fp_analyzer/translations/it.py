@@ -597,4 +597,13 @@ CATALOG = {
     "drag to move it (Shift: exactly where you drop it)": "trascina per spostarlo (Shift: esattamente dove lo lasci)",
     "show less": "mostra meno",
     "… show all ({0} more)": "… mostra tutto (altri {0})",
+    "this beat has no repolarisation": "questo battito non ha la ripolarizzazione",
+    "Move the selected depolarisation one sample earlier": "Sposta la depolarizzazione selezionata un campione prima",
+    "Move the selected depolarisation one sample later": "Sposta la depolarizzazione selezionata un campione dopo",
+    "Move the selected repolarisation one sample earlier": "Sposta la ripolarizzazione selezionata un campione prima",
+    "Move the selected repolarisation one sample later": "Sposta la ripolarizzazione selezionata un campione dopo",
+    "Beat #{0}: depolarisation at {1:.4f} s": "Battito #{0}: depolarizzazione a {1:.4f} s",
+    "Beat #{0}: repolarisation at {1:.4f} s": "Battito #{0}: ripolarizzazione a {1:.4f} s",
+    "Select a beat first (click its row or use the arrow keys)": "Prima seleziona un battito (clic sulla riga o frecce)",
+    "drag to move it (Shift: exactly where you drop it; Alt+arrows: one sample)": "trascina per spostarlo (Shift: esattamente dove lo lasci; Alt+frecce: un campione)",
 }

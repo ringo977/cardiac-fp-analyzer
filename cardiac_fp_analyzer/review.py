@@ -280,7 +280,9 @@ class ReviewState:
                 votes += int(np.sign((seg.max() - ref) - (ref - seg.min())))
         return int(np.sign(votes))
 
-    REFINE_RAW_S = 0.008          # the peak found on the filtered trace is re-read on the unfiltered one
+    REFINE_RAW_S = 0.002          # the peak found on the filtered trace is re-read on the unfiltered one, within
+                                  # ±2 ms: the smoothing moves a spike's peak by a sample or two, while a wider
+                                  # window let raw noise pull the marker off a narrow spike (operators, 26 Oct 2026)
 
     def _refine_on_raw(self, sample, side):
         """Time of the spike read on the unfiltered signal: the peak is identified on the filtered trace (which
@@ -431,6 +433,20 @@ class ReviewState:
     def snapped_repol(self, sample, trace=None):
         """Where a repolarisation placed at ``sample`` lands (nearest extremum of ``trace``, see ``set_repol``)."""
         return self._snap_to_extremum(int(sample), trace=trace)
+
+    def nudge_dep(self, k, step):
+        """Move beat ``k``'s depolarisation by ``step`` samples, exactly (no snap; undoable). Returns the beat's
+        index afterwards."""
+        target = int(self.beats[k].dep) + int(step)
+        self.move_beat(k, target, snap=False)
+        return next(i for i, b in enumerate(self.beats) if b.dep == target)
+
+    def nudge_repol(self, k, step):
+        """Move beat ``k``'s repolarisation by ``step`` samples, exactly (no snap; undoable)."""
+        b = self.beats[k]
+        if b.repol is None:
+            raise ValueError(tr('this beat has no repolarisation'))
+        self.set_repol(k, int(b.repol) + int(step), snap=False)
 
     def move_beat(self, k, sample, *, snap=True, trace=None):
         sample = int(sample)

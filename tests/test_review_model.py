@@ -374,3 +374,32 @@ def test_pipeline_amplitude_is_read_on_the_unfiltered_signal_and_time_on_its_pea
     st = ReviewState(FS, filt, raw, channel='el1', gain=1e4)
     st.beats = [BeatMark(int(b), None, 'auto', 'assente') for b in beats]
     assert all(abs(st._snap_to_spike(int(b) + int(0.004 * FS)) - b) <= 1 for b in beats[:4])   # on the raw peak
+
+
+def test_nudge_moves_a_marker_by_one_sample_exactly():
+    """Alt+←/→ in the GUI: one sample at a time, no snap, undoable; a beat without repolarisation refuses."""
+    st, beats, reps = _state(dur_s=20.0)
+    d0, r0 = st.beats[2].dep, st.beats[2].repol
+    k = st.nudge_dep(2, 1)
+    assert k == 2 and st.beats[2].dep == d0 + 1 and st.beats[2].source == 'corretto'
+    st.nudge_dep(2, -3)
+    assert st.beats[2].dep == d0 - 2
+    st.nudge_repol(2, 1)
+    assert st.beats[2].repol == r0 + 1
+    for _ in range(3):
+        st.undo()
+    assert st.beats[2].dep == d0 and st.beats[2].repol == r0
+    st.beats[3].repol = None
+    with pytest.raises(ValueError):
+        st.nudge_repol(3, 1)
+
+
+def test_raw_refinement_stays_within_two_ms():
+    """The time re-read on the raw signal moves by at most ±2 ms from the filtered peak: a wider window let raw
+    noise pull the marker off a narrow spike (operators' screenshot, 26 Oct 2026)."""
+    st, beats, reps = _state(dur_s=20.0, noise=0.0)
+    b = int(beats[2])
+    st.raw = st.raw.copy()
+    st.raw[b + int(0.006 * FS)] = -50.0          # a raw noise excursion 6 ms after the spike, larger than it
+    assert abs(ReviewState.REFINE_RAW_S - 0.002) < 1e-12
+    assert abs(st._snap_to_spike(b + 3) - b) <= int(0.002 * FS)
