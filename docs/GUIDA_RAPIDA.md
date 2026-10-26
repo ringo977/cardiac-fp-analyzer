@@ -39,7 +39,7 @@ Volte successive: `cd` nella cartella, riattivare l'ambiente (`.venv\Scripts\Act
 - **Giudizio**: verde *Buono*, giallo *Da verificare*, rosso *Problemi*, con l'elenco dei motivi (*mostra tutto* apre l'elenco completo).
 - **Tratti colorati sul tracciato**: arancio = battito forse mancante; blu = due depolarizzazioni troppo vicine; viola = ripolarizzazione assente tra due depolarizzazioni; grigio = rumore. *Prossimo tratto* (Ctrl+G) porta alla segnalazione seguente.
 - **Viste**: *Filtrato* per controllare le depolarizzazioni, *1–40 Hz (operatori)* per le ripolarizzazioni (quel filtro sposta il picco apparente dello spike).
-- **Tasti utili**: frecce = battito precedente/successivo, Canc = toglie il battito, P / N = ripolarizzazione sul picco positivo/negativo, Ctrl+S = salva.
+- **Tasti utili**: frecce = battito precedente/successivo, Canc = toglie il battito, P / N = ripolarizzazione sul picco positivo/negativo per tutti i battiti, Shift+P / Shift+N = lo stesso per le depolarizzazioni, Alt+frecce = sposta di un campione la depolarizzazione selezionata (Alt+Shift+frecce la ripolarizzazione), Ctrl+S = salva.
 - **Se depolarizzazioni e ripolarizzazioni sono scambiate**: *Correzioni su tutto il tracciato ▸ Scambia…* (sull'intervallo visibile o su tutto).
 
 ## 4. Che cosa segnalarmi

@@ -64,6 +64,7 @@ class ReviewPanel(QWidget):
     save_requested = Signal()
     view_changed = Signal(str)            # 'filtrato' | 'grezzo' | 'operatori'
     polarity_requested = Signal(int)      # +1 / -1
+    dep_polarity_requested = Signal(int)  # +1 / -1: side of the spikes (depolarisations)
     beat_selected = Signal(int)           # row double-clicked → beat index
     restore_all_requested = Signal()
     next_problem_requested = Signal(int)  # +1 / -1
@@ -161,15 +162,26 @@ class ReviewPanel(QWidget):
         self._btn_redo.setToolTip(tr("Redo the undone correction (Ctrl+Shift+Z)"))
         self._btn_undo.clicked.connect(self.undo_requested.emit)
         self._btn_redo.clicked.connect(self.redo_requested.emit)
-        self._btn_pos = QPushButton(tr("peak +"))
-        self._btn_neg = QPushButton(tr("peak −"))
+        self._btn_pos = QPushButton(tr("Repol +"))
+        self._btn_neg = QPushButton(tr("Repol −"))
         self._btn_pos.setToolTip(tr("Repolarisation on the positive peak for all beats (key P)"))
         self._btn_neg.setToolTip(tr("Repolarisation on the negative peak for all beats (key N)"))
         self._btn_pos.clicked.connect(lambda: self.polarity_requested.emit(1))
         self._btn_neg.clicked.connect(lambda: self.polarity_requested.emit(-1))
-        for b in (self._btn_undo, self._btn_redo, self._btn_pos, self._btn_neg):
+        for b in (self._btn_undo, self._btn_redo):
             row2.addWidget(b)
         lay.addLayout(row2)
+        # the side of the peaks, for the depolarisations and for the repolarisations, for every beat
+        row2b = QHBoxLayout()
+        self._btn_dep_pos = QPushButton(tr("Dep +"))
+        self._btn_dep_neg = QPushButton(tr("Dep −"))
+        self._btn_dep_pos.setToolTip(tr("Depolarisations on the positive peak of the spike for all beats (Shift+P)"))
+        self._btn_dep_neg.setToolTip(tr("Depolarisations on the negative peak of the spike for all beats (Shift+N)"))
+        self._btn_dep_pos.clicked.connect(lambda: self.dep_polarity_requested.emit(1))
+        self._btn_dep_neg.clicked.connect(lambda: self.dep_polarity_requested.emit(-1))
+        for b in (self._btn_dep_pos, self._btn_dep_neg, self._btn_pos, self._btn_neg):
+            row2b.addWidget(b)
+        lay.addLayout(row2b)
 
         row3 = QHBoxLayout()
         self._btn_restore = QPushButton(tr("Restore removed"))
@@ -270,7 +282,8 @@ class ReviewPanel(QWidget):
         self._state, self._result, self._reference = state, result, reference
         self._quality = summarise_quality(result) if (state is not None and result is not None) else None
         enabled = state is not None
-        for b in (self._btn_undo, self._btn_redo, self._btn_pos, self._btn_neg, self._btn_restore,
+        for b in (self._btn_undo, self._btn_redo, self._btn_pos, self._btn_neg, self._btn_dep_pos, self._btn_dep_neg,
+                  self._btn_restore,
                   self._btn_recompute, self._btn_reanalyse, self._btn_save, self._btn_prev_problem,
                   self._btn_next_problem, self._chk_approved, self._btn_close, self._btn_copy_measures,
                   self._btn_copy_beats):
@@ -327,7 +340,8 @@ class ReviewPanel(QWidget):
         locked = bool(getattr(st, 'locked', False))
         self._btn_undo.setEnabled(st.can_undo and not locked)
         self._btn_redo.setEnabled(st.can_redo and not locked)
-        for b in (self._btn_pos, self._btn_neg, self._btn_restore, self._btn_recompute, self._btn_reanalyse):
+        for b in (self._btn_pos, self._btn_neg, self._btn_dep_pos, self._btn_dep_neg, self._btn_restore,
+                  self._btn_recompute, self._btn_reanalyse):
             b.setEnabled(not locked)
         self._syncing = True
         try:

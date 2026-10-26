@@ -1970,6 +1970,7 @@ class MainWindow(QMainWindow):
         self._review_panel.save_requested.connect(self._review_save)
         self._review_panel.view_changed.connect(self.viewer.set_view)
         self._review_panel.polarity_requested.connect(self._review_polarity)
+        self._review_panel.dep_polarity_requested.connect(self._review_dep_polarity)
         self._review_panel.beat_selected.connect(self._review_select)
         self._review_panel.restore_all_requested.connect(self._review_restore_all)
         self._review_panel.next_problem_requested.connect(self._review_next_problem)
@@ -2011,6 +2012,8 @@ class MainWindow(QMainWindow):
                                 (tr("Remove the selected beat"), "Delete", self._review_delete_selected),
                                 (tr("Repolarisation: positive peak"), "P", lambda: self._review_polarity(1)),
                                 (tr("Repolarisation: negative peak"), "N", lambda: self._review_polarity(-1)),
+                                (tr("Depolarisation: positive peak"), "Shift+P", lambda: self._review_dep_polarity(1)),
+                                (tr("Depolarisation: negative peak"), "Shift+N", lambda: self._review_dep_polarity(-1)),
                                 (tr("Move the selected depolarisation one sample earlier"), "Alt+Left",
                                  lambda: self._review_nudge("dep", -1)),
                                 (tr("Move the selected depolarisation one sample later"), "Alt+Right",
@@ -2501,6 +2504,17 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(tr("Beat #{0}: depolarisation at {1:.4f} s").format(k + 1, b.dep / st.fs), 3000)
         else:
             self.statusBar().showMessage(tr("Beat #{0}: repolarisation at {1:.4f} s").format(k + 1, b.repol / st.fs), 3000)
+
+    def _review_dep_polarity(self, sign: int) -> None:
+        """Shift+P / Shift+N (and the Dep +/− buttons): the operator says on which side the spikes are; every
+        depolarisation goes onto the peak of that side and the choice is kept for the recording."""
+        st = self._review_state
+        if st is None or self._review_locked():
+            return
+        moved = st.set_dep_polarity(sign)
+        self._review_after_edit()
+        self.statusBar().showMessage(tr("Depolarisations on the {0} peak: {1} markers moved").format(
+            tr("positive") if sign > 0 else tr("negative"), moved), 6000)
 
     def _review_polarity(self, sign: int) -> None:
         st = self._review_state

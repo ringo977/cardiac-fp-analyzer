@@ -403,3 +403,51 @@ def test_raw_refinement_stays_within_two_ms():
     st.raw[b + int(0.006 * FS)] = -50.0          # a raw noise excursion 6 ms after the spike, larger than it
     assert abs(ReviewState.REFINE_RAW_S - 0.002) < 1e-12
     assert abs(st._snap_to_spike(b + 3) - b) <= int(0.002 * FS)
+
+
+def _narrow_negative_spikes():
+    """Raw: a narrow negative spike (−1, two samples) followed by a broader positive wave (+0.45). Filtered
+    (moving average over 9 samples, as a strong smoothing): the spike shrinks to about −0.2 while the wave
+    keeps most of its height — on the filtered trace the positive side looks bigger, on the raw one the
+    spike is the crest (operators' screenshot, 26 Oct 2026)."""
+    rng = np.random.default_rng(5)
+    n = int(20 * FS)
+    t = np.arange(n) / FS
+    raw = 0.02 * rng.standard_normal(n)
+    beats = np.arange(int(1.0 * FS), n - int(1.0 * FS), int(2.0 * FS))
+    for b in beats:
+        raw[b:b + 2] -= 1.0
+        raw += 0.45 * np.exp(-((t - t[b] - 0.012) / 0.004) ** 2 / 2)
+    filt = np.convolve(raw, np.ones(9) / 9, mode='same')
+    st = ReviewState(FS, filt, raw, channel='el1', gain=1e4)
+    st.beats = [BeatMark(int(b), None, 'auto', 'assente') for b in beats]
+    return st, beats
+
+
+def test_spike_side_read_on_the_raw_signal_and_fixed_for_the_recording():
+    st, beats = _narrow_negative_spikes()
+    assert st._vote_side() == -1                          # raw: the narrow negative spike is the crest
+    st._side_auto = st._vote_side()                       # what from_result does
+    for b in st.beats:                                    # markers dragged onto the positive wave …
+        b.dep += int(0.012 * FS)
+    assert st._spike_sign() == -1                         # … do not flip the side
+    st.align_to_peak()
+    assert all(abs(b.dep - d) <= 2 for b, d in zip(st.beats, beats))
+
+
+def test_operator_sets_the_spike_side_undoable_and_saved(tmp_path):
+    st, beats = _narrow_negative_spikes()
+    st._side_auto = st._vote_side()
+    moved = st.set_dep_polarity(1)                        # the operator says: positive peak
+    assert moved == len(beats) and st._spike_sign() == 1 and st.dep_polarity == 1
+    assert all(abs(b.dep - (d + int(0.012 * FS))) <= 3 for b, d in zip(st.beats, beats))
+    assert st.changes()['corrected']
+    st.undo()
+    assert st.dep_polarity is None and [b.dep for b in st.beats] == [int(d) for d in beats]
+    st.redo()
+    assert st.dep_polarity == 1
+    rec = tmp_path / 'rec.csv'
+    rec.write_text('x')
+    st.save(str(rec))
+    fresh = ReviewState(FS, st.filtered, st.raw, channel='el1')
+    assert ReviewState.load_into(fresh, str(rec)) and fresh.dep_polarity == 1 and fresh._spike_sign() == 1

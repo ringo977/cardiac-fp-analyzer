@@ -76,6 +76,7 @@ class _Snapshot:
     polarity: int | None
     criterion: dict | None
     removed: list
+    dep_polarity: int | None = None
 
 
 class ReviewState:
@@ -98,6 +99,8 @@ class ReviewState:
         self.approved_at = ''
         self.closed_at = ''
         self.polarity: int | None = None            # repolarisation polarity chosen by the operator (+1 / -1)
+        self.dep_polarity: int | None = None        # side of the spikes chosen by the operator (+1 / -1), see _spike_sign
+        self._side_auto: int | None = None          # side of the spikes decided on the software's detections
         self.criterion: dict | None = None          # last propagated criterion
         self.notes = ''
         self._history: list[_Snapshot] = []
@@ -135,17 +138,19 @@ class ReviewState:
                 repol[int(bf[k])] = int(g)
         st.beats = [BeatMark(d, repol.get(d), 'auto', 'auto' if d in repol else 'assente') for d in deps]
         st.beats.sort(key=lambda b: b.dep)
+        st._side_auto = st._vote_side() or None     # fixed for the recording: manual edits do not change it
         return st
 
     # ── undo / redo ────────────────────────────────────────────────────────
 
     def _snapshot(self):
         return _Snapshot(copy.deepcopy(self.beats), list(self.vetoed), self.polarity, copy.deepcopy(self.criterion),
-                         list(self.removed))
+                         list(self.removed), self.dep_polarity)
 
     def _restore(self, s):
         self.beats, self.vetoed, self.polarity, self.criterion = copy.deepcopy(s.beats), list(s.vetoed), s.polarity, copy.deepcopy(s.criterion)
         self.removed = list(s.removed)
+        self.dep_polarity = s.dep_polarity
 
     def _begin(self):
         if self.locked:
@@ -262,23 +267,52 @@ class ReviewState:
 
     SNAP_SPIKE_S = 0.025          # a click within this of the spike lands on it (the operator aims by eye)
 
-    def _spike_sign(self):
-        """+1 / -1: the side on which the recording's spikes stand out, or 0 when it cannot be told.
-
-        One vote per depolarisation: is the highest sample within ±``SNAP_SPIKE_S`` further above the
-        recording's median than the lowest is below it? The reference is the median of the whole trace, so a
-        slow wave next to the spike cannot flip the vote the way a window-local median did."""
-        x = self.filtered
+    def _vote_side(self):
+        """+1 / −1: the side on which the spikes stand out around the current depolarisations, read on the
+        unfiltered signal when it is sample-aligned with the filtered one (time and amplitude are read there,
+        and a narrow spike loses most of its height to the smoothing), else on the filtered trace. Median over
+        the beats of (highest − median of the trace) − (median − lowest) within ±``SNAP_SPIKE_S``; 0 when it
+        cannot be told."""
+        x = self.raw if (self.raw is not None and len(self.raw) == len(self.filtered)) else self.filtered
         if not self.beats or len(x) < 3:
             return 0
         ref = float(np.median(x))
         h = int(self.SNAP_SPIKE_S * self.fs)
-        votes = 0
+        diffs = []
         for b in self.beats:
             seg = x[max(0, b.dep - h):min(len(x), b.dep + h + 1)]
             if len(seg):
-                votes += int(np.sign((seg.max() - ref) - (ref - seg.min())))
-        return int(np.sign(votes))
+                diffs.append((seg.max() - ref) - (ref - seg.min()))
+        return int(np.sign(np.median(diffs))) if diffs else 0
+
+    def _spike_sign(self):
+        """+1 / −1: the side of the recording's spikes, where markers are snapped and drawn. The operator's
+        choice when made (``set_dep_polarity``, Shift+P / Shift+N), otherwise the side decided once on the
+        software's detections (``from_result``) — so dragging or aligning markers never flips it — and, for a
+        state built by hand, the vote on the current markers (``_vote_side``)."""
+        if self.dep_polarity:
+            return int(self.dep_polarity)
+        if self._side_auto:
+            return int(self._side_auto)
+        return self._vote_side()
+
+    def set_dep_polarity(self, sign):
+        """The operator says on which side the spikes are (+1 positive peak, −1 negative): kept for the
+        recording (saved in the sidecar) and every depolarisation moved onto the peak of that side, as
+        *Align* does. One undoable step; returns the number of markers moved."""
+        sign = int(np.sign(sign)) or None
+        self._begin()
+        self.dep_polarity = sign
+        moved = 0
+        for b in self.beats:
+            t = self._settle_on_peak(b.dep)
+            if abs(t - b.dep) > 0.001 * self.fs:
+                b.dep, b.source = t, 'corretto'
+                if b.repol is not None and b.repol <= t:
+                    b.repol, b.repol_source = None, 'assente'
+                moved += 1
+        self.beats.sort(key=lambda bb: bb.dep)
+        return moved
 
     REFINE_RAW_S = 0.002          # the peak found on the filtered trace is re-read on the unfiltered one, within
                                   # ±2 ms: the smoothing moves a spike's peak by a sample or two, while a wider
@@ -422,7 +456,8 @@ class ReviewState:
              'ripol_corrette': sum(1 for b in self.beats if b.repol_source == 'corretto'),
              'ripol_propagate': sum(1 for b in self.beats if b.repol_source == 'propagato'),
              'polarita': self.polarity}
-        c['corrected'] = any(v for k, v in c.items() if k != 'polarita') or self.polarity is not None
+        c['corrected'] = (any(v for k, v in c.items() if k != 'polarita') or self.polarity is not None
+                          or self.dep_polarity is not None)
         return c
 
     def snapped_dep(self, sample):
@@ -764,7 +799,8 @@ class ReviewState:
     def to_dict(self):
         crit = {k: (float(v) if isinstance(v, (np.floating, float)) else int(v) if isinstance(v, (np.integer,)) else v)
                 for k, v in (self.criterion or {}).items()} or None
-        return {'canale': self.channel, 'fs': self.fs, 'polarita': self.polarity, 'criterio': crit,
+        return {'canale': self.channel, 'fs': self.fs, 'polarita': self.polarity, 'polarita_dep': self.dep_polarity,
+                'criterio': crit,
                 'note': self.notes, 'stato': self.status, 'approvato_da': self.approved_by,
                 'approvato_il': self.approved_at, 'chiuso_il': self.closed_at,
                 'battiti': [{'dep_s': b.dep / self.fs, 'rep_s': b.repol / self.fs if b.repol is not None else None,
@@ -782,6 +818,7 @@ class ReviewState:
         self.vetoed = sorted(int(round(v * fs)) for v in d.get('tolti_dai_veti_s', []))
         self.removed = [int(round(v * fs)) for v in d.get('tolti_s', [])]
         self.polarity = d.get('polarita')
+        self.dep_polarity = d.get('polarita_dep')
         self.criterion = d.get('criterio')
         self.notes = d.get('note', '')
         self.status = d.get('stato') if d.get('stato') in STATUSES else STATUS_TO_REVIEW

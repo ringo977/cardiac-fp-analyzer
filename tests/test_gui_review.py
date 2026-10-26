@@ -599,3 +599,27 @@ def test_depolarisation_markers_are_drawn_on_the_visible_crest_and_can_be_nudged
     assert st.beats[k].dep == crest + 4
     st.reopen()
     w.close()
+
+
+def test_operator_chooses_the_side_of_the_spikes(app, csv_path):
+    """Operators: 'P / N correct all (and only) the repolarisations' — the depolarisations get the same:
+    Shift+P / Shift+N and the Dep +/− buttons put every depolarisation on that side of the spike."""
+    from PySide6.QtGui import QAction
+    w = MainWindow()
+    w._run_analysis(str(csv_path), "el1")
+    st, panel = w._review_state, w._review_panel
+    side = st._spike_sign()
+    other = -side
+    panel._btn_dep_pos.click() if other > 0 else panel._btn_dep_neg.click()
+    assert st.dep_polarity == other and st._spike_sign() == other
+    assert w._signal_tab.recompute_pending()
+    seq = "Shift+P" if side > 0 else "Shift+N"
+    acts = [a for a in w.findChildren(QAction) if a.shortcut().toString() == seq]
+    assert acts
+    acts[0].trigger()
+    assert st.dep_polarity == side
+    st.close()
+    panel.refresh()
+    assert not panel._btn_dep_pos.isEnabled() and not panel._btn_dep_neg.isEnabled()
+    st.reopen()
+    w.close()
