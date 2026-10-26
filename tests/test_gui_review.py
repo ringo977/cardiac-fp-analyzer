@@ -532,3 +532,25 @@ def test_dragging_a_marker_with_real_mouse_events(app, csv_path, monkeypatch):
     assert not menus
     assert abs(st.beats[k].dep - (d0 + int(0.030 * FS))) <= 3 and st.beats[k].source == "corretto"
     w.close()
+
+
+def test_the_whole_quality_judgement_can_be_unfolded(app, csv_path):
+    """Cate's feedback: the judgement stopped at three problems with "… and N more (hover here)" and hovering
+    did not open it. Now a link unfolds the whole list and folds it back; the text is escaped (a '<' in a
+    problem must not eat the rest); the tooltip keeps the whole list too."""
+    w = MainWindow()
+    w._run_analysis(str(csv_path), "el1")
+    panel = w._review_panel
+    probs = [{"testo": f"problem {i}"} for i in range(5)] + [{"testo": "FPD < 50 % of the beats"}]
+    panel._quality = {"livello": "rosso", "titolo": "Problems", "problemi": probs}
+    panel.refresh()
+    text = panel._problems.text()
+    assert "problem 2" in text and "problem 3" not in text and 'href="more"' in text and "3 more" in text
+    panel._problems.linkActivated.emit("more")
+    text = panel._problems.text()
+    assert "problem 4" in text and "FPD &lt; 50 % of the beats" in text and 'href="less"' in text
+    assert panel._problems.toolTip().count("•") == 6
+    panel._problems.linkActivated.emit("less")
+    assert "problem 4" not in panel._problems.text()
+    assert ReviewPanel.problems_html(["• a", "• b"], False) == "• a<br>• b"     # nothing to fold
+    w.close()

@@ -10,6 +10,8 @@ text with headers (numbers in the system locale, so Excel reads them as numbers)
 """
 from __future__ import annotations
 
+import html
+
 from PySide6.QtCore import QLocale, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFontMetrics
 from PySide6.QtWidgets import (
@@ -85,9 +87,16 @@ class ReviewPanel(QWidget):
         self._badge.setWordWrap(True)
         self._badge.setStyleSheet("padding: 4px 6px; border-radius: 6px; background: #e6e6e6; color: #222;")
         lay.addWidget(self._badge)
+        # The problems behind the judgement: the first three, then a link that unfolds the whole list (and
+        # folds it back) — a tooltip alone was not enough (Cate, 26 Oct 2026: "it is not possible to open the
+        # whole judgement, even hovering"). The choice is kept from one recording to the next.
         self._problems = QLabel("")
         self._problems.setWordWrap(True)
+        self._problems.setTextFormat(Qt.RichText)
+        self._problems.setTextInteractionFlags(Qt.LinksAccessibleByMouse | Qt.TextSelectableByMouse)
         self._problems.setStyleSheet("color: #666; padding: 0 4px;")
+        self._problems.linkActivated.connect(self._toggle_problems)
+        self._problems_expanded = False
         lay.addWidget(self._problems)
 
         # ── review state ──
@@ -273,6 +282,25 @@ class ReviewPanel(QWidget):
         w = (width or max(60, label.width() or self.width() - 24)) - 8
         label.setText(QFontMetrics(label.font()).elidedText(text, Qt.ElideRight, w))
 
+    PROBLEMS_FOLDED = 3      # problems shown before the "show all" link
+
+    @classmethod
+    def problems_html(cls, probs: list, expanded: bool) -> str:
+        """The problem list as rich text: all of it when ``expanded`` (with a "show less" link), otherwise the
+        first ``PROBLEMS_FOLDED`` and a "show all (N more)" link."""
+        lines = [html.escape(p) for p in probs]
+        if len(lines) <= cls.PROBLEMS_FOLDED:
+            return "<br>".join(lines)
+        if expanded:
+            return "<br>".join(lines) + '<br><a href="less">' + html.escape(tr("show less")) + "</a>"
+        more = len(lines) - cls.PROBLEMS_FOLDED
+        return ("<br>".join(lines[:cls.PROBLEMS_FOLDED]) + '<br><a href="more">'
+                + html.escape(tr("… show all ({0} more)").format(more)) + "</a>")
+
+    def _toggle_problems(self, link: str = "") -> None:
+        self._problems_expanded = link != "less" if link else not self._problems_expanded
+        self.refresh()
+
     def refresh(self) -> None:
         st = self._state
         if st is None:
@@ -294,10 +322,7 @@ class ReviewPanel(QWidget):
             self._badge.setText(tr("{0} — {1} beats").format(q["titolo"], st.n_beats()))
             self._badge.setStyleSheet(f"padding: 4px 6px; border-radius: 6px; background: {col}; color: white; font-weight: bold;")
             probs = ["• " + p["testo"] for p in q["problemi"]]
-            shown = probs[:3]
-            if len(probs) > 3:
-                shown.append(tr("… and {0} more (hover here)").format(len(probs) - 3))
-            self._problems.setText("\n".join(shown))
+            self._problems.setText(self.problems_html(probs, self._problems_expanded))
             self._problems.setToolTip("\n".join(probs))
         locked = bool(getattr(st, 'locked', False))
         self._btn_undo.setEnabled(st.can_undo and not locked)
