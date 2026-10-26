@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.22.0
+**Versione**: 3.23.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali) o con sistemi **Multi Channel Systems** (file HDF5 del protocollo MCS RawData, fino a 64 elettrodi).
@@ -175,6 +175,22 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.23.0 (Ottobre 2026) — dopo il primo test degli operatori: trascinamento, giudizio completo, ampiezza sul grezzo, una polarità per registrazione
+
+Dal feedback degli operatori sulla baseline di Exp1. **Marcatori trascinabili** in *Edit*: si preme sul triangolo e si
+rilascia dove serve (la depolarizzazione si aggancia allo spike, la ripolarizzazione all'estremo più vicino; con Shift resta
+esattamente dove la si lascia), annullabile. **Giudizio di qualità completo**: oltre i primi tre problemi un collegamento
+*mostra tutto* apre l'elenco. **Ampiezza sul segnale non filtrato**: il picco si trova sul filtrato, l'ampiezza è il
+picco-picco grezzo da −30 a +30 ms dal marcatore, nel pannello, nei Results e nelle statistiche del batch
+(`spike_amplitude_mV_*`; il filtrato resta in `spike_amplitude_filtered_mV_*`): errore mediano contro l'operatore sul gold GG
+dal 31 al 5 %. **Una polarità di ripolarizzazione per registrazione** (`per_beat_polarity = 'majority'`): con un'onda
+bifasica alcuni battiti prendevano il lobo positivo e altri il negativo; registrazioni con polarità mista da 71 a 9
+(sviluppo) e da 28 a 4 (test), ripolarizzazioni entro 20 ms dall'operatore dal 57 al 62 % e dal 64 al 68 %. Inoltre:
+aggancio e *Allinea* dal lato degli spike della registrazione (prima un'onda lenta accanto allo spike faceva finire il
+marcatore sulla linea di base), avviso prima di approvare o chiudere con modifiche non ricalcolate, limite di 25 minuti per
+job in CI. I tempi della depolarizzazione sono stati confrontati con quelli dell'operatore (`docs/TODO.md`): il rilevamento
+sta già sul picco; l'opzione `refine_on_raw_ms` resta spenta.
 
 ### v3.22.0 (Ottobre 2026) — cancello della ripolarizzazione per battito: rumore letto in diastole
 

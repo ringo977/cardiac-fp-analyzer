@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.22.0
+**Versione**: 3.23.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1575,6 +1575,22 @@ Restano fissi nel codice (non configurabili): finestra ± 30 ms dell'SNR globale
 
 
 ## 12. Changelog
+
+### v3.23.0 (Ottobre 2026) — feedback degli operatori su Exp1: revisione, ampiezza, polarità
+
+**Revisione.**
+- *Approvare o chiudere* con correzioni non ancora ricalcolate chiede prima di ricalcolare (`MainWindow._confirm_recompute`); con *No* non si approva né si chiude.
+- Aggancio dei marcatori (`ReviewState._snap_to_spike`): il lato dello spike (positivo / negativo) è quello della registrazione, deciso con un voto su tutti i battiti rispetto alla mediana dell'intero tracciato (`_spike_sign`). Prima era la deviazione dalla mediana *della finestra*, e un'onda lenta subito dopo lo spike faceva vincere un'oscillazione della linea di base; un secondo *Allinea* disfaceva il primo. *Allinea* cerca entro ±40 ms (`ALIGN_SPIKE_S`) e ripete finché il marcatore non si muove (`_settle_on_peak`). Il punto trovato sul filtrato si rilegge sul picco grezzo entro ±8 ms (`_refine_on_raw`).
+- **Trascinamento** (`SignalViewer._on_view_drag`, sostituisce `ViewBox.mouseDragEvent` dell'istanza): in *Edit* un trascinamento col tasto sinistro che parte entro 12 px da un marcatore lo sposta; durante il trascinamento un triangolo semitrasparente mostra il punto di arrivo (`ReviewState.snapped_dep` / `snapped_repol`); al rilascio `move_beat` o `set_repol`, con Shift senza aggancio. Ogni altro trascinamento è il pan / zoom di pyqtgraph. `move_beat` rifiuta una depolarizzazione a meno di 100 ms da un'altra. Test con eventi finti e con veri eventi del mouse (pyqtgraph scarta i movimenti più vicini di 10 ms).
+- **Giudizio completo**: `ReviewPanel.problems_html` — i primi tre problemi e un collegamento *mostra tutto (altri N)* / *mostra meno*; il testo è sottoposto a escape.
+
+**Ampiezza.** Ampiezza del battito = picco-picco del segnale **non filtrato** da 30 ms prima a 30 ms dopo il marcatore: `ReviewState._amp_uV` (`AMP_BEFORE_S`, `AMP_AFTER_S`) e, nella pipeline, `analyze._apply_raw_spike_amplitude` (statistiche `spike_amplitude_mV_*` dal grezzo, `spike_amplitude_raw_mV` per battito; i valori sul filtrato restano in `spike_amplitude_filtered_mV_*` e il `spike_amplitude_mV` per battito resta filtrato per il cancello di ampiezza, le aritmie e la cessazione). Finestra scelta sui 16 tessuti di Exp1 misurando ai marcatori del software (98 % dei battiti entro il 5 % dell'operatore; ±10 ms era il 14–43 % più bassa sugli spike lenti). Verifica indipendente sul gold GG di sviluppo (145 registrazioni): errore mediano dell'ampiezza della pipeline 31,5 % → 5,3 % (entro il 5 %: 3 % → 50 %), del pannello 15,2 % → 7,6 %; periodo, FPD, FPDc e battiti identici su tutte le 217 registrazioni.
+
+**Polarità della ripolarizzazione per battito** (`RepolarizationConfig.per_beat_polarity = 'majority'`, `per_beat_polarity_majority = 2/3`). `extract_all_parameters` esegue il passaggio per battito una volta con entrambi i segni in gara; se almeno due terzi dei battiti hanno scelto il segno opposto a quello atteso (template, invertito sui battiti con spike invertito) la registrazione prende quel segno, altrimenti quello del template; poi ripete il passaggio con `per_beat_prefer_template_sign` attivo e quel segno. `find_repolarization_per_beat(..., info=)` restituisce il segno scelto (`repol_sign` per battito); il summary riporta `repol_polarity_mode`, `repol_polarity_ref`, `repol_polarity_opposite_frac`. Valutazione contro l'operatore sul gold GG (`'free'` → `'majority'`): registrazioni con più del 10 % dei battiti sull'altro lobo 71 → 9 (sviluppo, 145) e 28 → 4 (test, 64); ripolarizzazioni entro 20 ms da quelle dell'operatore 57,3 → 61,8 % (1170 → 1202 battiti) e 63,5 → 68,4 % (885 → 926); FPD media per registrazione entro ±5 % 55,2 → 55,2 % e 62,5 → 65,6 %, entro ±10 % invariata; scorecard ufficiale di sviluppo (mediana) FPD ±10 % 67 → 66 % (tre elettrodi attraversano la soglia, due di grado A vicini al 10 %); il 4–5 % dei battiti resta senza ripolarizzazione invece di prendere l'altro lobo. Soglia 2/3 contro 3/4: due sole registrazioni diverse. `'template'` (solo il segno del template) perde le registrazioni in cui il template ha preso il lobo sbagliato (−1,4 punti a ±5 %); `'free'` resta per riprodurre la v3.22.  La regressione sul dataset Visone 2023 (chiamate dei farmaci) non è stata rifatta per questa versione.
+
+**Tempi della depolarizzazione** (`BeatDetectionConfig.refine_on_raw_ms`, `analyze.refine_beats_on_raw`, spento): confronto battito per battito con l'operatore — il rilevamento sta già sul picco (mediana 0,7 ms su GG, 1,5 ms su Exp1); rileggendo sul grezzo 0,4 ms, ma FPD ±10 % 64,8 → 63,4 % sullo sviluppo. Il tempo dell'operatore è più vicino alla discesa più ripida dello spike che al picco (vedi `docs/TODO.md`).
+
+**CI.** I test della GUI non si bloccano più su una domanda modale (risposta automatica nei test); ogni job ha un limite di 25 minuti.
 
 ### v3.22.0 (Ottobre 2026) — cancello della ripolarizzazione per battito: rumore letto in diastole
 
