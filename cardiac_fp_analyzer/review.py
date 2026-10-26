@@ -423,10 +423,21 @@ class ReviewState:
         c['corrected'] = any(v for k, v in c.items() if k != 'polarita') or self.polarity is not None
         return c
 
+    def snapped_dep(self, sample):
+        """Where a depolarisation placed at ``sample`` lands (the spike peak, see ``_snap_to_spike``) — the
+        preview shown while a marker is dragged."""
+        return self._snap_to_spike(int(sample))
+
+    def snapped_repol(self, sample, trace=None):
+        """Where a repolarisation placed at ``sample`` lands (nearest extremum of ``trace``, see ``set_repol``)."""
+        return self._snap_to_extremum(int(sample), trace=trace)
+
     def move_beat(self, k, sample, *, snap=True, trace=None):
         sample = int(sample)
         if snap:
             sample = self._snap_to_spike(sample, trace=trace)
+        if any(j != k and abs(b.dep - sample) < MIN_RR_S * self.fs for j, b in enumerate(self.beats)):
+            raise ValueError(tr('another depolarisation is already there'))
         self._begin()
         b = self.beats[k]
         b.dep, b.source = sample, 'corretto'

@@ -593,4 +593,6 @@ CATALOG = {
     "{0} markers changed": "{0} marcatori cambiati",
     "There are edits not yet applied to the measures. Recompute them and approve the recording?": "Ci sono modifiche non ancora applicate alle misure. Ricalcolarle e approvare la registrazione?",
     "There are edits not yet applied to the measures. Recompute them and close the recording?": "Ci sono modifiche non ancora applicate alle misure. Ricalcolarle e chiudere la registrazione?",
+    "another depolarisation is already there": "c'è già un'altra depolarizzazione in quel punto",
+    "drag to move it (Shift: exactly where you drop it)": "trascina per spostarlo (Shift: esattamente dove lo lasci)",
 }

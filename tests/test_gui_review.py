@@ -370,3 +370,165 @@ def test_approving_or_closing_with_pending_edits_asks_to_recompute(app, csv_path
     panel._chk_approved.setChecked(False)
     panel._chk_approved.setChecked(True)               # nothing pending: no question
     assert len(asked) == 4
+
+
+class _FakeDrag:
+    """The parts of pyqtgraph's MouseDragEvent the viewer reads (scene positions, start/finish, button, keys)."""
+
+    def __init__(self, down, pos, *, start=False, finish=False, shift=False, button=None):
+        self._down, self._pos, self._start, self._finish = down, pos, start, finish
+        self._mods = Qt.ShiftModifier if shift else Qt.NoModifier
+        self._button = Qt.LeftButton if button is None else button
+        self.accepted = False
+
+    def isStart(self):
+        return self._start
+
+    def isFinish(self):
+        return self._finish
+
+    def button(self):
+        return self._button
+
+    def buttonDownScenePos(self):
+        return self._down
+
+    def scenePos(self):
+        return self._pos
+
+    def modifiers(self):
+        return self._mods
+
+    def accept(self):
+        self.accepted = True
+
+    def ignore(self):
+        self.accepted = False
+
+
+def _drag(viewer, down, to, shift=False):
+    viewer._on_view_drag(_FakeDrag(down, down, start=True, shift=shift))
+    viewer._on_view_drag(_FakeDrag(down, to, shift=shift))
+    viewer._on_view_drag(_FakeDrag(down, to, finish=True, shift=shift))
+
+
+def test_markers_can_be_dragged_in_edit_mode(app, csv_path, monkeypatch):
+    """Cate's feedback (26 Oct 2026): drag a marker to move it. Edit mode, left button on a marker: on release
+    the depolarisation snaps to the spike, the repolarisation to the nearest extremum; Shift keeps the exact
+    drop point. Undoable, refused on a closed recording, measures marked out of date; a drag that does not
+    start on a marker (or in View mode) pans / zooms as before."""
+    import pyqtgraph as pg
+    from PySide6.QtCore import QPointF
+    w = MainWindow()
+    w.resize(1400, 900)
+    w.show()
+    w._run_analysis(str(csv_path), "el1")
+    app.processEvents()
+    st, v = w._review_state, w.viewer
+    reports = []
+    v.review_report.connect(reports.append)
+    w._signal_tab._rb_edit.setChecked(True)
+    k = 3
+    d0, r0 = st.beats[k].dep, st.beats[k].repol
+    assert r0 is not None
+    t = v.get_time_vector()
+    v.setXRange(float(t[d0]) - 0.3, float(t[r0]) + 0.3, padding=0)
+    app.processEvents()
+    vb = v.getPlotItem().vb
+
+    def scene(i, dt=0.0):
+        trace = v._displayed_trace()
+        return vb.mapViewToScene(QPointF(float(t[i] + dt), float(trace[i] + v._marker_offset)))
+
+    assert v.marker_at(scene(d0)) == ("dep", k) and v.marker_at(scene(r0)) == ("rep", k)
+    assert v.marker_at(scene((d0 + r0) // 2)) is None
+
+    # Shift: the depolarisation stays exactly where it is dropped
+    _drag(v, scene(d0), scene(d0, 0.030), shift=True)
+    assert abs(st.beats[k].dep - (d0 + int(0.030 * FS))) <= 2 and st.beats[k].source == "corretto"
+    assert w._signal_tab.recompute_pending()
+    # without Shift it lands on the spike, like the click commands
+    d1 = st.beats[k].dep
+    expected = st.snapped_dep(d0 + int(0.010 * FS))
+    assert abs(expected - d0) <= 3
+    _drag(v, scene(d1), scene(d0, 0.010))
+    assert st.beats[k].dep == expected
+    # the repolarisation, exactly where dropped (Shift) and snapped to the nearest extremum (no Shift)
+    _drag(v, scene(r0), scene(r0, 0.040), shift=True)
+    assert abs(st.beats[k].repol - (r0 + int(0.040 * FS))) <= 2 and st.beats[k].repol_source == "corretto"
+    r1 = st.beats[k].repol
+    _drag(v, scene(r1), scene(r0, 0.005))
+    assert st.beats[k].repol == st.snapped_repol(r0 + int(0.005 * FS), trace=v._displayed_trace())
+    # a depolarisation cannot be dropped on another one
+    d_next = st.beats[k + 1].dep
+    _drag(v, scene(st.beats[k].dep), scene(d_next), shift=True)
+    assert st.beats[k].dep != d_next and reports and "already" in reports[-1]
+    # all undoable
+    for _ in range(4):
+        st.undo()
+    assert st.beats[k].dep == d0 and st.beats[k].repol == r0
+
+    # a drag that does not start on a marker, or any drag in View mode, is the ViewBox's (pan / zoom)
+    passed = []
+    monkeypatch.setattr(pg.ViewBox, "mouseDragEvent", lambda self, ev, axis=None: passed.append(ev))
+    _drag(v, scene((d0 + r0) // 2), scene((d0 + r0) // 2, 0.05))
+    assert len(passed) == 3 and st.beats[k].dep == d0
+    w._signal_tab._rb_view.setChecked(True)
+    _drag(v, scene(d0), scene(d0, 0.03), shift=True)
+    assert len(passed) == 6 and st.beats[k].dep == d0
+    # a closed recording refuses the drag
+    w._signal_tab._rb_edit.setChecked(True)
+    st.close()
+    n_rep = len(reports)
+    _drag(v, scene(d0), scene(d0, 0.03), shift=True)
+    assert st.beats[k].dep == d0 and len(reports) > n_rep
+    st.reopen()
+    hints = []
+    v.hover_info.connect(hints.append)
+    v._on_mouse_moved((scene(d0),))                    # hovering a marker in Edit mode says it can be dragged
+    assert hints and "drag" in hints[-1]
+    w.close()
+
+
+def test_dragging_a_marker_with_real_mouse_events(app, csv_path, monkeypatch):
+    """The same drag through Qt mouse events (press, moves 30 ms apart — pyqtgraph drops moves closer than its
+    rate limit — release): the ViewBox hands it to the viewer, which moves the marker; nothing opens a menu."""
+    import time
+
+    from PySide6.QtCore import QEvent, QPoint, QPointF
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QMenu
+    menus = []
+    monkeypatch.setattr(QMenu, "exec", lambda *a, **k: menus.append(1))
+    w = MainWindow()
+    w.resize(1400, 900)
+    w.show()
+    w._run_analysis(str(csv_path), "el1")
+    app.processEvents()
+    st, v = w._review_state, w.viewer
+    w._signal_tab._rb_edit.setChecked(True)
+    k = 3
+    d0 = st.beats[k].dep
+    t = v.get_time_vector()
+    v.setXRange(float(t[d0]) - 0.3, float(t[d0]) + 1.2, padding=0)
+    app.processEvents()
+    vb, vp = v.getPlotItem().vb, v.viewport()
+    trace = v._displayed_trace()
+
+    def at(i, dt=0.0):
+        return v.mapFromScene(vb.mapViewToScene(QPointF(float(t[i] + dt), float(trace[i] + v._marker_offset))))
+
+    def send(kind, pos, button, buttons):
+        ev = QMouseEvent(kind, QPointF(pos), QPointF(vp.mapToGlobal(pos)), button, buttons, Qt.ShiftModifier)
+        QApplication.sendEvent(vp, ev)
+        app.processEvents()
+
+    a, b = at(d0), at(d0, 0.030)
+    send(QEvent.MouseButtonPress, a, Qt.LeftButton, Qt.LeftButton)
+    for f in np.linspace(0, 1, 6)[1:]:
+        time.sleep(0.03)
+        send(QEvent.MouseMove, QPoint(int(a.x() + (b.x() - a.x()) * f), a.y()), Qt.NoButton, Qt.LeftButton)
+    send(QEvent.MouseButtonRelease, b, Qt.LeftButton, Qt.NoButton)
+    assert not menus
+    assert abs(st.beats[k].dep - (d0 + int(0.030 * FS))) <= 3 and st.beats[k].source == "corretto"
+    w.close()

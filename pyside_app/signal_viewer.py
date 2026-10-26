@@ -14,6 +14,10 @@ Editing model (Phase 0, ADR-0001):
   "view" (read-only) and "edit" (click-to-mutate).
 - In edit mode, a click opens a *contextual* QMenu with the actions that
   make sense for that click: remove if a marker is near, add-here if not.
+- In edit mode (review), a marker can also be dragged with the left button: on release the
+  depolarisation is snapped to the spike (``ReviewState.move_beat``) and the repolarisation to the nearest
+  extremum of the displayed trace (``ReviewState.set_repol``); with Shift held at release it stays exactly
+  where it is dropped. A drag that does not start on a marker pans / zooms as usual.
 - All edits mutate in-memory copies of the beat/repol index arrays and
   redraw. Recomputation of FPD/summary is Phase 1 (task #72).
 
@@ -29,7 +33,7 @@ from typing import Callable
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QMenu
 
@@ -41,6 +45,7 @@ from .review_helpers import operators_view
 # How close (in seconds) a click must be to an existing marker to be
 # treated as "on" that marker (i.e. the menu offers Remove instead of Add).
 _SNAP_WINDOW_S = 0.200
+_DRAG_PX = 12          # a press within this many pixels of a marker grabs it (Edit mode, review)
 
 
 # Highlighted stretches of the review mode (ReviewState.problems): RGB
@@ -140,6 +145,12 @@ class SignalViewer(pg.PlotWidget):
         self.addItem(self._selected_scatter)
         self._burst_regions: list = []
         self._problem_regions: list = []      # (LinearRegionItem, problem dict) — review mode
+        # Dragging a marker (Edit mode, review): ('dep' | 'rep', beat index) while the button is held, and a
+        # translucent copy of the marker showing where it will land (the snapped position).
+        self._drag: tuple | None = None
+        self._drag_ghost = pg.ScatterPlotItem(size=14, pen=pg.mkPen("#ffffff", width=1))
+        self._drag_ghost.setZValue(20)
+        self.addItem(self._drag_ghost)
 
         # Mouse clicks on the scene → edit menu (in edit mode).
         self.scene().sigMouseClicked.connect(self._on_mouse_click)
@@ -147,6 +158,8 @@ class SignalViewer(pg.PlotWidget):
         # opens the correction menu like the left one
         vb = self.getPlotItem().vb
         vb.menuEnabled = lambda: self._mode_getter() != "edit"
+        # A left-button drag that starts on a marker moves it (Edit mode); any other drag pans / zooms.
+        vb.mouseDragEvent = self._on_view_drag
 
         # Mouse moves → hover-info signal.  Rate-limit with SignalProxy
         # so we don't re-emit on every pixel (pyqtgraph fires this on
@@ -553,9 +566,82 @@ class SignalViewer(pg.PlotWidget):
             off_ms = (i - int(self._beats[nb])) * 1000.0 / self._fs
             extra = f"  |  #{nb + 1} ({off_ms:+.0f} ms)"
 
+        if self._mode_getter() == "edit" and self._state is not None and self.marker_at(pos) is not None:
+            extra += "  |  " + tr("drag to move it (Shift: exactly where you drop it)")
         self.hover_info.emit(
             f"t = {t:.3f} s  |  A = {y:.1f} µV{extra}"
         )
+
+    # ─── Drag a marker (Edit mode, review) ───────────────────────
+    def marker_at(self, scene_pos) -> tuple | None:
+        """('dep' | 'rep', beat index) of the marker drawn under ``scene_pos`` (within ``_DRAG_PX`` pixels of
+        its symbol), or None. Only in review mode, where markers belong to beats."""
+        st = self._state
+        if st is None or self._time is None or self._signal is None:
+            return None
+        trace = self._displayed_trace()
+        n = len(trace)
+        vb = self.getPlotItem().vb
+        (x_lo, x_hi), _ = vb.viewRange()
+        best = None
+        for kind, pairs in (("dep", [(k, b.dep) for k, b in enumerate(st.beats)]),
+                            ("rep", [(k, b.repol) for k, b in enumerate(st.beats) if b.repol is not None])):
+            for k, i in pairs:
+                if not (0 <= i < n) or not (x_lo <= self._time[i] <= x_hi):
+                    continue
+                p = vb.mapViewToScene(QPointF(float(self._time[i]), float(trace[i] + self._marker_offset)))
+                d = float(np.hypot(p.x() - scene_pos.x(), p.y() - scene_pos.y()))
+                if d <= _DRAG_PX and (best is None or d < best[0]):
+                    best = (d, kind, k)
+        return None if best is None else (best[1], best[2])
+
+    def _drag_target(self, kind: str, sample: int, exact: bool) -> int:
+        """Where a dragged marker lands: the snapped position (as the click commands), or ``sample`` itself
+        when ``exact`` (Shift held)."""
+        if exact:
+            return int(sample)
+        if kind == "dep":
+            return self._state.snapped_dep(sample)
+        return self._state.snapped_repol(sample, trace=self._displayed_trace())
+
+    def _on_view_drag(self, ev, axis=None) -> None:
+        """ViewBox drag handler: in Edit mode a left-button drag that starts on a marker moves it (preview of
+        the landing point while dragging, the move on release, undoable); everything else is the normal
+        pan / box zoom."""
+        vb = self.getPlotItem().vb
+        if (self._mode_getter() == "edit" and self._state is not None and ev.button() == Qt.LeftButton
+                and (self._drag is not None or ev.isStart())):
+            if ev.isStart():
+                hit = self.marker_at(ev.buttonDownScenePos())
+                if hit is not None and getattr(self._state, "locked", False):
+                    self.review_report.emit(tr("Recording closed: Unlock in the Review panel to change it"))
+                    ev.accept()
+                    return
+                self._drag = hit
+            if self._drag is not None:
+                ev.accept()
+                kind, k = self._drag
+                x = float(vb.mapSceneToView(ev.scenePos()).x())
+                i = int(np.argmin(np.abs(self._time - x)))
+                exact = bool(ev.modifiers() & Qt.ShiftModifier)
+                if ev.isFinish():
+                    self._drag = None
+                    self._drag_ghost.setData([], [])
+                    st = self._state
+                    if kind == "dep":
+                        self._review_do(lambda: st.move_beat(k, i, snap=not exact))
+                    else:
+                        self._review_do(lambda: st.set_repol(k, i, snap=not exact, trace=self._displayed_trace()))
+                    return
+                j = self._drag_target(kind, i, exact)
+                trace = self._displayed_trace()
+                if 0 <= j < len(trace):
+                    colour = pg.mkColor("#ff4b4b" if kind == "dep" else "#2ecc71")
+                    colour.setAlpha(150)
+                    self._drag_ghost.setData([float(self._time[j])], [float(trace[j] + self._marker_offset)],
+                                             symbol="t" if kind == "dep" else "t1", brush=pg.mkBrush(colour))
+                return
+        pg.ViewBox.mouseDragEvent(vb, ev, axis)
 
     # ─── Click / edit-menu ────────────────────────────────────────
     def _on_mouse_click(self, ev) -> None:
