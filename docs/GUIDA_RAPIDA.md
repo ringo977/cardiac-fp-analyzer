@@ -21,7 +21,21 @@ pip install -e ".[gui,reports,mcs,nwb]"
 cardiac-fp-gui
 ```
 
-**Mac** (Terminale): stessi comandi, con `python3 -m venv .venv` e `source .venv/bin/activate`.
+**Mac** (Terminale). I comandi sono diversi da quelli di Windows: non copiare il blocco sopra. Al primo `git` il Mac propone di installare gli *strumenti per lo sviluppo da riga di comando*: **Installa** e **Accetta** (pacchetto ufficiale Apple con git e Python 3, alcuni minuti), poi riaprire il Terminale.
+
+```
+cd ~/Documents
+git clone https://github.com/ringo977/cardiac-fp-analyzer.git
+cd cardiac-fp-analyzer
+git checkout feat/pyside-poc
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e ".[gui,reports,mcs,nwb]"
+cardiac-fp-gui
+```
+
+Volte successive (Mac): `cd ~/Documents/cardiac-fp-analyzer`, `source .venv/bin/activate`, `cardiac-fp-gui`.
 
 Volte successive: `cd` nella cartella, riattivare l'ambiente (`.venv\Scripts\Activate.ps1` / `source .venv/bin/activate`), `cardiac-fp-gui`. Per aggiornare: `git pull` e di nuovo `pip install -e ...`. Se PowerShell rifiuta lo script di attivazione: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, risposta S.
 

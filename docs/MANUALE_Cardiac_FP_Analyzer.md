@@ -64,14 +64,18 @@ Sui chip a più camere ogni **camera** (un microtessuto) è analizzata separatam
 
 ## 2.2 Installazione in un ambiente virtuale (consigliata)
 
-**macOS / Linux** (Terminale):
+**macOS / Linux** (Terminale). Su un Mac nuovo il primo `git` (o `python3`) propone di installare gli *strumenti per lo sviluppo da riga di comando* di Apple: **Installa** e **Accetta** (contengono git e Python 3), poi riaprire il Terminale. I comandi di Windows qui sotto non vanno usati sul Mac (`py`, `Activate.ps1` e i percorsi con `\` non esistono).
 
 ```bash
+cd ~/Documents
 git clone https://github.com/ringo977/cardiac-fp-analyzer.git
 cd cardiac-fp-analyzer
+git checkout feat/pyside-poc
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -e ".[gui,reports,mcs,nwb]"
+cardiac-fp-gui
 ```
 
 **Windows** (PowerShell: tasto Start, scrivere *PowerShell*, Invio):
@@ -83,6 +87,7 @@ pip install -e ".[gui,reports,mcs,nwb]"
 cd $HOME\Documents
 git clone https://github.com/ringo977/cardiac-fp-analyzer.git
 cd cardiac-fp-analyzer
+git checkout feat/pyside-poc
 py -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -e ".[gui,reports,mcs,nwb]"
