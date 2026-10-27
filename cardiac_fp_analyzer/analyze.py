@@ -389,7 +389,8 @@ def _analyze_from_beats(
     all_p, summary = extract_all_parameters(bd_fpd, btm_fpd, bi_fpd, fs,
                                              cfg=rep_cfg,
                                              all_beat_indices=bi_stats)
-    _apply_raw_spike_amplitude(summary, all_p, raw_signal, bi_fpd, fs)
+    _apply_raw_spike_amplitude(summary, all_p, raw_signal, bi_fpd, fs,
+                               bd_cfg=config.beat_detection, filtered=filtered)
     if _resegmented_info is not None:
         summary['resegmentation_info'] = _resegmented_info
     # Merge rhythm-classification-derived fields into summary (additive).
@@ -531,23 +532,39 @@ RAW_AMP_BEFORE_S = 0.030      # amplitude window on the unfiltered signal: 30 ms
 RAW_AMP_AFTER_S = 0.030       # ... to 30 ms after it (same as ReviewState._amp_uV)
 
 
-def _apply_raw_spike_amplitude(summary, all_params, raw_signal, beat_indices, fs):
+def _apply_raw_spike_amplitude(summary, all_params, raw_signal, beat_indices, fs, bd_cfg=None, filtered=None):
     """The reported spike amplitude is measured on the *unfiltered* signal, as the operators do: the peak is
     found on the filtered trace, then time and amplitude are read on the raw one (the band-pass and the
     Savitzky–Golay smoothing take ~20 % off a spike a few ms wide). The per-beat ``spike_amplitude_mV`` (filtered)
     stays what the quality gate, the arrhythmia flags and cessation use; the summary statistics
     ``spike_amplitude_mV_*`` become the raw ones, the filtered ones are kept as
-    ``spike_amplitude_filtered_mV_*``. Per beat: ``spike_amplitude_raw_mV``."""
+    ``spike_amplitude_filtered_mV_*``. Per beat: ``spike_amplitude_raw_mV``.
+
+    With the lab's convention (``dep_time_rule = 'steepest_fall'``) the amplitude is the highest minus the
+    lowest point of the complex with the lab's windows (``lab_convention.amplitude``), and each beat also
+    carries ``dep_min_idx`` / ``dep_max_idx``."""
     if raw_signal is None or not len(all_params):
         return
+    from . import lab_convention as _lab
     raw = np.asarray(raw_signal, dtype=float)
-    lo, hi = int(RAW_AMP_BEFORE_S * fs), int(RAW_AMP_AFTER_S * fs)
     vals = []
-    for b, p in zip(beat_indices, all_params):
-        w = raw[max(0, int(b) - lo):min(len(raw), int(b) + hi + 1)]
-        a = float((w.max() - w.min()) * 1000) if len(w) else np.nan
-        p['spike_amplitude_raw_mV'] = a
-        vals.append(a)
+    if _lab.rule_of(bd_cfg) == _lab.RULE_STEEPEST_FALL:
+        src = raw if (filtered is None or len(raw) == len(filtered)) else np.asarray(filtered, dtype=float)
+        tr = _lab.lab_traces(src, fs, bd_cfg)
+        for b, p in zip(beat_indices, all_params):
+            amp, _hi, _lo, i_lo, i_hi = _lab.amplitude(src, tr, int(b), bd_cfg)
+            p['spike_amplitude_raw_mV'] = amp * 1000
+            p['dep_min_idx'], p['dep_max_idx'] = i_lo, i_hi
+            vals.append(amp * 1000)
+        summary['dep_time_rule'] = _lab.RULE_STEEPEST_FALL
+    else:
+        lo, hi = int(RAW_AMP_BEFORE_S * fs), int(RAW_AMP_AFTER_S * fs)
+        for b, p in zip(beat_indices, all_params):
+            w = raw[max(0, int(b) - lo):min(len(raw), int(b) + hi + 1)]
+            a = float((w.max() - w.min()) * 1000) if len(w) else np.nan
+            p['spike_amplitude_raw_mV'] = a
+            vals.append(a)
+        summary['dep_time_rule'] = _lab.RULE_PEAK
     v = np.asarray(vals, dtype=float)
     v = v[~np.isnan(v)]
     if not len(v):
@@ -883,9 +900,19 @@ def analyze_single_file(filepath, channel='auto', verbose=True, config=None, fil
         # after loading a CSV that already had a sidecar would overwrite
         # it with a diff against the *post-override* set — silently losing
         # earlier corrections.
+        # Depolarisation convention (BeatDetectionConfig.dep_time_rule, lab_convention.py): with the lab's
+        # 'steepest_fall' every detection moves to the steepest downstroke of its complex
+        from . import lab_convention as _lab
+        _rule = _lab.rule_of(bd_cfg)
+        if _rule == _lab.RULE_STEEPEST_FALL and len(bi):
+            _src = raw_signal if len(raw_signal) == len(filtered) else filtered
+            bi = _lab.anchors(bi, _src, fs, bd_cfg)
+            det = dict(det)
+            det['dep_time_rule'] = _rule
+            det['n_beats'] = int(len(bi))
         # Times on the unfiltered signal (opt-in, BeatDetectionConfig.refine_on_raw_ms)
         _refine_ms = float(getattr(bd_cfg, 'refine_on_raw_ms', 0.0) or 0.0)
-        if _refine_ms > 0 and len(bi):
+        if _refine_ms > 0 and len(bi) and _rule != _lab.RULE_STEEPEST_FALL:
             bi, _side = refine_beats_on_raw(bi, raw_signal, filtered, fs, _refine_ms)
             det = dict(det)
             det['refined_on_raw'] = {'half_ms': _refine_ms, 'spike_side': _side}

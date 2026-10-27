@@ -623,3 +623,50 @@ def test_operator_chooses_the_side_of_the_spikes(app, csv_path):
     assert not panel._btn_dep_pos.isEnabled() and not panel._btn_dep_neg.isEnabled()
     st.reopen()
     w.close()
+
+
+def test_lab_convention_in_the_review_window(app, tmp_path):
+    """Settings ▸ Detection ▸ Depolarisation time = steepest downstroke (lab MATLAB): markers drawn at the
+    downstroke, the complex's lowest/highest points shown, Dep +/− not needed; a sidecar saved with the
+    other convention is announced on opening."""
+    import shutil
+
+    from cardiac_fp_analyzer.config import AnalysisConfig as AC
+    from pyside_app.settings_dialog import SettingsDialog
+    from tests.test_lab_convention import FS as LFS
+    from tests.test_lab_convention import _complex_train
+    x, beats = _complex_train(n_s=30.0, period_s=1.5, seed=4)
+    t = np.arange(len(x)) / LFS
+    p = tmp_path / "Exp1_chipA_ch1_baseline.csv"
+    with open(p, "w") as f:
+        f.write("#Sample rate: 2000Hz\nTime (s),Channel 1 (V)\n")
+        for ti, xi in zip(t, x * 1e-4):
+            f.write(f"{ti:.6f},{xi:.9e}\n")
+    cfg = AC()
+    dlg = SettingsDialog(cfg)
+    combo = dlg._widgets["beat_detection.dep_time_rule"]
+    assert [combo.itemData(i) for i in range(combo.count())] == ["peak", "steepest_fall"]
+    assert combo.itemText(1).startswith("Steepest downstroke")
+    w = MainWindow()
+    w._config.beat_detection.dep_time_rule = "steepest_fall"
+    w._run_analysis(str(p), "el1")
+    st, v, panel = w._review_state, w.viewer, w._review_panel
+    assert st.lab_rule and not panel._btn_dep_pos.isEnabled() and not panel._btn_dep_neg.isEnabled()
+    xs, _ = v._beats_scatter.getData()
+    tv = v.get_time_vector()
+    assert np.allclose(sorted(xs), sorted(tv[st.deps()]))            # drawn where the time is
+    ex, _ = v._extrema_scatter.getData()
+    assert len(ex) == 2 * st.n_beats()
+    msgs = []
+    w._review_dep_polarity(1)                                         # refused: not needed
+    assert st.dep_polarity is None
+    st.save(str(p))
+    shutil.copy(str(p) + ".review.json", str(p) + ".review.json.bak")
+    w._config.beat_detection.dep_time_rule = "peak"
+    w.statusBar().messageChanged.connect(msgs.append)
+    w._run_analysis(str(p), "el1")
+    assert not w._review_state.lab_rule and w._review_state.saved_dep_rule == "steepest_fall"
+    assert any("other depolarisation convention" in m for m in msgs)
+    ex, _ = v._extrema_scatter.getData()
+    assert len(ex) == 0
+    w.close()

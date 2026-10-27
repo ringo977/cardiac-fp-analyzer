@@ -343,6 +343,11 @@ class ReviewPanel(QWidget):
         for b in (self._btn_pos, self._btn_neg, self._btn_dep_pos, self._btn_dep_neg, self._btn_restore,
                   self._btn_recompute, self._btn_reanalyse):
             b.setEnabled(not locked)
+        if getattr(st, 'lab_rule', False):
+            # the lab's convention (steepest downstroke) needs no side of the spike
+            for b in (self._btn_dep_pos, self._btn_dep_neg):
+                b.setEnabled(False)
+                b.setToolTip(tr("Not needed with the steepest-downstroke convention (Settings ▸ Detection)"))
         self._syncing = True
         try:
             self._chk_approved.setChecked(bool(getattr(st, 'approved', False)))

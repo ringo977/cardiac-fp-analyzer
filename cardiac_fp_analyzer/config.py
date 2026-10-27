@@ -82,6 +82,23 @@ class BeatDetectionConfig:
     # trace (clean), then moved to the raw extremum of the spike's side within ± this many ms — as the
     # operators read it (the smoothing moves the apparent peak by a few ms on slow spikes). 0 = off.
     refine_on_raw_ms: float = 0.0
+    # Depolarisation convention (v3.24, lab_convention.py): 'peak' — the crest of the spike (the software's);
+    # 'steepest_fall' — the steepest downstroke of the complex, amplitude = highest − lowest point on the raw
+    # signal, as the operators' MATLAB analyzer v1.5 (reproduces their Exp1 times to the sample in 99 % of the
+    # beats). Below: their parameters, not meant to be changed.
+    dep_time_rule: str = 'peak'
+    lab_mains_hz: float = 50.0
+    lab_mains_max_hz: float = 450.0
+    lab_notch_q: float = 30.0
+    lab_spike_band_hz: tuple[float, float] = (20.0, 300.0)
+    lab_wide_lp_hz: float = 100.0
+    lab_search_ms: float = 25.0        # where the 20–300 Hz |peak| is looked for around a detection or a click
+    lab_cplx_half_ms: float = 12.0     # half-width of the complex: steepest downstroke within ± this of the peak
+    lab_prepeak_ms: float = 40.0
+    lab_trough_ms: float = 50.0
+    lab_postpeak_ms: float = 100.0
+    lab_peak_refine_ms: float = 20.0
+    lab_amp_refine_ms: float = 2.0
 
     # Physiological plausibility scoring (thresholds)
     bp_ideal_range_s: tuple[float, float] = (0.4, 3.0)

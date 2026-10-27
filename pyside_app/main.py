@@ -2511,6 +2511,9 @@ class MainWindow(QMainWindow):
         st = self._review_state
         if st is None or self._review_locked():
             return
+        if getattr(st, 'lab_rule', False):
+            self.statusBar().showMessage(tr("Not needed with the steepest-downstroke convention (Settings ▸ Detection)"), 5000)
+            return
         moved = st.set_dep_polarity(sign)
         self._review_after_edit()
         self.statusBar().showMessage(tr("Depolarisations on the {0} peak: {1} markers moved").format(
@@ -2846,8 +2849,14 @@ class MainWindow(QMainWindow):
             if self._ignore_sidecar_once:
                 self._ignore_sidecar_once = False          # 'Rifai l'analisi': the saved corrections stay on disk
             elif ReviewState.load_into(self._review_state, path):
-                self.statusBar().showMessage(tr("Saved corrections loaded for {0}").format(
-                    self._review_state.channel), 5000)
+                st = self._review_state
+                if st.saved_dep_rule and st.saved_dep_rule != st.dep_rule:
+                    # reviewed with the other depolarisation convention: the saved markers are kept as they are
+                    self.statusBar().showMessage(tr(
+                        "This recording was reviewed with the other depolarisation convention: the saved markers "
+                        "are kept; use Align (or Redo analysis) to move them to the current one"), 12000)
+                else:
+                    self.statusBar().showMessage(tr("Saved corrections loaded for {0}").format(st.channel), 5000)
         except Exception as exc:   # noqa: BLE001 — the viewer must still open
             logger.exception("review state")
             self._review_state = None

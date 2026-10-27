@@ -1,6 +1,6 @@
 ---
 title: "Cardiac FP Analyzer — Manuale utente"
-subtitle: "Versione 3.23.0 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
+subtitle: "Versione 3.24.0 · analisi del field potential cardiaco su MEA (CSV Digilent e HDF5 Multi Channel Systems)"
 author: "Marco Rasponi · github.com/ringo977/cardiac-fp-analyzer"
 date: "25 ottobre 2026"
 lang: it
@@ -403,6 +403,13 @@ Insiemi di battiti: **tutte le rilevazioni** (verdetto, aritmie, cessazione); **
 ## 8.2 Battiti
 
 Tre rivelatori sul segnale filtrato (prominenza, derivata, picco), distanza minima 400 ms (`min_distance_ms`), soglia 4 × rumore robusto (`threshold_factor`). Ciascuno riceve un punteggio (periodo medio in 0,4–3 s: 30; CV < 15/30/50 %: 30/20/10; numero di battiti plausibile: 20; bonus 15 al rivelatore a derivata) e vince il più alto. Seguono, in ordine: correzione del periodo bimodale, soglia di rumore, scarto della popolazione minore, gruppi di ampiezza, classificazione della topologia (regolare, caotico, alternanza, ectopici, rumore, trimodale), validazione morfologica (correlazione ≥ 0,7 con il template, ampiezza ≥ 25 %), recupero dei battiti mancanti nei buchi, seconda soglia di rumore, filtro adattato a basso SNR. Se restano meno di 5 battiti su più di 10 s, secondo tentativo con distanza 300 ms e soglia 3 (stessa configurazione per il resto).
+
+**Tempo della depolarizzazione: due convenzioni** (dalla v3.24, *Impostazioni ▸ Detection ▸ Tempo della depolarizzazione*).
+
+- *Picco dello spike (software)*, il default: il tempo è la cresta dello spike, positiva o negativa secondo il lato della registrazione; l'ampiezza è il picco-picco del segnale non filtrato da 30 ms prima a 30 ms dopo.
+- *Discesa più ripida (MATLAB del laboratorio)*: la convenzione dell'analizzatore MATLAB v1.5 degli operatori. Il tempo è il punto di **discesa più ripida** del complesso (minimo di dV/dt sul tracciato a 100 Hz, dopo il notch di tutte le armoniche di rete), la stessa fase per gli spike negativi-prima e positivi-prima, quindi non serve scegliere il lato dello spike (*Dep + / Dep −* si disattivano). L'ampiezza è il punto più alto meno il più basso del complesso sul segnale non filtrato: il minimo nei 50 ms dopo la discesa, il massimo tra il picco nei 40 ms prima e l'overshoot fino a 100 ms dopo il minimo. Nella revisione i triangoli rossi stanno sulla discesa e due cerchietti segnano il minimo e il massimo. Sulla baseline di Exp1, partendo dai rilevamenti del software, riproduce il tempo degli operatori allo stesso campione nel 98 % dei battiti e il loro "Dep. Voltage up" nel 99 %.
+
+La scelta sposta l'FPD di 1–2 ms sugli spike stretti e fino a 12 ms sui complessi larghi. Uno studio va analizzato con **una sola convenzione** (basale e dosi misurate allo stesso modo): la convenzione è scritta nella riga del filtraggio in testa all'Excel dei Results e nel file di revisione, e riaprendo una registrazione rivista con l'altra convenzione il programma lo segnala.
 
 ## 8.3 Periodo, frequenza, CV
 

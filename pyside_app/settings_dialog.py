@@ -101,8 +101,9 @@ def _make_widget(fs: FieldSpec, parent: QWidget | None = None) -> QWidget:
         return w
     if fs.kind == "choice":
         w = QComboBox(parent)
-        for c in fs.choices:
-            w.addItem(c, userData=c)
+        labels = fs.choice_labels or fs.choices
+        for c, lab in zip(fs.choices, labels):
+            w.addItem(tr(lab) if fs.choice_labels else c, userData=c)
         if fs.tooltip:
             w.setToolTip(tr(fs.tooltip))
         return w

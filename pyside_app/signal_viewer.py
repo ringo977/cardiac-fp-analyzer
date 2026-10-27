@@ -150,6 +150,10 @@ class SignalViewer(pg.PlotWidget):
         # Dragging a marker (Edit mode, review): ('dep' | 'rep', beat index) while the button is held, and a
         # translucent copy of the marker showing where it will land (the snapped position).
         self._drag: tuple | None = None
+        # The lab's convention: lowest and highest point of each depolarisation complex (the amplitude)
+        self._extrema_scatter = pg.ScatterPlotItem(symbol="o", size=7, brush=pg.mkBrush(None),
+                                                   pen=pg.mkPen("#ff4b4b", width=1.5))
+        self.addItem(self._extrema_scatter)
         self._drag_ghost = pg.ScatterPlotItem(size=14, pen=pg.mkPen("#ffffff", width=1))
         self._drag_ghost.setZValue(20)
         self.addItem(self._drag_ghost)
@@ -480,6 +484,18 @@ class SignalViewer(pg.PlotWidget):
         else:
             self._repol_scatter.setData([], [])
 
+        # The lab's convention: the complex's lowest and highest point (hollow circles), i.e. the amplitude
+        ext_x, ext_y = [], []
+        if self._state is not None and getattr(self._state, 'lab_rule', False):
+            for b in self._state.beats:
+                e = self._state.dep_extrema(b.dep)
+                if e:
+                    for j in e:
+                        if 0 <= j < n:
+                            ext_x.append(float(self._time[j]))
+                            ext_y.append(float(trace[j]))
+        self._extrema_scatter.setData(ext_x, ext_y)
+
         # Review mode: vetoed detections, selected beat, burst windows.
         for reg in self._burst_regions:
             self.removeItem(reg)
@@ -582,6 +598,8 @@ class SignalViewer(pg.PlotWidget):
         deps = np.asarray(deps, dtype=int)
         if len(deps) == 0 or self._state is None:
             return deps
+        if getattr(self._state, 'lab_rule', False):
+            return deps          # the lab's convention: the time is the steepest downstroke, drawn where it is
         side = self._state._spike_sign() or 0
         h = max(1, int(_DRAW_CREST_S * self._fs))
         n = len(trace)

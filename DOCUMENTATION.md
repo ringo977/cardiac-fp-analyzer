@@ -1,6 +1,6 @@
 # Cardiac FP Analyzer — Documentazione Completa
 
-**Versione**: 3.23.0
+**Versione**: 3.24.0
 **Piattaforma**: Python 3.9+
 **Riferimento**: Visone, Lozano-Juan et al., *Toxicological Sciences* 191(1), 47–60, 2023
 **Dataset di validazione**: 169 file CSV, 7 farmaci CiPA (3 positivi, 4 negativi)
@@ -1575,6 +1575,40 @@ Restano fissi nel codice (non configurabili): finestra ± 30 ms dell'SNR globale
 
 
 ## 12. Changelog
+
+### v3.24.0 (Ottobre 2026) — convenzione della depolarizzazione del laboratorio (MATLAB v1.5) come opzione
+
+**Da dove viene.** Il codice MATLAB degli operatori (`FP_analyzer_mmon`, ultima versione `v1.5_base`; di default i punti
+si piazzano a mano, il pulsante *Automatic detection* esegue il passaggio automatico) definisce il tempo della
+depolarizzazione come la **discesa più ripida** del complesso: picchi di |passa-banda 20–300 Hz| (Butterworth 2) oltre
+4 × MAD, poi il minimo di dV/dt del passa-basso a 100 Hz (Butterworth 4) del segnale con il notch di tutte le armoniche
+di rete (50 … 450 Hz, Q 30) entro ±12 ms (`fp_detect_beats`; a mano: il minimo cliccato e la discesa più ripida nei 40 ms
+prima). Minimo: minimo del 100 Hz nei 50 ms dopo, spostato sul minimo del grezzo entro ±20 ms e poi ±2 ms; massimo: il
+più alto sul grezzo tra il picco nei 40 ms prima della discesa e l'overshoot fino a 100 ms dopo il minimo, ciascuno
+rifinito allo stesso modo (`fp_measure_beat`, `fp_derive`). "Dep. Voltage up/down" del loro Excel sono i valori del CSV
+in quei due campioni.
+
+**Implementazione.** `cardiac_fp_analyzer/lab_convention.py` (senza Qt): `lab_traces`, `steepest_fall`, `extrema`,
+`amplitude`, `anchors`. `BeatDetectionConfig.dep_time_rule = 'peak' | 'steepest_fall'` (default `'peak'`) e i loro
+parametri (`lab_*`, da non toccare). Con `'steepest_fall'`: i rilevamenti vanno sulla discesa più ripida dopo il
+rilevamento e i veti, prima della segmentazione (quindi template, FPD e periodo partono da lì);
+l'ampiezza del summary e per battito (`spike_amplitude_raw_mV`, `dep_min_idx`, `dep_max_idx`) è quella del laboratorio;
+`summary['dep_time_rule']`; la riga del filtraggio lo dice. Revisione (`ReviewState.dep_rule`): aggancio e *Allinea*
+sulla discesa più ripida (nessun lato da scegliere: *Dep +/−* disattivati), ampiezza e "up/down" del foglio raw con le
+loro regole, triangoli disegnati sulla discesa e cerchietti sul minimo e sul massimo; il file di revisione salva
+`regola_dep` e riaprendolo con l'altra convenzione compare un avviso. Impostazioni: combo con etichette tradotte
+(`FieldSpec.choice_labels`).
+
+**Validazione.** Exp1 baseline (16 tessuti, 413 battiti abbinati, tutto automatico dai rilevamenti del software): tempo
+dell'operatore allo stesso campione nel 98 % dei battiti (99 % entro un campione; con il picco 0 %, scarto mediano 2 ms),
+"Dep. Voltage up" nel 99 %, "down" nell'82 % (il resto sono le loro correzioni a mano del minimo, su B2, D3, E2, G3). FPD
+media entro il 5 % del loro foglio: 11/16 → 10/16 (A2: con le nuove ancore il primo passaggio dà il 72 % dei battiti sul
+lobo negativo e la regola di maggioranza della polarità sceglie quello; gli altri tessuti hanno lo scarto per battito
+più vicino a zero). Corpus GG di sviluppo (gold 2025): scorecard ufficiale FPD entro ±10 % 66 % → 66 %, BP invariato,
+battiti invariati; FPD media per registrazione entro il 5 % 55,2 → 56,6 %; ma battito per battito il gold segue il
+**picco** (tempo entro 2 ms dal suo: 77,6 % con il picco, 64,5 % con la discesa; FPD per battito entro 10 ms 46,9 →
+38,0 %). I due riferimenti usano quindi convenzioni diverse: il default resta `'peak'`; `'steepest_fall'` serve a
+confrontarsi con l'analizzatore MATLAB attuale degli operatori. Il test GG non è stato usato (nessun cambio di default).
 
 ### v3.23.0 (Ottobre 2026) — feedback degli operatori su Exp1: revisione, ampiezza, polarità
 

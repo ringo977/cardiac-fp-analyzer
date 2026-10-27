@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/ringo977/cardiac-fp-analyzer/actions/workflows/ci.yml)
 
-**Versione**: 3.23.0
+**Versione**: 3.24.0
 **Python**: ≥ 3.9
 
 Analisi automatizzata di **field potential (FP)** per registrazioni µECG da **microtessuti cardiaci hiPSC-CM**, acquisite con oscilloscopio **Digilent WaveForms** (CSV: tempo + 2 canali) o con sistemi **Multi Channel Systems** (file HDF5 del protocollo MCS RawData, fino a 64 elettrodi).
@@ -175,6 +175,15 @@ Il modulo QC valida ogni battito rilevato:
 - **Grading**: A (eccellente) → F (non analizzabile)
 
 ## Changelog
+
+### v3.24.0 (Ottobre 2026) — la convenzione della depolarizzazione degli operatori, come opzione
+
+*Impostazioni ▸ Detection ▸ Tempo della depolarizzazione*: oltre al *Picco dello spike* (default) si può scegliere la
+*Discesa più ripida (MATLAB del laboratorio)*, la convenzione del loro analizzatore MATLAB v1.5: tempo sul punto di
+discesa più ripida del complesso, ampiezza tra il punto più basso e il più alto sul segnale non filtrato con le loro
+finestre. Sulla baseline di Exp1 riproduce il loro tempo allo stesso campione nel 98 % dei battiti; sul gold standard GG
+(2025, che segue il picco) il confronto per registrazione non cambia. La scelta vale per batch, revisione ed export e
+resta scritta nei risultati.
 
 ### v3.23.0 (Ottobre 2026) — dopo il primo test degli operatori: trascinamento, giudizio completo, ampiezza sul grezzo, una polarità per registrazione
 

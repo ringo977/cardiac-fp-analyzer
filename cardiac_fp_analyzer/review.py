@@ -101,6 +101,11 @@ class ReviewState:
         self.polarity: int | None = None            # repolarisation polarity chosen by the operator (+1 / -1)
         self.dep_polarity: int | None = None        # side of the spikes chosen by the operator (+1 / -1), see _spike_sign
         self._side_auto: int | None = None          # side of the spikes decided on the software's detections
+        # depolarisation convention (lab_convention): 'peak' (crest of the spike) or 'steepest_fall' (the lab's)
+        self.dep_rule = 'peak'
+        self.saved_dep_rule: str | None = None      # the convention of the loaded sidecar, when it says
+        self._bd = None                             # BeatDetectionConfig with the lab's windows
+        self._lab_tr = None                         # the lab's traces, computed when first needed
         self.criterion: dict | None = None          # last propagated criterion
         self.notes = ''
         self._history: list[_Snapshot] = []
@@ -139,6 +144,9 @@ class ReviewState:
         st.beats = [BeatMark(d, repol.get(d), 'auto', 'auto' if d in repol else 'assente') for d in deps]
         st.beats.sort(key=lambda b: b.dep)
         st._side_auto = st._vote_side() or None     # fixed for the recording: manual edits do not change it
+        from . import lab_convention as _lab
+        st.dep_rule = _lab.rule_of(cfg)
+        st._bd = cfg.beat_detection
         return st
 
     # ── undo / redo ────────────────────────────────────────────────────────
@@ -333,6 +341,31 @@ class ReviewState:
         i = int(np.argmax(seg)) if side > 0 else int(np.argmin(seg)) if side < 0 else int(np.argmax(np.abs(seg - np.median(seg))))
         return int(a + i)
 
+    # ── the lab's convention (lab_convention.py) ─────────────────────────────
+
+    @property
+    def lab_rule(self) -> bool:
+        return self.dep_rule == 'steepest_fall'
+
+    def _lab(self):
+        """The lab's traces (notched, 20–300 Hz, 100 Hz low-pass, dV/dt) of the unfiltered signal when it is
+        sample-aligned with the filtered one, else of the filtered one; computed once."""
+        if self._lab_tr is None:
+            from . import lab_convention as _lab
+            src = self.raw if (self.raw is not None and len(self.raw) == len(self.filtered)) else self.filtered
+            self._lab_tr = _lab.lab_traces(src, self.fs, self._bd)
+        return self._lab_tr
+
+    def _lab_src(self):
+        return self.raw if (self.raw is not None and len(self.raw) == len(self.filtered)) else self.filtered
+
+    def dep_extrema(self, dep):
+        """(lowest, highest) sample of the complex at ``dep`` with the lab's rule (None in the peak convention)."""
+        if not self.lab_rule:
+            return None
+        from . import lab_convention as _lab
+        return _lab.extrema(self._lab_src(), self._lab(), int(dep), self._bd)
+
     def _snap_to_spike(self, sample, half_s=None, trace=None):
         """The sample of the spike peak within ±``half_s`` of ``sample`` on the software's filtered trace: the
         highest local maximum when the recording's spikes are positive, the lowest local minimum when they are
@@ -344,6 +377,11 @@ class ReviewState:
         moving its apparent peak by 10–20 ms (and a 25 ms window on that view can be dominated by the slow
         wave at its edges), so a snap on the displayed trace would put the marker — and the ±10 ms amplitude
         window — off the real spike. ``trace`` is accepted for API symmetry with ``set_repol`` and ignored."""
+        if self.lab_rule:
+            # the lab's convention: the steepest downstroke of the complex near ``sample`` (no side to choose)
+            from . import lab_convention as _lab
+            return _lab.steepest_fall(self._lab(), int(sample), self._bd,
+                                      search_s=self.SNAP_SPIKE_S if half_s is None else half_s)
         x = self.filtered
         h = int((self.SNAP_SPIKE_S if half_s is None else half_s) * self.fs)
         a, b = max(1, sample - h), min(len(x) - 1, sample + h + 1)
@@ -700,6 +738,10 @@ class ReviewState:
         peak after it. Against the operator's workbook (Exp1 baseline, 16 tissues, 0.5 s … 3.7 s periods)
         −30/+30 ms reproduces the amplitudes within 2.4 % (98 % of the beats within 5 %, measured at the software's own markers, which sit 5–12 ms before the operator's on some tissues) where ±10 ms was 14–43 % low on
         three of them, and it no longer depends on where within the spike the marker sits."""
+        if self.lab_rule and before_s is None and after_s is None:
+            from . import lab_convention as _lab
+            amp, hi_v, lo_v, _i_lo, _i_hi = _lab.amplitude(self._lab_src(), self._lab(), int(dep), self._bd)
+            return float(amp * 1e6), float(hi_v * self.gain), float(lo_v * self.gain)
         src = self.raw if self.raw is not None else self.filtered
         lo = int((self.AMP_BEFORE_S if before_s is None else before_s) * self.fs)
         hi = int((self.AMP_AFTER_S if after_s is None else after_s) * self.fs)
@@ -800,7 +842,7 @@ class ReviewState:
         crit = {k: (float(v) if isinstance(v, (np.floating, float)) else int(v) if isinstance(v, (np.integer,)) else v)
                 for k, v in (self.criterion or {}).items()} or None
         return {'canale': self.channel, 'fs': self.fs, 'polarita': self.polarity, 'polarita_dep': self.dep_polarity,
-                'criterio': crit,
+                'regola_dep': self.dep_rule, 'criterio': crit,
                 'note': self.notes, 'stato': self.status, 'approvato_da': self.approved_by,
                 'approvato_il': self.approved_at, 'chiuso_il': self.closed_at,
                 'battiti': [{'dep_s': b.dep / self.fs, 'rep_s': b.repol / self.fs if b.repol is not None else None,
@@ -819,6 +861,7 @@ class ReviewState:
         self.removed = [int(round(v * fs)) for v in d.get('tolti_s', [])]
         self.polarity = d.get('polarita')
         self.dep_polarity = d.get('polarita_dep')
+        self.saved_dep_rule = d.get('regola_dep') or 'peak'     # sidecars before v3.24 were all 'peak'
         self.criterion = d.get('criterio')
         self.notes = d.get('note', '')
         self.status = d.get('stato') if d.get('stato') in STATUSES else STATUS_TO_REVIEW

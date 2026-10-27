@@ -17,12 +17,15 @@ battito, sul corpus GG di sviluppo (1945 battiti) e sui 16 tessuti della baselin
   pendenza negativa, la definizione classica del tempo di attivazione): mediana −0,2 ms invece di −1,5 ms, 52 % dei
   battiti entro 1,5 ms invece del 42 %. Nemmeno il picco della vista 1–40 Hz lo spiega.
 - Su tre tessuti di Exp1 con complessi larghi a due gobbe (G1, E2, F1) l'operatore segna un punto circa 11 ms dopo il
-  picco, sulla seconda gobba; su D2 e G2 circa 6–10 ms dopo. Nessuna regola unica lo riproduce.
+  picco, sulla seconda gobba; su D2 e G2 circa 6–10 ms dopo. (Spiegato dal loro codice: è la discesa più ripida calcolata
+  sul passa-basso a 100 Hz, che riproduce anche questi casi — vedi sotto.)
 
 **Effetto sull'FPD.** Il ritardo tipico di 1,5 ms allunga l'FPD del software dello 0,2 % circa; sui complessi larghi di
 circa l'1 %. Gli scarti grandi con l'operatore (10–70 %) vengono dalla scelta dell'onda di ripolarizzazione, non dai tempi
 della depolarizzazione.
 
-**Da decidere.** Se vogliamo gli stessi tempi dell'operatore conviene adottare la sua definizione (discesa più ripida dello
-spike) invece di correggere il filtraggio: chiedere a Cate come il loro software sceglie il tempo della depolarizzazione,
-poi provarla sul corpus di sviluppo (e una volta sul test) prima di cambiare il default.
+**Fatto (v3.24).** Il codice MATLAB degli operatori (v1.5) conferma la discesa più ripida (minimo di dV/dt sul passa-basso a
+100 Hz). È un'opzione: *Impostazioni ▸ Detection ▸ Tempo della depolarizzazione* (`dep_time_rule = 'steepest_fall'`,
+`lab_convention.py`); riproduce i loro tempi di Exp1 allo stesso campione nel 98 % dei battiti. Il default resta il picco:
+il gold GG del 2025 segue il picco (vedi DOCUMENTATION, v3.24.0). Da decidere con il laboratorio quale convenzione
+usare negli studi nuovi.

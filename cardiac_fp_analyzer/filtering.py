@@ -174,5 +174,8 @@ def describe_filtering(config, fs, metadata=None):
             parts.append(tr('Savitzky–Golay {0} samples ({1:g} ms) degree {2}').format(st['finestra_campioni'], st['finestra_ms'], st['grado']))
     if gain != 1.0:
         parts.append(tr('gain ÷{0:g}').format(gain))
+    if getattr(getattr(config, 'beat_detection', None), 'dep_time_rule', 'peak') == 'steepest_fall':
+        parts.append(tr("depolarisation on the steepest downstroke, amplitude between the complex's extrema on "
+                        "the raw signal (operators' MATLAB convention)"))
     return {'dispositivo': dev, 'decimazione': dec, 'software': steps, 'guadagno': gain,
             'frequenza_campionamento_hz': float(fs), 'testo': tr('Filtering: {0}').format('; '.join(parts))}

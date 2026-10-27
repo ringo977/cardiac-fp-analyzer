@@ -71,8 +71,9 @@ class FieldSpec:
     step: float = 1.0
     decimals: int = 3
     suffix: str = ""
-    # Choice widget
+    # Choice widget (``choice_labels``: what the combo shows for each value, translated; default the value)
     choices: tuple[str, ...] = ()
+    choice_labels: tuple[str, ...] = ()
     # Optional coercion (e.g. scientific-notation amplifier gain).
     # Applied to the value coming FROM the widget before setattr.
     coerce: Callable[[Any], Any] | None = None
@@ -207,6 +208,20 @@ SPEC: tuple[FieldSpec, ...] = (
             "250–350 ms)."
         ),
         minimum=0.0, maximum=2000.0, step=10.0, decimals=0, suffix=" ms",
+    ),
+    FieldSpec(
+        attr="dep_time_rule", section="beat_detection", kind="choice",
+        page=PAGE_DETECTION, label="Depolarisation time",
+        tooltip=(
+            "Where the time of each depolarisation is taken. 'Spike peak': the crest of the spike (the "
+            "software's convention). 'Steepest downstroke (lab MATLAB)': the steepest fall of the "
+            "complex, the same phase for negative-first and positive-first spikes, with the amplitude "
+            "between the complex's lowest and highest point on the raw signal - the operators' MATLAB "
+            "analyzer v1.5 (it reproduces their times to the sample). It moves the FPD by 1-12 ms. Use "
+            "one convention for a whole study: baseline and doses must be measured the same way."
+        ),
+        choices=("peak", "steepest_fall"),
+        choice_labels=("Spike peak (software)", "Steepest downstroke (lab MATLAB)"),
     ),
     FieldSpec(
         attr="enable_weak_population_split", section="beat_detection",
